@@ -33,7 +33,8 @@ def _payload(value: object) -> dict:
     return payload
 
 
-def _gallery_agents(db: Session, principal: PublicPrincipal) -> list[AgentProfileRead]:
+def visible_gallery_agents(db: Session, principal: PublicPrincipal) -> list[AgentProfileRead]:
+    """Agents this principal may use from the gallery (also the distribution set)."""
     rows = internal_agents.list_agents(
         principal.tenant_id,
         db,
@@ -46,6 +47,10 @@ def _gallery_agents(db: Session, principal: PublicPrincipal) -> list[AgentProfil
         and row.status == "active"
         and (row.metadata or {}).get("published_to_gallery") is True
     ]
+
+
+# Kept as an alias so existing call sites and tests keep working.
+_gallery_agents = visible_gallery_agents
 
 
 @router.get("", response_model=dict)
