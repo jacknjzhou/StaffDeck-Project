@@ -1,0 +1,740 @@
+from __future__ import annotations
+
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
+from fastapi import HTTPException
+from sqlalchemy import text
+from sqlmodel import Session, SQLModel, create_engine, select
+
+from app.api.model_configs import (
+    create_model_config,
+    delete_model_config,
+    set_default_model_config,
+    update_model_config,
+)
+from app.api.model_configs import (
+    test_model_config as run_model_config_test,
+)
+from app.db.models import AgentModelBinding, ModelConfig, Tenant, User
+from app.llm import LLMError
+from app.llm.schemas import ModelConfigCreateRequest, ModelConfigUpdateRequest
+from app.security.encryption import encrypt_secret
+
+
+def _db(tmp_path) -> Session:
+    engine = create_engine(f"sqlite:///{tmp_path / 'model-api.db'}")
+    SQLModel.metadata.create_all(engine)
+    db = Session(engine)
+    db.add(Tenant(id="tenant_a", name="Tenant A"))
+    db.commit()
+    return db
+
+
+def _admin() -> User:
+    return User(
+        id="user_admin",
+        tenant_id="tenant_a",
+        username="admin",
+        role="admin",
+        password_hash="unused",
+    )
+
+
+def test_new_model_config_is_never_enabled_or_default(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        created = create_model_config(
+            ModelConfigCreateRequest(
+                tenant_id="tenant_a",
+                name="Chat",
+                api_protocol="openai_chat_completions",
+                api_key="secret",
+                model="model-a",
+                enabled=True,
+                is_default=True,
+            ),
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert created.enabled is False
+        assert created.is_default is False
+        assert created.trust_status == "unverified"
+
+
+def test_verified_create_is_atomic_and_activates_only_after_success(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        created = create_model_config(
+            ModelConfigCreateRequest(
+                tenant_id="tenant_a",
+                name="Chat",
+                api_protocol="openai_chat_completions",
+                api_key="secret",
+                model="model-a",
+                enabled=True,
+            ),
+            verify_before_save=True,
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert created.trust_status == "verified"
+        assert created.enabled is True
+        assert created.is_default is True
+        assert len(db.exec(select(ModelConfig)).all()) == 1
+
+
+def test_failed_verified_create_does_not_leave_disabled_model(tmp_path, monkeypatch) -> None:
+    class FailingClient:
+        def __init__(self, _config) -> None:  # noqa: ANN001
+            pass
+
+        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            raise LLMError("Connection error")
+
+    monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
+    with _db(tmp_path) as db:
+        with pytest.raises(HTTPException) as exc_info:
+            create_model_config(
+                ModelConfigCreateRequest(
+                    tenant_id="tenant_a",
+                    name="Broken",
+                    api_protocol="openai_chat_completions",
+                    api_key="secret",
+                    model="broken-model",
+                    enabled=True,
+                ),
+                verify_before_save=True,
+                db=db,
+                current_user=_admin(),
+            )
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail["code"] == "MODEL_CONNECTION_FAILED"
+        assert exc_info.value.detail["message"] == "Connection error"
+        assert db.exec(select(ModelConfig)).all() == []
+
+
+def test_model_test_returns_structured_provider_diagnostics(tmp_path, monkeypatch) -> None:
+    class FailingClient:
+        def __init__(self, _config) -> None:  # noqa: ANN001
+            pass
+
+        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            raise LLMError(
+                "provider rejected request",
+                code="MODEL_UPSTREAM_ERROR",
+                status_code=422,
+                provider_code="invalid_model",
+                provider_message="model does not exist",
+                upstream_body='{"error":{"code":"invalid_model"}}',
+                request_id="req_123",
+            )
+
+    monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_a",
+                tenant_id="tenant_a",
+                name="Broken",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="missing-model",
+                trust_status="unverified",
+                enabled=False,
+            )
+        )
+        db.commit()
+
+        result = run_model_config_test("model_a", tenant_id="tenant_a", db=db)
+
+        assert result.success is False
+        assert result.message == "MODEL_UPSTREAM_ERROR"
+        assert result.error is not None
+        assert result.error.upstream_status == 422
+        assert result.error.provider_code == "invalid_model"
+        assert result.error.provider_message == "model does not exist"
+        assert result.error.upstream_body == '{"error":{"code":"invalid_model"}}'
+        assert result.error.request_id == "req_123"
+
+
+def test_gemini_model_config_can_be_created(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        created = create_model_config(
+            ModelConfigCreateRequest(
+                tenant_id="tenant_a",
+                name="Gemini",
+                api_protocol="gemini_generate_content",
+                base_url="https://llm-center.modelbest.cn/llm",
+                api_key="secret",
+                model="gemini-2.5-flash",
+            ),
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert created.api_protocol == "gemini_generate_content"
+        assert created.enabled is False
+        assert created.is_default is False
+        assert created.protocol_options == {}
+
+
+def test_openai_responses_model_config_can_be_created(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        created = create_model_config(
+            ModelConfigCreateRequest(
+                tenant_id="tenant_a",
+                name="Responses",
+                api_protocol="openai_responses",
+                base_url="https://api.openai.com/v1",
+                api_key="secret",
+                model="gpt-5",
+            ),
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert created.api_protocol == "openai_responses"
+        assert created.protocol_options == {}
+        assert created.enabled is False
+
+
+def test_chat_extra_body_is_not_validated_as_protocol_options(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        created = create_model_config(
+            ModelConfigCreateRequest(
+                tenant_id="tenant_a",
+                name="Qwen Chat",
+                api_protocol="openai_chat_completions",
+                base_url="https://llm.example.test/v1",
+                api_key="secret",
+                model="qwen3.8-27b",
+                protocol_options={"thinking": {"type": "disabled"}},
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            ),
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert created.protocol_options == {"thinking": {"type": "disabled"}}
+        assert created.extra_body == {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+        row = db.get(ModelConfig, created.id)
+        assert row is not None
+        assert row.protocol_options_json == {
+            "openai_chat_completions": {"thinking": {"type": "disabled"}}
+        }
+        assert row.extra_body_json == {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+
+
+def test_non_chat_protocol_rejects_extra_body_with_distinct_error(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        with pytest.raises(HTTPException) as exc_info:
+            create_model_config(
+                ModelConfigCreateRequest(
+                    tenant_id="tenant_a",
+                    name="Responses",
+                    api_protocol="openai_responses",
+                    base_url="https://api.openai.com/v1",
+                    api_key="secret",
+                    model="gpt-5",
+                    extra_body={"vendor_flag": True},
+                ),
+                db=db,
+                current_user=_admin(),
+            )
+
+        assert exc_info.value.detail == "MODEL_EXTRA_BODY_UNSUPPORTED"
+
+
+def test_model_config_delete_removes_agent_bindings(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_a",
+                tenant_id="tenant_a",
+                name="Chat",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="model-a",
+                enabled=True,
+                is_default=True,
+            )
+        )
+        db.add(
+            AgentModelBinding(
+                id="binding_a",
+                tenant_id="tenant_a",
+                agent_id="agent_a",
+                role="default",
+                model_config_id="model_a",
+            )
+        )
+        db.commit()
+
+        result = delete_model_config(
+            "model_a",
+            tenant_id="tenant_a",
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert result == {"status": "deleted"}
+        assert db.get(ModelConfig, "model_a") is None
+        assert db.get(AgentModelBinding, "binding_a") is None
+
+
+def test_security_change_invalidates_and_disables_legacy_config(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        row = ModelConfig(
+            id="model_a",
+            tenant_id="tenant_a",
+            name="Chat",
+            api_key_encrypted=encrypt_secret("secret"),
+            model="model-a",
+            trust_status="legacy_trusted",
+            enabled=True,
+            is_default=True,
+        )
+        db.add(row)
+        db.commit()
+
+        updated = update_model_config(
+            "model_a",
+            ModelConfigUpdateRequest(tenant_id="tenant_a", model="model-b"),
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert updated.enabled is False
+        assert updated.is_default is False
+        assert updated.trust_status == "unverified"
+        assert updated.security_revision == 2
+
+
+def test_failed_verified_update_preserves_existing_model(tmp_path, monkeypatch) -> None:
+    class FailingClient:
+        def __init__(self, _config) -> None:  # noqa: ANN001
+            pass
+
+        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            raise LLMError("Connection error")
+
+    monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_a",
+                tenant_id="tenant_a",
+                name="Working",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="model-a",
+                trust_status="legacy_trusted",
+                enabled=True,
+                is_default=True,
+            )
+        )
+        db.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            update_model_config(
+                "model_a",
+                ModelConfigUpdateRequest(
+                    tenant_id="tenant_a",
+                    name="Broken edit",
+                    model="broken-model",
+                    enabled=True,
+                    is_default=True,
+                ),
+                verify_before_save=True,
+                db=db,
+                current_user=_admin(),
+            )
+
+        assert exc_info.value.status_code == 502
+        db.expire_all()
+        row = db.get(ModelConfig, "model_a")
+        assert row is not None
+        assert row.name == "Working"
+        assert row.model == "model-a"
+        assert row.trust_status == "legacy_trusted"
+        assert row.enabled is True
+        assert row.is_default is True
+
+
+def test_disabling_default_clears_default_in_same_update(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_a",
+                tenant_id="tenant_a",
+                name="Chat",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="model-a",
+                trust_status="legacy_trusted",
+                enabled=True,
+                is_default=True,
+            )
+        )
+        db.commit()
+
+        updated = update_model_config(
+            "model_a",
+            ModelConfigUpdateRequest(tenant_id="tenant_a", enabled=False),
+            db=db,
+            current_user=_admin(),
+        )
+
+        assert updated.enabled is False
+        assert updated.is_default is False
+
+
+def test_unverified_config_cannot_become_default(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_a",
+                tenant_id="tenant_a",
+                name="Chat",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="model-a",
+                trust_status="unverified",
+                enabled=False,
+            )
+        )
+        db.commit()
+
+        try:
+            set_default_model_config("model_a", tenant_id="tenant_a", db=db)
+        except HTTPException as exc:
+            assert exc.status_code == 409
+            assert exc.detail == "MODEL_CONFIG_VERIFICATION_REQUIRED"
+        else:
+            raise AssertionError("unverified config unexpectedly became default")
+
+
+def test_switching_default_clears_existing_row_before_setting_new(tmp_path) -> None:
+    with _db(tmp_path) as db:
+        db.exec(
+            text(
+                "CREATE UNIQUE INDEX uq_model_configs_tenant_default "
+                "ON model_configs(tenant_id) WHERE is_default = 1"
+            )
+        )
+        db.add_all(
+            [
+                ModelConfig(
+                    id="z_previous",
+                    tenant_id="tenant_a",
+                    name="Previous",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="model-previous",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=True,
+                ),
+                ModelConfig(
+                    id="a_next",
+                    tenant_id="tenant_a",
+                    name="Next",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="model-next",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=False,
+                ),
+            ]
+        )
+        db.commit()
+
+        result = set_default_model_config("a_next", tenant_id="tenant_a", db=db)
+
+        previous = db.get(ModelConfig, "z_previous")
+        assert previous is not None and previous.is_default is False
+        assert result.is_default is True
+
+
+def test_read_returns_only_current_protocol_options(tmp_path) -> None:
+    from app.api.model_configs import model_config_read
+
+    row = ModelConfig(
+        id="model_a",
+        tenant_id="tenant_a",
+        name="Chat",
+        api_key_encrypted=encrypt_secret("secret"),
+        model="model-a",
+        protocol_options_json={
+            "openai_chat_completions": {"thinking": {"type": "disabled"}},
+            "anthropic_messages": {},
+        },
+    )
+
+    assert model_config_read(row).protocol_options == {"thinking": {"type": "disabled"}}
+
+
+def test_verification_runs_bounded_text_stream_and_json_probes(tmp_path, monkeypatch) -> None:
+    calls = []
+
+    class FakeClient:
+        def __init__(self, config) -> None:  # noqa: ANN001
+            calls.append(("init", config.max_output_tokens, config.timeout_seconds))
+
+        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            calls.append(("text",))
+            return "ok"
+
+        def generate_text_stream(self, _prompt, _payload):  # noqa: ANN001
+            calls.append(("stream",))
+            yield "ok"
+
+        def generate_json(self, _prompt, _payload):  # noqa: ANN001
+            calls.append(("json",))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.api.model_configs.LLMClient", FakeClient)
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_a",
+                tenant_id="tenant_a",
+                name="Chat",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="model-a",
+                max_output_tokens=64,
+                trust_status="unverified",
+                enabled=False,
+            )
+        )
+        db.commit()
+
+        result = run_model_config_test("model_a", tenant_id="tenant_a", db=db)
+
+        assert result.success is True
+        assert [item.id for item in result.capabilities] == ["text", "stream", "json"]
+        assert calls == [
+            ("init", 64, 25.0),
+            ("text",),
+            ("init", 64, 25.0),
+            ("stream",),
+            ("init", 64, 35.0),
+            ("json",),
+        ]
+
+
+def test_initial_verification_can_atomically_activate_first_model(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_a",
+                tenant_id="tenant_a",
+                name="Chat",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="model-a",
+                trust_status="unverified",
+                enabled=False,
+                is_default=False,
+            )
+        )
+        db.commit()
+
+        result = run_model_config_test(
+            "model_a",
+            tenant_id="tenant_a",
+            activate_if_initial=True,
+            db=db,
+        )
+
+        row = db.get(ModelConfig, "model_a")
+        assert result.success is True
+        assert result.activated is True
+        assert row is not None
+        assert row.trust_status == "verified"
+        assert row.enabled is True
+        assert row.is_default is True
+        assert result.model is not None
+        assert result.model.id == "model_a"
+        assert result.model.enabled is True
+        assert result.model.is_default is True
+
+
+def test_retesting_disabled_verified_model_does_not_reenable_it(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        db.add(
+            ModelConfig(
+                id="model_a",
+                tenant_id="tenant_a",
+                name="Chat",
+                api_key_encrypted=encrypt_secret("secret"),
+                model="model-a",
+                trust_status="unverified",
+                enabled=False,
+                is_default=False,
+            )
+        )
+        db.commit()
+        first = run_model_config_test("model_a", tenant_id="tenant_a", db=db)
+        assert first.success is True
+
+        result = run_model_config_test(
+            "model_a",
+            tenant_id="tenant_a",
+            activate_if_initial=True,
+            db=db,
+        )
+
+        row = db.get(ModelConfig, "model_a")
+        assert result.success is True
+        assert result.activated is False
+        assert row is not None
+        assert row.enabled is False
+        assert row.is_default is False
+
+
+def test_verification_does_not_replace_or_clear_existing_default(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    with _db(tmp_path) as db:
+        db.add_all(
+            [
+                ModelConfig(
+                    id="model_default",
+                    tenant_id="tenant_a",
+                    name="Default",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="model-default",
+                    trust_status="legacy_trusted",
+                    enabled=True,
+                    is_default=True,
+                ),
+                ModelConfig(
+                    id="model_new",
+                    tenant_id="tenant_a",
+                    name="New",
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model="model-new",
+                    trust_status="unverified",
+                    enabled=False,
+                    is_default=False,
+                ),
+            ]
+        )
+        db.commit()
+
+        new_result = run_model_config_test(
+            "model_new",
+            tenant_id="tenant_a",
+            activate_if_initial=True,
+            db=db,
+        )
+        default_result = run_model_config_test(
+            "model_default",
+            tenant_id="tenant_a",
+            activate_if_initial=True,
+            db=db,
+        )
+
+        default_row = db.get(ModelConfig, "model_default")
+        new_row = db.get(ModelConfig, "model_new")
+        assert new_result.activated is False
+        assert default_result.activated is False
+        assert default_row is not None
+        assert default_row.enabled is True
+        assert default_row.is_default is True
+        assert new_row is not None
+        assert new_row.enabled is False
+        assert new_row.is_default is False
+
+
+def test_concurrent_initial_verification_activates_only_one_default(tmp_path, monkeypatch) -> None:
+    _install_passing_verification_client(monkeypatch)
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'concurrent-model-api.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    SQLModel.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_model_configs_tenant_default "
+                "ON model_configs(tenant_id) WHERE is_default = 1"
+            )
+        )
+    with Session(engine) as db:
+        db.add(Tenant(id="tenant_a", name="Tenant A"))
+        for model_id in ("model_a", "model_b"):
+            db.add(
+                ModelConfig(
+                    id=model_id,
+                    tenant_id="tenant_a",
+                    name=model_id,
+                    api_key_encrypted=encrypt_secret("secret"),
+                    model=model_id,
+                    trust_status="unverified",
+                    enabled=False,
+                    is_default=False,
+                )
+            )
+        db.commit()
+
+    from app.api import model_configs
+
+    real_has_available_model = model_configs._has_available_model
+    first_check_barrier = threading.Barrier(2)
+    second_check_barrier = threading.Barrier(2)
+    thread_state = threading.local()
+
+    def synchronized_has_available_model(db, tenant_id):  # noqa: ANN001
+        check_count = getattr(thread_state, "check_count", 0) + 1
+        thread_state.check_count = check_count
+        if check_count == 1:
+            result = real_has_available_model(db, tenant_id)
+            db.rollback()
+            first_check_barrier.wait(timeout=10)
+            return result
+        if check_count == 2:
+            second_check_barrier.wait(timeout=10)
+            return False
+        return real_has_available_model(db, tenant_id)
+
+    monkeypatch.setattr(model_configs, "_has_available_model", synchronized_has_available_model)
+
+    def verify(model_id: str):
+        with Session(engine) as db:
+            return run_model_config_test(
+                model_id,
+                tenant_id="tenant_a",
+                activate_if_initial=True,
+                db=db,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(verify, ("model_a", "model_b")))
+
+    with Session(engine) as db:
+        rows = [db.get(ModelConfig, model_id) for model_id in ("model_a", "model_b")]
+        assert all(row is not None and row.trust_status == "verified" for row in rows)
+        assert sum(bool(row and row.enabled) for row in rows) == 1
+        assert sum(bool(row and row.is_default) for row in rows) == 1
+    assert sorted(result.activated for result in results) == [False, True]
+
+
+def _install_passing_verification_client(monkeypatch) -> None:
+    class PassingClient:
+        def __init__(self, _config) -> None:  # noqa: ANN001
+            pass
+
+        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            return "ok"
+
+        def generate_text_stream(self, _prompt, _payload):  # noqa: ANN001
+            yield "ok"
+
+        def generate_json(self, _prompt, _payload):  # noqa: ANN001
+            return {"ok": True}
+
+    monkeypatch.setattr("app.api.model_configs.LLMClient", PassingClient)

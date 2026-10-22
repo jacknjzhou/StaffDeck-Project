@@ -1,0 +1,3825 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>StaffDeck 普通员工端 · 原型设计</title>
+<style>
+  /* ===== 设计令牌：取自 frontend-enterprise/src/styles.css（SD1 visual alignment） ===== */
+  :root{
+    --bg:#f7f8fa; --surface:#ffffff; --surface-subtle:#fafafa; --surface-muted:#f3f4f6;
+    --fg:#111111; --muted:#6b7280; --muted-soft:#9ca3af;
+    --line:#eceef1; --border:#e5e7eb; --border-strong:#d4d4d8;
+    --accent:#111111; --accent-soft:#f2f3f5; --accent-fg:#ffffff;
+    --blue:#1a71ff; --blue-soft:#e8f0ff;
+    --warn-bg:#fff7e8; --warn-fg:#8a4b00; --warn-line:#ffd58a;
+    --ok:#0f766e; --ok-soft:#e1f1ed;
+    --danger:#c0392b; --danger-soft:#fdecea;
+    --sb-fg:#858b9c; --sb-active:#18181a; --sb-active-bg:#f6f6f6;
+    --radius:10px; --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:14px;
+    --shadow-soft:0 8px 24px rgba(17,17,17,.045);
+    --shadow-float:0 18px 48px rgba(17,17,17,.10);
+    --font:"Inter","IBM Plex Sans","Noto Sans SC","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer}
+  a{color:inherit;text-decoration:none}
+
+  /* ===== 布局骨架 ===== */
+  .shell{display:flex;min-height:100vh}
+  .sidebar{flex:0 0 208px;width:208px;background:#fff;border-right:1px solid var(--line);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:hidden}
+  .brand{height:52px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--line);flex:0 0 auto}
+  .brand-mark{width:22px;height:22px;border-radius:6px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:600}
+  .brand-name{font-size:13px;font-weight:600;letter-spacing:.2px}
+  .brand-badge{font-size:9px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:1px 6px;margin-left:auto}
+
+  .nav{flex:1 1 auto;overflow-y:auto;padding:10px 8px 4px}
+  .nav-label{font-size:10px;color:#464c5e;padding:8px 8px 4px;letter-spacing:.4px}
+  .nav-item{display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;border:0;background:transparent;border-radius:var(--r-xl);color:var(--sb-fg);font-size:14px;width:100%;text-align:left}
+  .nav-item:hover{background:var(--sb-active-bg);color:var(--sb-active)}
+  .nav-item.active{background:var(--sb-active-bg);color:var(--sb-active)}
+  .nav-item .ic{width:16px;height:16px;flex:0 0 16px;display:grid;place-items:center;font-size:13px}
+  .nav-item .dot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:#f59e0b}
+  .nav-item .cnt{margin-left:auto;font-size:10px;background:var(--blue-soft);color:var(--blue);border-radius:999px;padding:1px 7px}
+  .nav-item.locked{opacity:.55}
+  .nav-item.locked::after{content:"仅管理员";margin-left:auto;font-size:9px;color:var(--muted-soft)}
+
+  /* 当前员工切换器 */
+  .scope{padding:8px;border-top:1px solid var(--line);flex:0 0 auto}
+  .scope-btn{display:flex;align-items:center;gap:8px;width:100%;padding:8px;border:1px solid var(--line);background:#fff;border-radius:var(--r-xl)}
+  .scope-btn:hover{background:var(--surface-muted)}
+  .scope-avatar{width:28px;height:28px;border-radius:8px;border:.5px solid #e3e7f1;background:#fff;display:grid;place-items:center;font-size:12px}
+  .scope-meta{display:flex;flex-direction:column;min-width:0;flex:1}
+  .scope-meta strong{font-size:12px;font-weight:500}
+  .scope-meta span{font-size:10px;color:var(--muted)}
+  .scope-caret{color:var(--muted-soft);font-size:10px}
+  .side-foot{padding:8px;border-top:1px solid var(--line);display:flex;gap:6px;flex:0 0 auto}
+
+  /* ===== 主区域 ===== */
+  .main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+  .topbar{height:52px;display:flex;align-items:center;gap:10px;padding:0 24px;background:rgba(255,255,255,.94);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  .crumbs{font-size:12px;color:var(--muted)}
+  .crumbs b{color:var(--fg);font-weight:500}
+  .top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .content{padding:20px 24px 56px;flex:1 1 auto}
+
+  /* ===== 通用组件 ===== */
+  .btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:var(--r-md);border:1px solid var(--border);background:#fff;color:var(--fg);font-size:13px}
+  .btn:hover{background:var(--surface-muted)}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+  .btn-primary:hover{background:#000}
+  .btn-ghost{border-color:transparent;background:transparent;color:var(--muted)}
+  .btn-ghost:hover{background:var(--surface-muted);color:var(--fg)}
+  .btn-danger{color:var(--danger);border-color:#f3c9c3}
+  .btn-danger:hover{background:var(--danger-soft)}
+  .btn-sm{height:28px;padding:0 10px;font-size:12px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-icon{width:32px;padding:0;justify-content:center}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);box-shadow:var(--shadow-soft)}
+  .card-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .card-title{font-size:14px;font-weight:600;margin:0}
+  .card-sub{font-size:12px;color:var(--muted)}
+  .card-body{padding:16px}
+  .card-foot{padding:12px 16px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center}
+
+  .page-head{display:flex;align-items:flex-start;gap:16px;margin-bottom:16px}
+  .page-title{font-size:20px;font-weight:600;margin:0 0 4px}
+  .page-desc{font-size:13px;color:var(--muted);margin:0;max-width:760px}
+  .page-head .actions{margin-left:auto;display:flex;gap:8px;flex:0 0 auto}
+
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px}
+  .tab{height:36px;padding:0 12px;border:0;background:transparent;color:var(--muted);font-size:13px;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab:hover{color:var(--fg)}
+  .tab.active{color:var(--fg);border-bottom-color:var(--accent);font-weight:500}
+
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+
+  .stat{background:#fff;border:1px solid var(--border);border-radius:var(--r-xl);padding:14px 16px;box-shadow:var(--shadow-soft)}
+  .stat-value{font-size:24px;font-weight:600;line-height:1.2}
+  .stat-label{font-size:12px;color:var(--muted);margin-top:2px}
+  .stat-delta{font-size:11px;color:var(--ok);margin-top:4px}
+
+  table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .tbl th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--surface-subtle);white-space:nowrap}
+  .tbl td{padding:12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .tbl tr:last-child td{border-bottom:0}
+  .tbl tr:hover td{background:var(--surface-subtle)}
+
+  .tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:#4b5563}
+  .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);background:#fff;color:var(--muted)}
+  .badge-ok{background:var(--ok-soft);border-color:#c9e6df;color:#0b5d55}
+  .badge-warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-fg)}
+  .badge-info{background:var(--blue-soft);border-color:#cfe0ff;color:#14538f}
+  .badge-danger{background:var(--danger-soft);border-color:#f3c9c3;color:var(--danger)}
+  .badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+  .banner{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:var(--r-xl);font-size:13px;margin-bottom:16px;border:1px solid transparent}
+  .banner-warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-fg)}
+  .banner-info{background:var(--blue-soft);border-color:#cfe0ff;color:#14538f}
+  .banner .banner-actions{margin-left:auto;display:flex;gap:8px}
+
+  .empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:48px 20px;text-align:center;color:var(--muted)}
+  .empty-ic{width:44px;height:44px;border-radius:12px;background:var(--accent-soft);display:grid;place-items:center;font-size:18px}
+  .empty strong{color:var(--fg);font-size:14px;font-weight:500}
+  .empty .empty-actions{display:flex;gap:8px;margin-top:6px}
+
+  .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+  .label{font-size:12px;color:var(--muted)}
+  .label .req{color:var(--danger);margin-left:2px}
+  .input,.select,.textarea{width:100%;border:1px solid var(--border);border-radius:var(--r-md);background:#fff;padding:8px 10px;font-size:13px;font-family:inherit;color:var(--fg)}
+  .input:focus,.select:focus,.textarea:focus{outline:2px solid #d9dbe0;outline-offset:0;border-color:var(--border-strong)}
+  .textarea{min-height:80px;resize:vertical}
+  .hint{font-size:11px;color:var(--muted-soft)}
+  .form-err{font-size:11px;color:var(--danger)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+
+  /* 搜索与筛选 */
+  .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .search{position:relative;flex:0 1 280px}
+  .search input{width:100%;height:32px;border:1px solid var(--border);border-radius:var(--r-md);padding:0 10px 0 30px;font-size:13px;background:#fff}
+  .search .ic{position:absolute;left:10px;top:7px;color:var(--muted-soft);font-size:12px}
+  .chip{height:30px;padding:0 12px;border-radius:999px;border:1px solid var(--border);background:#fff;font-size:12px;color:var(--muted)}
+  .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  .pager{display:flex;align-items:center;gap:6px;justify-content:flex-end;padding:12px 16px;font-size:12px;color:var(--muted)}
+  .pager .pg{min-width:28px;height:28px;border:1px solid var(--border);background:#fff;border-radius:var(--r-sm);font-size:12px}
+  .pager .pg.active{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  /* 遮罩 / 抽屉 / 弹窗 */
+  .overlay{position:fixed;inset:0;background:rgba(17,17,17,.32);display:none;z-index:60}
+  .overlay.open{display:block}
+  .drawer{position:fixed;top:0;right:0;height:100vh;width:400px;background:#fff;border-left:1px solid var(--border);box-shadow:var(--shadow-float);transform:translateX(102%);transition:transform .22s ease;z-index:70;display:flex;flex-direction:column}
+  .drawer.open{transform:translateX(0)}
+  .drawer-head{padding:16px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:12px}
+  .drawer-body{padding:16px;overflow-y:auto;flex:1 1 auto}
+  .drawer-foot{padding:12px 16px;border-top:1px solid var(--line);display:flex;gap:8px}
+  .modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-46%);width:520px;max-height:86vh;background:#fff;border-radius:var(--r-xl);box-shadow:var(--shadow-float);z-index:70;display:none;flex-direction:column;overflow:hidden}
+  .modal.open{display:flex}
+  .modal-lg{width:720px}
+  .modal-head{padding:16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .modal-head h3{margin:0;font-size:15px;font-weight:600}
+  .modal-body{padding:16px;overflow-y:auto}
+  .modal-foot{padding:12px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+
+  /* 提示 toast */
+  .toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#111;color:#fff;font-size:12px;padding:8px 14px;border-radius:999px;z-index:90;display:none;box-shadow:var(--shadow-float)}
+  .toast.show{display:block}
+
+  /* 员工 / 资源卡 */
+  .emp-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-xl);padding:14px;box-shadow:var(--shadow-soft);display:flex;flex-direction:column;gap:10px}
+  .emp-card:hover{border-color:var(--border-strong)}
+  .emp-top{display:flex;gap:10px;align-items:flex-start}
+  .avatar{width:40px;height:40px;border-radius:10px;background:var(--accent-soft);display:grid;place-items:center;font-size:15px;flex:0 0 40px}
+  .emp-name{font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}
+  .emp-meta{font-size:12px;color:var(--muted)}
+  .emp-desc{font-size:12px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .emp-foot{display:flex;align-items:center;gap:6px;border-top:1px solid var(--line);padding-top:10px;margin-top:auto}
+  .counts{display:flex;gap:5px;flex-wrap:wrap}
+  .counts .tag{font-size:10px}
+
+  /* 贴纸式图标占位（原型内用文本符号代替图标字体） */
+  .ic{font-style:normal;line-height:1}
+
+  /* 原型标注 */
+  .proto-note{font-size:11px;color:#14538f;background:var(--blue-soft);border:1px dashed #cfe0ff;border-radius:var(--r-md);padding:6px 10px;margin-bottom:12px}
+  .proto-ribbon{position:fixed;right:14px;bottom:14px;z-index:80;background:#111;color:#fff;font-size:11px;padding:6px 12px;border-radius:999px;opacity:.85}
+  .hide{display:none !important}
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- ===== 侧边栏（普通员工视角：不含账号管理/模型配置/运行设置） ===== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">SD</span>
+      <span class="brand-name">StaffDeck</span>
+      <span class="brand-badge">普通员工</span>
+    </div>
+
+    <nav class="nav" id="nav">
+      <div class="nav-label">主导航</div>
+      <button class="nav-item" data-page="platform"><i class="ic">▦</i><span>开放广场平台</span></button>
+      <button class="nav-item" data-page="agents"><i class="ic">◎</i><span>我的数字员工</span></button>
+      <button class="nav-item" data-page="teams"><i class="ic">◍</i><span>我的团队</span></button>
+      <button class="nav-item" data-page="channels"><i class="ic">⇄</i><span>渠道接入</span></button>
+
+      <div class="nav-label">员工上下文</div>
+      <button class="nav-item" data-page="dashboard"><i class="ic">▤</i><span>员工档案</span></button>
+      <button class="nav-item" data-page="scheduled-tasks"><i class="ic">◷</i><span>定时任务</span></button>
+      <button class="nav-item" data-page="memories"><i class="ic">◈</i><span>记忆</span></button>
+      <button class="nav-item" data-page="feedback"><i class="ic">☰</i><span>对话日志</span></button>
+
+      <div class="nav-label">员工能力</div>
+      <button class="nav-item" data-page="knowledge"><i class="ic">▩</i><span>知识库</span></button>
+      <button class="nav-item" data-page="general-skills"><i class="ic">✦</i><span>技能</span></button>
+      <button class="nav-item" data-page="skills"><i class="ic">⇉</i><span>SOP</span></button>
+      <button class="nav-item" data-page="tools"><i class="ic">⚙</i><span>工具</span></button>
+
+      <div class="nav-label">对话端</div>
+      <button class="nav-item" data-page="chat-gallery"><i class="ic">◇</i><span>数字员工广场</span></button>
+      <button class="nav-item" data-page="chat"><i class="ic">✎</i><span>会话</span></button>
+      <button class="nav-item" data-page="onboarding"><i class="ic">?</i><span>新手引导</span></button>
+    </nav>
+
+    <div class="scope">
+      <button class="scope-btn" onclick="toast('这里只可选择「可见且在岗」的数字员工；整体广场员工不可选')">
+        <span class="scope-avatar">李</span>
+        <span class="scope-meta"><strong>李瑞 · 客户成功</strong><span>本人创建</span></span>
+        <span class="scope-caret">▾</span>
+      </button>
+    </div>
+    <div class="side-foot">
+      <button class="btn btn-sm" style="flex:1" onclick="toast('切换到对话端（原型内已含对话页）')">对话端</button>
+      <button class="btn btn-sm btn-icon" onclick="toast('侧边栏折叠（原型未实现）')">«</button>
+    </div>
+  </aside>
+
+  <!-- ===== 主区域 ===== -->
+  <div class="main">
+    <div class="topbar">
+      <div class="crumbs" id="crumbs">管理端 / <b>开放广场平台</b></div>
+      <div class="top-actions">
+        <button class="btn btn-sm btn-ghost" onclick="toast('语言：简体中文 / English')">简体中文</button>
+        <button class="btn btn-sm btn-icon" onclick="toast('通知：暂无新通知')">🔔</button>
+        <button class="btn btn-sm" onclick="toast('账户菜单：个人设置 / 修改密码 / 退出登录')">
+          <span style="width:20px;height:20px;border-radius:6px;background:var(--accent-soft);display:inline-grid;place-items:center;font-size:10px">李</span>
+          李瑞
+        </button>
+      </div>
+    </div>
+
+    <div class="content" id="content">
+      <!-- 模型未配置提示条（普通员工：无「去配置」按钮） -->
+      <div class="banner banner-warn" id="modelBanner">
+        <span>⚠</span>
+        <span>系统管理员尚未配置可用模型，数字员工暂不能调用模型。请联系管理员完成模型配置。</span>
+        <span class="banner-actions">
+          <button class="btn btn-sm btn-ghost" onclick="document.getElementById('modelBanner').classList.add('hide')">知道了</button>
+        </span>
+      </div>
+
+<!-- =========================================================
+     A 组页面片段：开放广场 / 我的数字员工 / 我的团队 / 渠道接入
+     含开放广场 / 我的数字员工 / 我的团队 / 渠道接入
+     ========================================================= -->
+
+<!-- =========================================================
+     1. 开放广场平台 · 总览
+     ========================================================= -->
+<section class="page hide" data-page="platform">
+  <div class="proto-note">权限说明：普通员工不可见管理入口（下线 / 删除 / 创建开放 Skill）；仅可浏览、使用广场员工与复制资源。</div>
+
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">开放广场平台</h1>
+      <p class="page-desc">浏览企业内已开放的数字员工、知识库、技能、SOP 与工具。可将广场员工设为当前员工，或将资源复制到自己的数字员工。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-sm" onclick="toast('开放广场已是最新内容')">刷新</button>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:repeat(5,minmax(0,1fr))">
+
+    <!-- 数字员工广场 -->
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">数字员工广场</h3>
+          <div class="card-sub">6 个开放员工</div>
+        </div>
+        <span class="badge badge-ok"><span class="badge-dot"></span>信号良好</span>
+      </div>
+      <div class="card-body" style="max-height:430px;overflow-y:auto">
+        <div class="grid" style="gap:10px">
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">李</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">李瑞 <span class="emp-meta">@王敏</span></div>
+                <div class="emp-meta">客户成功经理 · <span class="badge badge-ok">在线</span></div>
+              </div>
+            </div>
+            <div class="emp-desc">负责客户续约、健康度分析与关键客户回访，能输出周度成功报告。</div>
+            <div class="counts">
+              <span class="tag">资料 6</span>
+              <span class="tag">技能 4</span>
+              <span class="tag">SOP 3</span>
+            </div>
+            <div class="emp-foot">
+              <button class="btn btn-sm btn-primary" style="flex:1" onclick="toast('已切换到数字员工：李瑞')">使用此员工</button>
+            </div>
+          </div>
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">客</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">客户成功助手 <span class="emp-meta">@陈思远</span></div>
+                <div class="emp-meta">客户成功 · <span class="badge badge-ok">在线</span></div>
+              </div>
+            </div>
+            <div class="emp-desc">整理客户问题、跟进工单状态，并生成每日客户成功简报。</div>
+            <div class="counts">
+              <span class="tag">资料 3</span>
+              <span class="tag">技能 2</span>
+              <span class="tag">SOP 5</span>
+            </div>
+            <div class="emp-foot">
+              <button class="btn btn-sm btn-primary" style="flex:1" onclick="toast('已切换到数字员工：客户成功助手')">使用此员工</button>
+            </div>
+          </div>
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">数</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">数据分析师 <span class="emp-meta">@林晓</span></div>
+                <div class="emp-meta">数据分析 · <span class="badge badge-ok">在线</span></div>
+              </div>
+            </div>
+            <div class="emp-desc">拆解业务指标、生成 SQL 与图表，并对异常波动给出解释。</div>
+            <div class="counts">
+              <span class="tag">资料 8</span>
+              <span class="tag">技能 5</span>
+              <span class="tag">SOP 2</span>
+            </div>
+            <div class="emp-foot">
+              <button class="btn btn-sm btn-primary" style="flex:1" onclick="toast('已切换到数字员工：数据分析师')">使用此员工</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="go('platform-kind')">查看全部</button>
+      </div>
+    </div>
+
+    <!-- 知识库广场 -->
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">知识库广场</h3>
+          <div class="card-sub">4 个开放知识库</div>
+        </div>
+        <span class="badge badge-ok"><span class="badge-dot"></span>同步正常</span>
+      </div>
+      <div class="card-body" style="max-height:430px;overflow-y:auto">
+        <div class="grid" style="gap:10px">
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">▩</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">客户成功 SOP 知识库</div>
+                <div class="emp-meta">@王敏 · 知识库</div>
+              </div>
+            </div>
+            <div class="emp-desc">覆盖续约、投诉、回访等 12 类客户成功场景。</div>
+            <div class="emp-foot">
+              <span class="tag">128 篇文档</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">▩</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">产品 FAQ 知识库</div>
+                <div class="emp-meta">@陈思远 · 知识库</div>
+              </div>
+            </div>
+            <div class="emp-desc">汇总产品常见问题、版本变更与标准答复口径。</div>
+            <div class="emp-foot">
+              <span class="tag">96 篇文档</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">▩</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">合同条款库</div>
+                <div class="emp-meta">@赵一帆 · 知识库</div>
+              </div>
+            </div>
+            <div class="emp-desc">标准合同条款、风险提示与法务审核意见。</div>
+            <div class="emp-foot">
+              <span class="tag">42 篇文档</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="go('platform-kind')">查看全部</button>
+      </div>
+    </div>
+
+    <!-- 技能广场 -->
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">技能广场</h3>
+          <div class="card-sub">5 个开放技能</div>
+        </div>
+        <span class="badge badge-info"><span class="badge-dot"></span>只读浏览</span>
+      </div>
+      <div class="card-body" style="max-height:430px;overflow-y:auto">
+        <div class="grid" style="gap:10px">
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">✦</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">客户回访话术</div>
+                <div class="emp-meta">@王敏 · 技能</div>
+              </div>
+            </div>
+            <div class="emp-desc">按客户分层生成回访话术，并附带跟进任务清单。</div>
+            <div class="emp-foot">
+              <span class="tag">已启用</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">✦</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">周报生成器</div>
+                <div class="emp-meta">@林晓 · 技能</div>
+              </div>
+            </div>
+            <div class="emp-desc">整合本周数据与任务进展，生成结构化团队周报。</div>
+            <div class="emp-foot">
+              <span class="tag">已启用</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">✦</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">竞品情报摘要</div>
+                <div class="emp-meta">@孙悦 · 技能</div>
+              </div>
+            </div>
+            <div class="emp-desc">抓取公开信息并生成竞品动态与差异化建议。</div>
+            <div class="emp-foot">
+              <span class="tag">草稿</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="go('platform-kind')">查看全部</button>
+      </div>
+    </div>
+
+    <!-- SOP 广场 -->
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">SOP 广场</h3>
+          <div class="card-sub">3 个开放 SOP</div>
+        </div>
+        <span class="badge badge-warn"><span class="badge-dot"></span>更新中</span>
+      </div>
+      <div class="card-body" style="max-height:430px;overflow-y:auto">
+        <div class="grid" style="gap:10px">
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">⇉</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">客户投诉处理流程</div>
+                <div class="emp-meta">@王敏 · SOP</div>
+              </div>
+            </div>
+            <div class="emp-desc">从受理、定级、安抚到回访的 7 节点标准流程。</div>
+            <div class="emp-foot">
+              <span class="tag">v3.2</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">⇉</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">新员工入职引导</div>
+                <div class="emp-meta">@周宁 · SOP</div>
+              </div>
+            </div>
+            <div class="emp-desc">覆盖账号开通、导师分配与首周任务安排。</div>
+            <div class="emp-foot">
+              <span class="tag">v1.8</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+          <div class="emp-card">
+            <div class="emp-top">
+              <span class="avatar">⇉</span>
+              <div style="flex:1;min-width:0">
+                <div class="emp-name">合同评审流程</div>
+                <div class="emp-meta">@赵一帆 · SOP</div>
+              </div>
+            </div>
+            <div class="emp-desc">法务、财务与业务三方会签的标准评审路径。</div>
+            <div class="emp-foot">
+              <span class="tag">v2.0</span>
+              <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="go('platform-kind')">查看</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="go('platform-kind')">查看全部</button>
+      </div>
+    </div>
+
+    <!-- 工具广场（空态示例） -->
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">工具广场</h3>
+          <div class="card-sub">0 个开放工具</div>
+        </div>
+        <span class="badge badge-info"><span class="badge-dot"></span>只读浏览</span>
+      </div>
+      <div class="card-body" style="max-height:430px;overflow-y:auto">
+        <div class="empty">
+          <div class="empty-ic">⚙</div>
+          <strong>暂无开放内容</strong>
+          <span>发布内容后会在这里展示</span>
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="go('platform-kind')">查看全部</button>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- =========================================================
+     2. 开放广场平台 · 数字员工广场（分类详情）
+     ========================================================= -->
+<section class="page hide" data-page="platform-kind">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">数字员工广场</h1>
+      <p class="page-desc">共 6 个已开放的数字员工。点击卡片查看详情；普通员工仅可浏览、使用员工与复制资源。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-sm" onclick="go('platform')">← 返回平台</button>
+      <button class="btn btn-sm" onclick="toast('已重新拉取开放员工列表')">刷新</button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search">
+      <i class="ic">🔍</i>
+      <input type="text" placeholder="搜索员工名称、岗位或描述" />
+    </div>
+    <button class="chip active" onclick="toast('按接口顺序展示')">综合排序</button>
+    <button class="chip" onclick="toast('按最近更新排序')">最近更新</button>
+    <span class="card-sub" style="margin-left:auto">共 6 个员工 · 加载时展示 8 个骨架</span>
+  </div>
+
+  <div class="grid g3">
+
+    <div class="emp-card" onclick="openEl('drawer-emp')">
+      <div class="emp-top">
+        <span class="avatar">李</span>
+        <div style="flex:1;min-width:0">
+          <div class="emp-name">李瑞 <span class="emp-meta">@王敏</span></div>
+          <div class="emp-meta">客户成功经理 · <span class="badge badge-ok">在线</span></div>
+        </div>
+      </div>
+      <div class="emp-desc">负责客户续约、健康度分析与关键客户回访，能输出周度成功报告。</div>
+      <div class="counts">
+        <span class="tag">资料 6</span>
+        <span class="tag">技能 4</span>
+        <span class="tag">SOP 3</span>
+      </div>
+      <div class="emp-foot">
+        <span class="badge badge-info">已发布到广场</span>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="openEl('drawer-emp')">查看详情</button>
+      </div>
+    </div>
+
+    <div class="emp-card" onclick="openEl('drawer-emp')">
+      <div class="emp-top">
+        <span class="avatar">客</span>
+        <div style="flex:1;min-width:0">
+          <div class="emp-name">客户成功助手 <span class="emp-meta">@陈思远</span></div>
+          <div class="emp-meta">客户成功 · <span class="badge badge-ok">在线</span></div>
+        </div>
+      </div>
+      <div class="emp-desc">整理客户问题、跟进工单状态，并生成每日客户成功简报。</div>
+      <div class="counts">
+        <span class="tag">资料 3</span>
+        <span class="tag">技能 2</span>
+        <span class="tag">SOP 5</span>
+      </div>
+      <div class="emp-foot">
+        <span class="badge badge-info">已发布到广场</span>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="openEl('drawer-emp')">查看详情</button>
+      </div>
+    </div>
+
+    <div class="emp-card" onclick="openEl('drawer-emp')">
+      <div class="emp-top">
+        <span class="avatar">数</span>
+        <div style="flex:1;min-width:0">
+          <div class="emp-name">数据分析师 <span class="emp-meta">@林晓</span></div>
+          <div class="emp-meta">数据分析 · <span class="badge badge-ok">在线</span></div>
+        </div>
+      </div>
+      <div class="emp-desc">拆解业务指标、生成 SQL 与图表，并对异常波动给出解释。</div>
+      <div class="counts">
+        <span class="tag">资料 8</span>
+        <span class="tag">技能 5</span>
+        <span class="tag">SOP 2</span>
+      </div>
+      <div class="emp-foot">
+        <span class="badge badge-info">已发布到广场</span>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="openEl('drawer-emp')">查看详情</button>
+      </div>
+    </div>
+
+    <div class="emp-card" onclick="openEl('drawer-emp')">
+      <div class="emp-top">
+        <span class="avatar">合</span>
+        <div style="flex:1;min-width:0">
+          <div class="emp-name">合同审核助手 <span class="emp-meta">@赵一帆</span></div>
+          <div class="emp-meta">法务合规 · <span class="badge badge-warn">下线</span></div>
+        </div>
+      </div>
+      <div class="emp-desc">提取合同关键条款、比对标准模板，并标记高风险表述。</div>
+      <div class="counts">
+        <span class="tag">资料 4</span>
+        <span class="tag">技能 1</span>
+        <span class="tag">SOP 6</span>
+      </div>
+      <div class="emp-foot">
+        <span class="badge">已发布到广场</span>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="openEl('drawer-emp')">查看详情</button>
+      </div>
+    </div>
+
+    <div class="emp-card" onclick="openEl('drawer-emp')">
+      <div class="emp-top">
+        <span class="avatar">招</span>
+        <div style="flex:1;min-width:0">
+          <div class="emp-name">招聘协调员 <span class="emp-meta">@周宁</span></div>
+          <div class="emp-meta">人力资源 · <span class="badge badge-ok">在线</span></div>
+        </div>
+      </div>
+      <div class="emp-desc">安排面试、同步候选人状态，并生成招聘周度漏斗报告。</div>
+      <div class="counts">
+        <span class="tag">资料 2</span>
+        <span class="tag">技能 3</span>
+        <span class="tag">SOP 4</span>
+      </div>
+      <div class="emp-foot">
+        <span class="badge badge-info">已发布到广场</span>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="openEl('drawer-emp')">查看详情</button>
+      </div>
+    </div>
+
+    <div class="emp-card" onclick="openEl('drawer-emp')">
+      <div class="emp-top">
+        <span class="avatar">市</span>
+        <div style="flex:1;min-width:0">
+          <div class="emp-name">市场内容策划 <span class="emp-meta">@孙悦</span></div>
+          <div class="emp-meta">市场增长 · <span class="badge badge-ok">在线</span></div>
+        </div>
+      </div>
+      <div class="emp-desc">生成活动文案、渠道投放摘要与内容日历建议。</div>
+      <div class="counts">
+        <span class="tag">资料 5</span>
+        <span class="tag">技能 6</span>
+        <span class="tag">SOP 1</span>
+      </div>
+      <div class="emp-foot">
+        <span class="badge badge-info">已发布到广场</span>
+        <button class="btn btn-sm" style="margin-left:auto" onclick="openEl('drawer-emp')">查看详情</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 资源速览：演示资源详情抽屉 -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-head">
+      <div style="flex:1">
+        <h3 class="card-title">开放资源速览</h3>
+        <div class="card-sub">点击「查看」打开资源详情抽屉；工具类资源可直接前往工具页</div>
+      </div>
+    </div>
+    <div class="card-body" style="padding:0">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>资源</th>
+            <th>类型</th>
+            <th>创建者</th>
+            <th>版本 / 内容</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>客户成功 SOP 知识库</td>
+            <td><span class="tag">知识库</span></td>
+            <td>王敏</td>
+            <td>v3 · 128 篇文档</td>
+            <td><button class="btn btn-sm" onclick="openEl('drawer-res')">查看</button></td>
+          </tr>
+          <tr>
+            <td>客户回访话术</td>
+            <td><span class="tag">技能</span></td>
+            <td>王敏</td>
+            <td>已启用 · 4 个文件</td>
+            <td><button class="btn btn-sm" onclick="openEl('drawer-res')">查看</button></td>
+          </tr>
+          <tr>
+            <td>客户投诉处理流程</td>
+            <td><span class="tag">SOP</span></td>
+            <td>王敏</td>
+            <td>v3.2 · 7 个节点</td>
+            <td><button class="btn btn-sm" onclick="openEl('drawer-res')">查看</button></td>
+          </tr>
+          <tr>
+            <td>HTTP 请求执行器</td>
+            <td><span class="tag">工具</span></td>
+            <td>林晓</td>
+            <td>HTTP · 已启用</td>
+            <td><button class="btn btn-sm" onclick="openEl('drawer-res')">查看</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 员工详情抽屉：底部只有「使用员工」 -->
+  <div class="drawer" id="drawer-emp">
+    <div class="drawer-head">
+      <span class="avatar">李</span>
+      <div style="flex:1;min-width:0">
+        <div class="emp-name">李瑞</div>
+        <div class="emp-meta">客户成功经理 · @王敏</div>
+      </div>
+      <button class="btn btn-sm btn-icon" onclick="closeEl('drawer-emp')">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        <span class="badge badge-ok"><span class="badge-dot"></span>在线</span>
+        <span class="badge badge-info">已发布到广场</span>
+        <span class="badge">创建于 2026-07-18</span>
+      </div>
+      <p class="emp-desc" style="display:block">负责客户续约、健康度分析与关键客户回访，能输出周度成功报告；擅长在投诉场景中安抚情绪并给出可执行方案。</p>
+
+      <div class="proto-note" style="margin-top:12px">上 / 下一位可切换：可在相邻广场员工之间浏览，不会改变当前员工。</div>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <button class="btn btn-sm" style="flex:1" onclick="toast('已切换到上一位：市场内容策划')">← 上一位</button>
+        <button class="btn btn-sm" style="flex:1" onclick="toast('已切换到下一位：客户成功助手')">下一位 →</button>
+      </div>
+
+      <div class="grid g3" style="gap:8px">
+        <div class="stat">
+          <div class="stat-value">6</div>
+          <div class="stat-label">资料</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">4</div>
+          <div class="stat-label">技能</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">3</div>
+          <div class="stat-label">SOP</div>
+        </div>
+      </div>
+
+      <div class="card-title" style="margin:16px 0 8px">开放能力</div>
+      <div class="grid g2" style="gap:10px">
+        <div class="card">
+          <div class="card-body">
+            <div class="emp-meta">知识库</div>
+            <div class="emp-name">2 个</div>
+            <div class="hint">客户成功 SOP、产品 FAQ</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-body">
+            <div class="emp-meta">技能</div>
+            <div class="emp-name">6 个</div>
+            <div class="hint">回访话术、续约测算</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-body">
+          <div class="card-title" style="margin-bottom:6px">说明</div>
+          <p class="emp-desc" style="display:block">该员工由整体广场发布，普通员工仅可浏览、使用与复制资源；不可下线或删除。</p>
+        </div>
+      </div>
+    </div>
+    <div class="drawer-foot">
+      <button class="btn btn-primary" style="flex:1" onclick="toast('已切换到数字员工：李瑞')">使用员工</button>
+    </div>
+  </div>
+
+  <!-- 资源详情抽屉：底部只有主操作按钮 -->
+  <div class="drawer" id="drawer-res">
+    <div class="drawer-head">
+      <span class="avatar">▩</span>
+      <div style="flex:1;min-width:0">
+        <div class="emp-name">客户成功 SOP 知识库</div>
+        <div class="emp-meta">知识库 · @王敏</div>
+      </div>
+      <button class="btn btn-sm btn-icon" onclick="closeEl('drawer-res')">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        <span class="badge badge-info">知识库</span>
+        <span class="badge badge-ok">已发布到广场</span>
+        <span class="badge">v3</span>
+      </div>
+      <p class="emp-desc" style="display:block">覆盖续约、投诉、回访等 12 类客户成功场景，包含 128 篇文档与 4 个目录。</p>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-body">
+          <div class="card-title" style="margin-bottom:6px">说明</div>
+          <p class="emp-desc" style="display:block">复制后将在目标员工下创建一份独立知识库，并触发索引重建。原资源更新不会自动同步。</p>
+          <div class="hint">工具类资源无需复制，可直接前往工具页使用。</div>
+        </div>
+      </div>
+
+      <div class="proto-note" style="margin-top:12px">请先选择一个员工，再从广场复制资源。</div>
+    </div>
+    <div class="drawer-foot">
+      <button class="btn btn-primary" style="flex:1" onclick="toast('已复制到目标员工：李瑞')">复制到目标员工</button>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     3. 我的数字员工
+     ========================================================= -->
+<section class="page hide" data-page="agents">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">我的数字员工</h1>
+      <p class="page-desc">这里只展示你创建的数字员工。你可以编辑资料、更换头像、上下线、发布到广场、管理运行密钥或删除。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-sm" onclick="toast('员工列表已刷新')">刷新</button>
+      <button class="btn btn-sm btn-primary" onclick="openEl('modal-new-agent')">＋ 新建数字员工</button>
+    </div>
+  </div>
+
+  <!-- 三张统计卡：按需求书 §4.1 口径 = 员工总数 / 下线员工 / 待审批 -->
+  <div class="proto-note">统计卡口径按需求书 §4.1：员工总数、下线员工、待审批；「待审批」快捷筛选会额外叠加 pending 过滤。</div>
+  <div class="grid g3" style="margin-bottom:16px">
+    <div class="stat">
+      <div class="stat-value">4</div>
+      <div class="stat-label">员工总数</div>
+      <div class="stat-delta">本月新增 1 位</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">1</div>
+      <div class="stat-label">下线员工</div>
+      <div class="stat-delta" style="color:var(--muted)">可在「下线员工」标签页查看</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">2</div>
+      <div class="stat-label">待审批</div>
+      <div class="stat-delta">等待管理员审核</div>
+    </div>
+  </div>
+
+  <div class="tabs" data-tabgroup="agents">
+    <button class="tab active" onclick="setTab(this,'agents','all')">全部员工</button>
+    <button class="tab" onclick="setTab(this,'agents','online')">在线员工</button>
+    <button class="tab" onclick="setTab(this,'agents','offline')">下线员工</button>
+  </div>
+
+  <div class="toolbar">
+    <div class="search">
+      <i class="ic">🔍</i>
+      <input type="text" placeholder="搜索" />
+    </div>
+    <button class="chip active" onclick="toast('已按全部员工筛选')">全部</button>
+    <button class="chip" onclick="toast('筛选：待审批员工（额外加 pending 过滤）')">待审批 2</button>
+    <span class="card-sub" style="margin-left:auto">仅展示本人创建、非整体广场员工</span>
+  </div>
+
+  <!-- 全部员工 -->
+  <div data-pane="agents" data-target="all">
+    <div class="grid g3">
+
+      <div class="emp-card">
+        <div class="emp-top">
+          <span class="avatar">李</span>
+          <div style="flex:1;min-width:0">
+            <div class="emp-name">李瑞 <span class="badge badge-ok"><span class="badge-dot"></span>在线</span></div>
+            <div class="emp-meta">客户成功部 · 客户成功经理</div>
+          </div>
+          <span class="tag">本人创建</span>
+        </div>
+        <div class="emp-desc">负责客户续约与健康度跟进，可自动生成周度成功报告。</div>
+        <div class="counts">
+          <span class="tag">资料 6</span>
+          <span class="tag">技能 4</span>
+          <span class="tag">SOP 3</span>
+        </div>
+        <div class="emp-foot">
+          <button class="btn btn-sm btn-primary" onclick="toast('正在打开草稿对话：李瑞')">发起对话</button>
+          <button class="btn btn-sm" onclick="openEl('modal-agent-ops')">员工操作 ▾</button>
+        </div>
+      </div>
+
+      <div class="emp-card">
+        <div class="emp-top">
+          <span class="avatar">客</span>
+          <div style="flex:1;min-width:0">
+            <div class="emp-name">客户成功助手 <span class="badge badge-ok"><span class="badge-dot"></span>在线</span></div>
+            <div class="emp-meta">客户成功部 · 客户成功专员</div>
+          </div>
+          <span class="tag">本人创建</span>
+        </div>
+        <div class="emp-desc">整理客户问题、跟进工单状态，并生成每日客户成功简报。</div>
+        <div class="counts">
+          <span class="tag">资料 3</span>
+          <span class="tag">技能 2</span>
+          <span class="tag">SOP 5</span>
+        </div>
+        <div class="emp-foot">
+          <button class="btn btn-sm btn-primary" onclick="toast('正在打开草稿对话：客户成功助手')">发起对话</button>
+          <button class="btn btn-sm" onclick="openEl('modal-agent-ops')">员工操作 ▾</button>
+        </div>
+      </div>
+
+      <div class="emp-card">
+        <div class="emp-top">
+          <span class="avatar">数</span>
+          <div style="flex:1;min-width:0">
+            <div class="emp-name">数据分析师 <span class="badge badge-ok"><span class="badge-dot"></span>在线</span></div>
+            <div class="emp-meta">数据平台部 · 数据分析师</div>
+          </div>
+          <span class="tag">本人创建</span>
+        </div>
+        <div class="emp-desc">拆解业务指标、生成 SQL 与图表，并对异常波动给出解释。</div>
+        <div class="counts">
+          <span class="tag">资料 8</span>
+          <span class="tag">技能 5</span>
+          <span class="tag">SOP 2</span>
+        </div>
+        <div class="emp-foot">
+          <button class="btn btn-sm btn-primary" onclick="toast('正在打开草稿对话：数据分析师')">发起对话</button>
+          <button class="btn btn-sm" onclick="openEl('modal-agent-ops')">员工操作 ▾</button>
+        </div>
+      </div>
+
+      <div class="emp-card">
+        <div class="emp-top">
+          <span class="avatar">标</span>
+          <div style="flex:1;min-width:0">
+            <div class="emp-name">数据标注助手 <span class="badge badge-warn"><span class="badge-dot"></span>下线</span></div>
+            <div class="emp-meta">数据平台部 · 数据运营</div>
+          </div>
+          <span class="tag">本人创建</span>
+        </div>
+        <div class="emp-desc">按标注规范拆分样本、检查一致性，并输出标注质量报告。</div>
+        <div class="counts">
+          <span class="tag">资料 2</span>
+          <span class="tag">技能 1</span>
+          <span class="tag">SOP 2</span>
+        </div>
+        <div class="emp-foot">
+          <button class="btn btn-sm btn-primary" onclick="toast('该员工已下线，无法发起对话')">发起对话</button>
+          <button class="btn btn-sm" onclick="openEl('modal-agent-ops')">员工操作 ▾</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 在线员工 -->
+  <div data-pane="agents" data-target="online" class="hide">
+    <div class="grid g3">
+
+      <div class="emp-card">
+        <div class="emp-top">
+          <span class="avatar">李</span>
+          <div style="flex:1;min-width:0">
+            <div class="emp-name">李瑞 <span class="badge badge-ok"><span class="badge-dot"></span>在线</span></div>
+            <div class="emp-meta">客户成功部 · 客户成功经理</div>
+          </div>
+          <span class="tag">本人创建</span>
+        </div>
+        <div class="emp-desc">负责客户续约与健康度跟进，可自动生成周度成功报告。</div>
+        <div class="counts">
+          <span class="tag">资料 6</span>
+          <span class="tag">技能 4</span>
+          <span class="tag">SOP 3</span>
+        </div>
+        <div class="emp-foot">
+          <button class="btn btn-sm btn-primary" onclick="toast('正在打开草稿对话：李瑞')">发起对话</button>
+          <button class="btn btn-sm" onclick="openEl('modal-agent-ops')">员工操作 ▾</button>
+        </div>
+      </div>
+
+      <div class="emp-card">
+        <div class="emp-top">
+          <span class="avatar">客</span>
+          <div style="flex:1;min-width:0">
+            <div class="emp-name">客户成功助手 <span class="badge badge-ok"><span class="badge-dot"></span>在线</span></div>
+            <div class="emp-meta">客户成功部 · 客户成功专员</div>
+          </div>
+          <span class="tag">本人创建</span>
+        </div>
+        <div class="emp-desc">整理客户问题、跟进工单状态，并生成每日客户成功简报。</div>
+        <div class="counts">
+          <span class="tag">资料 3</span>
+          <span class="tag">技能 2</span>
+          <span class="tag">SOP 5</span>
+        </div>
+        <div class="emp-foot">
+          <button class="btn btn-sm btn-primary" onclick="toast('正在打开草稿对话：客户成功助手')">发起对话</button>
+          <button class="btn btn-sm" onclick="openEl('modal-agent-ops')">员工操作 ▾</button>
+        </div>
+      </div>
+
+      <div class="emp-card">
+        <div class="emp-top">
+          <span class="avatar">数</span>
+          <div style="flex:1;min-width:0">
+            <div class="emp-name">数据分析师 <span class="badge badge-ok"><span class="badge-dot"></span>在线</span></div>
+            <div class="emp-meta">数据平台部 · 数据分析师</div>
+          </div>
+          <span class="tag">本人创建</span>
+        </div>
+        <div class="emp-desc">拆解业务指标、生成 SQL 与图表，并对异常波动给出解释。</div>
+        <div class="counts">
+          <span class="tag">资料 8</span>
+          <span class="tag">技能 5</span>
+          <span class="tag">SOP 2</span>
+        </div>
+        <div class="emp-foot">
+          <button class="btn btn-sm btn-primary" onclick="toast('正在打开草稿对话：数据分析师')">发起对话</button>
+          <button class="btn btn-sm" onclick="openEl('modal-agent-ops')">员工操作 ▾</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 下线员工 -->
+  <div data-pane="agents" data-target="offline" class="hide">
+    <div class="grid g3">
+
+      <div class="emp-card">
+        <div class="emp-top">
+          <span class="avatar">标</span>
+          <div style="flex:1;min-width:0">
+            <div class="emp-name">数据标注助手 <span class="badge badge-warn"><span class="badge-dot"></span>下线</span></div>
+            <div class="emp-meta">数据平台部 · 数据运营</div>
+          </div>
+          <span class="tag">本人创建</span>
+        </div>
+        <div class="emp-desc">按标注规范拆分样本、检查一致性，并输出标注质量报告。</div>
+        <div class="counts">
+          <span class="tag">资料 2</span>
+          <span class="tag">技能 1</span>
+          <span class="tag">SOP 2</span>
+        </div>
+        <div class="emp-foot">
+          <button class="btn btn-sm" onclick="toast('该员工已下线，请先在员工操作中上线')">发起对话</button>
+          <button class="btn btn-sm" onclick="openEl('modal-agent-ops')">员工操作 ▾</button>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="proto-note" style="margin-top:14px">空态示例：当该标签页没有员工时，展示「没有匹配的数字员工」。</div>
+    <div class="card">
+      <div class="empty">
+        <div class="empty-ic">◎</div>
+        <strong>没有匹配的数字员工</strong>
+        <span>可以调整筛选条件，或新建一个数字员工。</span>
+        <div class="empty-actions">
+          <button class="btn btn-sm btn-primary" onclick="openEl('modal-new-agent')">新建数字员工</button>
+          <button class="btn btn-sm" onclick="go('platform')">浏览开放广场</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 页面级空态示例 -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-head">
+      <h3 class="card-title">空态示例</h3>
+      <span class="card-sub">没有任何可管理员工时展示</span>
+    </div>
+    <div class="empty">
+      <div class="empty-ic">◎</div>
+      <strong>还没有数字员工</strong>
+      <span>创建一个数字员工，或先到开放广场看看别人分享的员工。</span>
+      <div class="empty-actions">
+        <button class="btn btn-sm btn-primary" onclick="openEl('modal-new-agent')">新建数字员工</button>
+        <button class="btn btn-sm" onclick="go('platform')">浏览开放广场</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 员工操作弹层（本人创建员工可见可用） -->
+  <div class="modal" id="modal-agent-ops">
+    <div class="modal-head">
+      <h3>员工操作</h3>
+      <button class="btn btn-sm btn-icon" style="margin-left:auto" onclick="closeEl('modal-agent-ops')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="proto-note">原型统一以「李瑞」为例；这些操作仅对本人创建的数字员工可见可用。</div>
+      <div class="grid g2" style="gap:10px">
+        <button class="btn" onclick="toast('打开「编辑资料」弹窗：姓名 / 岗位 / 入职时间 / 工作风格')">编辑资料</button>
+        <button class="btn" onclick="toast('打开「更换头像」弹窗：11 个预设或自定义上传')">更换头像</button>
+        <button class="btn" onclick="toast('员工状态已切换：在线 ↔ 下线')">上线 / 下线</button>
+        <button class="btn" onclick="toast('已发布到广场（可再次点击下架）')">发布到广场</button>
+        <button class="btn" onclick="toast('打开运行密钥：创建 / 轮换 / 禁用')">运行密钥</button>
+        <button class="btn btn-danger" onclick="toast('删除后该员工的所有配置将一并移除，操作不可撤销。')">删除</button>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEl('modal-agent-ops')">关闭</button>
+    </div>
+  </div>
+
+  <!-- 新建数字员工 -->
+  <div class="modal" id="modal-new-agent">
+    <div class="modal-head">
+      <h3>新建数字员工</h3>
+      <button class="btn btn-sm btn-icon" style="margin-left:auto" onclick="closeEl('modal-new-agent')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="label">创建方式<span class="req">*</span></label>
+        <select class="select">
+          <option>从空白开始</option>
+          <option>从广场复制</option>
+        </select>
+        <div class="hint">复制模式仅可选择对当前用户可见的广场员工；不可见来源将返回 403。</div>
+      </div>
+
+      <div class="field">
+        <label class="label">复制来源</label>
+        <select class="select">
+          <option>客户成功助手（@陈思远）</option>
+          <option>数据分析师（@林晓）</option>
+          <option>市场内容策划（@孙悦）</option>
+        </select>
+        <div class="hint">仅「从广场复制」模式下生效，将复制该员工的资料、技能与 SOP。</div>
+      </div>
+
+      <div class="row2">
+        <div class="field">
+          <label class="label">职位</label>
+          <input class="input" placeholder="例如：客户成功经理" />
+        </div>
+        <div class="field">
+          <label class="label">数字员工姓名<span class="req">*</span></label>
+          <input class="input" placeholder="例如：客户成功助手" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="label">岗位描述</label>
+        <textarea class="textarea" placeholder="描述该员工的职责、工作风格与擅长场景（可选）"></textarea>
+      </div>
+
+      <div class="proto-note">校验示例：姓名为空 → 400「请填写数字员工姓名」；租户内重名 → 409「已存在同名数字员工」。</div>
+      <div class="form-err">· 姓名不能为空</div>
+      <div class="form-err">· 租户内已存在同名数字员工时由后端返回 409</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEl('modal-new-agent')">取消</button>
+      <button class="btn btn-primary" onclick="closeEl('modal-new-agent');toast('数字员工创建成功，已切换到新员工')">创建</button>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     4. 我的团队
+     ========================================================= -->
+<section class="page hide" data-page="teams">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">我的团队</h1>
+      <p class="page-desc">同租户团队均可查看与进入详情；团队写操作仅限 owner 或管理员。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-sm" onclick="toast('团队列表已刷新')">刷新</button>
+      <button class="btn btn-sm btn-primary" onclick="openEl('modal-new-team')">＋ 创建团队</button>
+    </div>
+  </div>
+
+  <div class="proto-note">非本人 owner 的团队：按钮可见但后端返回 403「Only team owner or administrator can manage this team」。</div>
+
+  <div class="grid g3" style="margin-bottom:16px">
+    <div class="stat">
+      <div class="stat-value">4</div>
+      <div class="stat-label">团队总数</div>
+      <div class="stat-delta">同租户团队均可查看</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">2</div>
+      <div class="stat-label">我创建的团队</div>
+      <div class="stat-delta">可管理成员、任务与设置</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">7</div>
+      <div class="stat-label">进行中任务</div>
+      <div class="stat-delta">跨 3 个团队</div>
+    </div>
+  </div>
+
+  <div class="grid g2">
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">数字员工开发组</h3>
+          <div class="card-sub">5 位成员 · TL：张涛</div>
+        </div>
+        <span class="badge badge-ok"><span class="badge-dot"></span>正常</span>
+      </div>
+      <div class="card-body">
+        <p class="emp-desc" style="display:block;-webkit-line-clamp:initial">负责数字员工的技能编排、SOP 蒸馏与工具接入，支撑业务团队快速落地。</p>
+        <div class="counts" style="margin-top:10px">
+          <span class="tag">我创建</span>
+          <span class="tag">进行中 3</span>
+          <span class="tag">待处理 1</span>
+        </div>
+        <div class="hint" style="margin-top:8px">最近活动：今天 09:42 · 张涛 更新了「SOP 蒸馏评审」任务</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" onclick="go('team-detail')">进入详情</button>
+        <button class="btn btn-sm btn-primary" onclick="toast('正在进入团队群聊…')">开始团队对话</button>
+        <button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="openEl('modal-del-team')">删除</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">客户成功运营组</h3>
+          <div class="card-sub">4 位成员 · TL：李瑞</div>
+        </div>
+        <span class="badge badge-ok"><span class="badge-dot"></span>正常</span>
+      </div>
+      <div class="card-body">
+        <p class="emp-desc" style="display:block;-webkit-line-clamp:initial">维护客户成功知识库与回访 SOP，负责续约风险预警与季度复盘。</p>
+        <div class="counts" style="margin-top:10px">
+          <span class="tag">我创建</span>
+          <span class="tag">进行中 2</span>
+        </div>
+        <div class="hint" style="margin-top:8px">最近活动：昨天 17:20 · 李瑞 创建了任务「Q4 续约风险清单」</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" onclick="go('team-detail')">进入详情</button>
+        <button class="btn btn-sm btn-primary" onclick="toast('正在进入团队群聊…')">开始团队对话</button>
+        <button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="openEl('modal-del-team')">删除</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">数据平台共建组</h3>
+          <div class="card-sub">6 位成员 · TL：林晓</div>
+        </div>
+        <span class="badge badge-warn"><span class="badge-dot"></span>已归档</span>
+      </div>
+      <div class="card-body">
+        <p class="emp-desc" style="display:block;-webkit-line-clamp:initial">沉淀指标口径与数据字典，维护数据分析师员工的能力资产。</p>
+        <div class="counts" style="margin-top:10px">
+          <span class="tag">非我创建</span>
+          <span class="tag">进行中 0</span>
+        </div>
+        <div class="hint" style="margin-top:8px">最近活动：2026-09-28 · 林晓 归档了团队</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" onclick="go('team-detail')">进入详情</button>
+        <button class="btn btn-sm" onclick="toast('未设置项目领导时后端返回 400')">开始团队对话</button>
+        <button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="toast('仅团队 owner 或管理员可管理该团队（403）')">删除</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">市场内容协作组</h3>
+          <div class="card-sub">3 位成员 · TL：孙悦</div>
+        </div>
+        <span class="badge badge-ok"><span class="badge-dot"></span>正常</span>
+      </div>
+      <div class="card-body">
+        <p class="emp-desc" style="display:block;-webkit-line-clamp:initial">统一活动文案风格与投放节奏，维护市场内容策划员工。</p>
+        <div class="counts" style="margin-top:10px">
+          <span class="tag">非我创建</span>
+          <span class="tag">进行中 2</span>
+        </div>
+        <div class="hint" style="margin-top:8px">最近活动：10-20 14:05 · 孙悦 提交了任务「双十一文案 A/B 测试」</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" onclick="go('team-detail')">进入详情</button>
+        <button class="btn btn-sm btn-primary" onclick="toast('正在进入团队群聊…')">开始团队对话</button>
+        <button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="toast('仅团队 owner 或管理员可管理该团队（403）')">删除</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 团队动态 -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-head">
+      <div style="flex:1">
+        <h3 class="card-title">团队动态</h3>
+        <div class="card-sub">团队 → 任务 → 线程</div>
+      </div>
+    </div>
+    <div class="card-body" style="padding:0">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>团队</th>
+            <th>任务</th>
+            <th>线程</th>
+            <th>最近更新</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>数字员工开发组</td>
+            <td>SOP 蒸馏评审</td>
+            <td><span class="badge badge-info">TL 会话</span></td>
+            <td>今天 09:42</td>
+            <td><button class="btn btn-sm" onclick="toast('正在进入团队群聊…')">进入</button></td>
+          </tr>
+          <tr>
+            <td>客户成功运营组</td>
+            <td>Q4 续约风险清单</td>
+            <td><span class="badge badge-info">TL 会话</span></td>
+            <td>昨天 17:20</td>
+            <td><button class="btn btn-sm" onclick="toast('正在进入团队群聊…')">进入</button></td>
+          </tr>
+          <tr>
+            <td>市场内容协作组</td>
+            <td>双十一文案 A/B 测试</td>
+            <td><span class="badge badge-info">TL 会话</span></td>
+            <td>10-20 14:05</td>
+            <td><button class="btn btn-sm" onclick="toast('正在进入团队群聊…')">进入</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 创建团队 -->
+  <div class="modal" id="modal-new-team">
+    <div class="modal-head">
+      <h3>创建团队</h3>
+      <button class="btn btn-sm btn-icon" style="margin-left:auto" onclick="closeEl('modal-new-team')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="label">团队名称<span class="req">*</span></label>
+        <input class="input" placeholder="例如：数字员工开发组" />
+        <div class="hint">创建后你将成为该团队的 owner，可管理成员、任务与设置。</div>
+      </div>
+      <div class="field">
+        <label class="label">团队描述</label>
+        <textarea class="textarea" placeholder="简要说明团队职责与协作范围（可选）"></textarea>
+      </div>
+      <div class="field">
+        <label class="label">项目领导（TL）</label>
+        <select class="select">
+          <option>暂不设置（之后可更换）</option>
+          <option>张涛</option>
+          <option>李瑞</option>
+          <option>林晓</option>
+        </select>
+        <div class="hint">未设置 TL 时「开始团队对话」会被后端拒绝（400）。</div>
+      </div>
+      <div class="proto-note">校验示例：名称为空 → 400「请输入团队名称」；同名团队 → 409。</div>
+      <div class="form-err">· 团队名称不能为空</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEl('modal-new-team')">取消</button>
+      <button class="btn btn-primary" onclick="closeEl('modal-new-team');toast('团队创建成功，你是该团队 owner')">创建</button>
+    </div>
+  </div>
+
+  <!-- 删除团队二次确认 -->
+  <div class="modal" id="modal-del-team">
+    <div class="modal-head">
+      <h3>删除团队</h3>
+      <button class="btn btn-sm btn-icon" style="margin-left:auto" onclick="closeEl('modal-del-team')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="emp-desc" style="display:block">删除后团队及其任务将一并移除，操作不可撤销。确定继续吗？</p>
+      <div class="proto-note" style="margin-top:12px">若你不是该团队 owner，点击后会收到 403「Only team owner or administrator can manage this team」。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEl('modal-del-team')">取消</button>
+      <button class="btn btn-danger" onclick="closeEl('modal-del-team');toast('团队已删除')">确认删除</button>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     5. 团队详情
+     ========================================================= -->
+<section class="page hide" data-page="team-detail">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">数字员工开发组</h1>
+      <p class="page-desc">状态：<span class="badge badge-ok"><span class="badge-dot"></span>正常</span> · 5 位成员 · TL：张涛 · 创建者：李瑞</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-sm" onclick="go('teams')">← 返回团队列表</button>
+      <button class="btn btn-sm" onclick="toast('正在导出完整团队日志…')">查看完整日志</button>
+      <button class="btn btn-sm btn-primary" onclick="toast('正在进入团队群聊…')">发起群聊</button>
+    </div>
+  </div>
+
+  <div class="banner banner-info">
+    <span>ℹ</span>
+    <span>普通员工可浏览全部只读内容，并可使用「开始对话 / 查看完整日志」；成员、任务、黑板等写操作仅限团队 owner 或管理员。</span>
+    <span class="banner-actions">
+      <button class="btn btn-sm btn-ghost" onclick="toast('已了解团队权限边界')">知道了</button>
+    </span>
+  </div>
+
+  <div class="tabs" data-tabgroup="team-detail">
+    <button class="tab active" onclick="setTab(this,'team-detail','members')">成员</button>
+    <button class="tab" onclick="setTab(this,'team-detail','tasks')">任务</button>
+    <button class="tab" onclick="setTab(this,'team-detail','settings')">设置</button>
+  </div>
+
+  <!-- 成员 -->
+  <div data-pane="team-detail" data-target="members">
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1">
+          <h3 class="card-title">成员列表</h3>
+          <div class="card-sub">共 5 位成员</div>
+        </div>
+        <button class="btn btn-sm" onclick="toast('添加成员：非 owner 点击后后端 403')">＋ 添加成员</button>
+        <button class="btn btn-sm" onclick="toast('更换 TL：非 owner 点击后后端 403')">更换 TL</button>
+      </div>
+      <div class="card-body" style="padding:0">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>成员</th>
+              <th>角色</th>
+              <th>所属组织</th>
+              <th>加入时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>张涛</td>
+              <td><span class="badge badge-info">项目领导</span></td>
+              <td>平台研发部</td>
+              <td>2026-06-11</td>
+              <td><button class="btn btn-sm" onclick="toast('设为项目领导：非 owner 点击后后端 403')">设为 TL</button></td>
+            </tr>
+            <tr>
+              <td>李瑞</td>
+              <td><span class="tag">团队 owner</span></td>
+              <td>客户成功部</td>
+              <td>2026-06-11</td>
+              <td><button class="btn btn-sm" onclick="toast('移除成员：非 owner 点击后后端 403')">移除</button></td>
+            </tr>
+            <tr>
+              <td>陈思远</td>
+              <td><span class="badge">成员</span></td>
+              <td>客户成功部</td>
+              <td>2026-07-02</td>
+              <td><button class="btn btn-sm" onclick="toast('移除成员：非 owner 点击后后端 403')">移除</button></td>
+            </tr>
+            <tr>
+              <td>林晓</td>
+              <td><span class="badge">成员</span></td>
+              <td>数据平台部</td>
+              <td>2026-07-15</td>
+              <td><button class="btn btn-sm" onclick="toast('移除成员：非 owner 点击后后端 403')">移除</button></td>
+            </tr>
+            <tr>
+              <td>周宁</td>
+              <td><span class="badge">成员</span></td>
+              <td>人力资源部</td>
+              <td>2026-08-04</td>
+              <td><button class="btn btn-sm" onclick="toast('移除成员：非 owner 点击后后端 403')">移除</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 任务 -->
+  <div data-pane="team-detail" data-target="tasks" class="hide">
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1">
+          <h3 class="card-title">任务列表</h3>
+          <div class="card-sub">7 列看板：竞标中 / 待认领 / 进行中 / 待验收 / 已完成 / 已退回 / 已升级</div>
+        </div>
+        <button class="btn btn-sm" onclick="toast('创建任务：非 owner 点击后后端 403')">＋ 创建任务</button>
+      </div>
+      <div class="card-body" style="padding:0">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>任务</th>
+              <th>状态</th>
+              <th>负责人</th>
+              <th>更新时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>SOP 蒸馏评审</td>
+              <td><span class="badge badge-warn">进行中</span></td>
+              <td>张涛</td>
+              <td>今天 09:42</td>
+              <td>
+                <button class="btn btn-sm" onclick="toast('打开任务详情（只读）')">查看</button>
+                <button class="btn btn-sm" onclick="toast('人工验收：非 owner 点击后后端 403')">验收</button>
+              </td>
+            </tr>
+            <tr>
+              <td>知识库同步检查</td>
+              <td><span class="badge badge-info">待验收</span></td>
+              <td>陈思远</td>
+              <td>昨天 16:10</td>
+              <td>
+                <button class="btn btn-sm" onclick="toast('打开任务详情（只读）')">查看</button>
+                <button class="btn btn-sm" onclick="toast('人工验收：非 owner 点击后后端 403')">验收</button>
+              </td>
+            </tr>
+            <tr>
+              <td>工具接入联调</td>
+              <td><span class="badge badge-info">竞标中</span></td>
+              <td>林晓</td>
+              <td>昨天 11:05</td>
+              <td>
+                <button class="btn btn-sm" onclick="toast('查看竞标竞技场（只读）')">竞技场</button>
+                <button class="btn btn-sm" onclick="toast('改判：非 owner 点击后后端 403')">改判</button>
+              </td>
+            </tr>
+            <tr>
+              <td>周报模板整理</td>
+              <td><span class="badge badge-ok">已完成</span></td>
+              <td>周宁</td>
+              <td>10-19 18:30</td>
+              <td><button class="btn btn-sm" onclick="toast('打开任务详情（只读）')">查看</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置 -->
+  <div data-pane="team-detail" data-target="settings" class="hide">
+    <div class="grid g2">
+      <div class="card">
+        <div class="card-head">
+          <h3 class="card-title">团队设置</h3>
+          <span class="card-sub" style="margin-left:auto">只读展示</span>
+        </div>
+        <div class="card-body">
+          <div class="row2">
+            <div class="field">
+              <label class="label">并发上限</label>
+              <input class="input" value="4" readonly />
+            </div>
+            <div class="field">
+              <label class="label">任务超时（分钟）</label>
+              <input class="input" value="60" readonly />
+            </div>
+          </div>
+          <div class="field">
+            <label class="label">竞标反驳轮数</label>
+            <input class="input" value="2" readonly />
+          </div>
+          <div class="field">
+            <label class="label">团队名称</label>
+            <input class="input" value="数字员工开发组" readonly />
+          </div>
+        </div>
+        <div class="card-foot">
+          <button class="btn btn-sm" style="margin-left:auto" onclick="toast('保存团队设置：非 owner 点击后后端 403')">保存设置</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3 class="card-title">团队黑板</h3>
+          <span class="card-sub" style="margin-left:auto">只读</span>
+        </div>
+        <div class="card-body">
+          <div class="emp-card" style="box-shadow:none">
+            <div class="emp-name">本期目标</div>
+            <div class="emp-desc">完成 3 个数字员工的 SOP 蒸馏，并沉淀为部门通用流程。</div>
+            <div class="hint">更新于 10-20 · 张涛</div>
+          </div>
+          <div class="emp-card" style="box-shadow:none;margin-top:10px">
+            <div class="emp-name">风险提示</div>
+            <div class="emp-desc">工具联调依赖外部系统，需预留 2 天缓冲。</div>
+            <div class="hint">更新于 10-19 · 林晓</div>
+          </div>
+        </div>
+        <div class="card-foot">
+          <button class="btn btn-sm" onclick="toast('新增黑板条目：非 owner 点击后后端 403')">＋ 新增条目</button>
+          <button class="btn btn-sm" style="margin-left:auto" onclick="toast('沉淀到知识库：非 owner 点击后后端 403')">沉淀</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- owner 与非 owner 对比 -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-head">
+      <div style="flex:1">
+        <h3 class="card-title">角色对比（静态示意）</h3>
+        <div class="card-sub">本人是 owner 时可写；非 owner 点击后由后端 403 拒绝「Only team owner or administrator can manage this team」</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="chip active" onclick="toast('当前视角：我是该团队 owner')">我是 owner</button>
+        <button class="chip" onclick="toast('当前视角：非 owner（只读）')">非 owner</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="grid g2">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">形态 A · 我是 owner</h3>
+            <span class="badge badge-ok" style="margin-left:auto">可写</span>
+          </div>
+          <div class="card-body">
+            <div class="counts">
+              <span class="tag">添加/移除成员</span>
+              <span class="tag">更换 TL</span>
+              <span class="tag">创建任务</span>
+              <span class="tag">保存团队设置</span>
+              <span class="tag">黑板增删改</span>
+              <span class="tag">改判 / 人工验收</span>
+            </div>
+            <div class="hint" style="margin-top:8px">上述操作全部成功；成功后刷新团队详情与任务看板。</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">形态 B · 非 owner</h3>
+            <span class="badge badge-danger" style="margin-left:auto">按钮可见 · 403</span>
+          </div>
+          <div class="card-body">
+            <div class="counts">
+              <span class="tag">按钮不置灰</span>
+              <span class="tag">浏览不受影响</span>
+              <span class="tag">开始对话可用</span>
+              <span class="tag">查看完整日志可用</span>
+            </div>
+            <div class="hint" style="margin-top:8px">点击写操作按钮后收到 403「Only team owner or administrator can manage this team」。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+     6. 渠道接入
+     ========================================================= -->
+<section class="page hide" data-page="channels">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">渠道接入</h1>
+      <p class="page-desc">将数字员工或团队接入外部渠道。你只能看到自己创建或协管的接入。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-sm" onclick="toast('渠道列表已刷新')">刷新</button>
+      <button class="btn btn-sm btn-primary" onclick="toast('打开新建渠道接入三步弹窗：渠道 / 名称 / 绑定对象')">＋ 新建渠道接入</button>
+    </div>
+  </div>
+
+  <div class="banner banner-info">
+    <span>ℹ</span>
+    <span>普通员工仅见本人创建或协管的接入；协作者不能断开渠道，也不能管理协作者名单。</span>
+    <span class="banner-actions">
+      <button class="btn btn-sm btn-ghost" onclick="toast('已了解渠道权限边界')">知道了</button>
+    </span>
+  </div>
+
+  <!-- 渠道卡列表 -->
+  <div class="grid g3" style="margin-bottom:16px">
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">企业微信 · 客服工单入口</h3>
+          <div class="card-sub">企业微信202610211030</div>
+        </div>
+        <span class="badge badge-ok"><span class="badge-dot"></span>已连接</span>
+      </div>
+      <div class="card-body">
+        <div class="emp-meta">创建者：李瑞 · 我的角色：创建者</div>
+        <div class="emp-meta" style="margin-top:4px">绑定对象：数字员工「客户成功助手」 · 绑定员工 1</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="toast('已切换到渠道详情：企业微信')">查看配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">微信 · 私域客服</h3>
+          <div class="card-sub">微信202610150912</div>
+        </div>
+        <span class="badge badge-warn"><span class="badge-dot"></span>待扫码</span>
+      </div>
+      <div class="card-body">
+        <div class="emp-meta">创建者：李瑞 · 我的角色：创建者</div>
+        <div class="emp-meta" style="margin-top:4px">绑定对象：数字员工「客户成功助手」 · 绑定员工 1</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="toast('扫码接入：请使用微信扫描二维码')">查看配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">微信客服 · 售后专线</h3>
+          <div class="card-sub">微信客服202609280845</div>
+        </div>
+        <span class="badge badge-info"><span class="badge-dot"></span>待配置</span>
+      </div>
+      <div class="card-body">
+        <div class="emp-meta">创建者：陈思远 · 我的角色：协作者</div>
+        <div class="emp-meta" style="margin-top:4px">绑定对象：团队「客户成功运营组」 · 可调度员工 3</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="toast('已切换到渠道详情：微信客服')">查看配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">飞书 · 研发问答机器人</h3>
+          <div class="card-sub">飞书202608121427</div>
+        </div>
+        <span class="badge badge-ok"><span class="badge-dot"></span>已连接</span>
+      </div>
+      <div class="card-body">
+        <div class="emp-meta">创建者：林晓 · 我的角色：协作者</div>
+        <div class="emp-meta" style="margin-top:4px">绑定对象：数字员工「数据分析师」 · 绑定员工 1</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="toast('已切换到渠道详情：飞书')">查看配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1;min-width:0">
+          <h3 class="card-title">钉钉 · 内部助理</h3>
+          <div class="card-sub">钉钉202607201133</div>
+        </div>
+        <span class="badge"><span class="badge-dot"></span>已停用</span>
+      </div>
+      <div class="card-body">
+        <div class="emp-meta">创建者：周宁 · 我的角色：协作者</div>
+        <div class="emp-meta" style="margin-top:4px">绑定对象：数字员工「招聘协调员」 · 绑定员工 1</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" style="flex:1" onclick="toast('已切换到渠道详情：钉钉')">查看配置</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 配置表单（以企业微信为例） -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-head">
+      <div style="flex:1">
+        <h3 class="card-title">企业微信 · 配置</h3>
+        <div class="card-sub">创建者与协作者均可保存凭证、挂载可调度员工与启停渠道</div>
+      </div>
+      <span class="badge badge-ok"><span class="badge-dot"></span>已连接</span>
+      <button class="btn btn-sm" style="margin-left:8px" onclick="toast('渠道已停用（可再次点击启用）')">停用</button>
+    </div>
+    <div class="card-body">
+      <div class="row2">
+        <div class="field">
+          <label class="label">CorpID（企业 ID）<span class="req">*</span></label>
+          <input class="input" value="ww8f2c1d0a4b6e7f90" />
+        </div>
+        <div class="field">
+          <label class="label">AgentID<span class="req">*</span></label>
+          <input class="input" value="1000023" />
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="label">Secret<span class="req">*</span></label>
+          <input class="input" type="password" value="**********************" />
+          <div class="hint">Secret 仅显示后四位，保存后不可回显明文。</div>
+        </div>
+        <div class="field">
+          <label class="label">Token</label>
+          <input class="input" value="sdToken20261021" />
+        </div>
+      </div>
+      <div class="field">
+        <label class="label">EncodingAESKey</label>
+        <input class="input" value="3q2wKp8sDfGhJkLmNoPqRsTuVwXyZaBcDeFgHiJkLm" />
+      </div>
+      <div class="field">
+        <label class="label">回调地址（Webhook）</label>
+        <div style="display:flex;gap:8px">
+          <input class="input" value="https://staffdeck.example.com/api/enterprise/channels/wecom/callback/8f2c1d0a" readonly />
+          <button class="btn" onclick="toast('回调地址已复制')">复制回调地址</button>
+        </div>
+        <div class="hint">需在企业微信应用后台配置为接收消息的 URL，并保证公网可达。</div>
+      </div>
+      <div class="field">
+        <label class="label">绑定对象</label>
+        <select class="select">
+          <option>数字员工 · 客户成功助手</option>
+          <option>数字员工 · 客户成功助手（线上版）</option>
+          <option>团队 · 客户成功运营组</option>
+        </select>
+        <div class="hint">绑定团队时须该团队已设置项目领导。</div>
+      </div>
+    </div>
+    <div class="card-foot">
+      <button class="btn btn-sm btn-primary" onclick="toast('企业微信渠道配置已保存')">保存配置</button>
+      <button class="btn btn-sm" onclick="toast('已重新校验企业微信凭证')">校验凭证</button>
+    </div>
+  </div>
+
+  <div class="grid g2" style="margin-bottom:16px">
+
+    <!-- 身份绑定 -->
+    <div class="card">
+      <div class="card-head">
+        <h3 class="card-title">身份绑定</h3>
+        <span class="badge badge-ok" style="margin-left:auto">已绑定</span>
+      </div>
+      <div class="card-body">
+        <div class="emp-meta">绑定账号：李瑞（内部成员）</div>
+        <div class="emp-meta" style="margin-top:4px">Scope：企业微信 · 客户成功部 · 8f2c1d0a</div>
+        <div class="hint" style="margin-top:8px">当前绑定码：<b>4 7 2 9 1 5</b> · 有效期 10 分钟 · 每分钟最多生成 5 次</div>
+        <div class="hint" style="margin-top:4px">标题行示例：「绑定码 8 分 12 秒后过期」。</div>
+        <div class="proto-note" style="margin-top:12px">绑定 / 解绑只能在私聊中进行；群聊内发起会被拒。</div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm btn-primary" onclick="toast('已生成绑定码：472915（10 分钟内有效）')">生成绑定码</button>
+        <button class="btn btn-sm" onclick="toast('请指定 external_account_scope 后再解绑')">解除绑定</button>
+      </div>
+    </div>
+
+    <!-- 可调度员工 -->
+    <div class="card">
+      <div class="card-head">
+        <h3 class="card-title">可调度员工</h3>
+        <span class="card-sub" style="margin-left:auto">非团队绑定时可编辑</span>
+      </div>
+      <div class="card-body" style="padding:0">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>员工</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>客户成功助手</td>
+              <td><span class="badge badge-ok"><span class="badge-dot"></span>在线</span></td>
+              <td><button class="btn btn-sm" onclick="toast('已从可调度列表移除')">移除</button></td>
+            </tr>
+            <tr>
+              <td>数据分析师</td>
+              <td><span class="badge badge-ok"><span class="badge-dot"></span>在线</span></td>
+              <td><button class="btn btn-sm" onclick="toast('已从可调度列表移除')">移除</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-sm" onclick="toast('已打开员工选择器')">＋ 添加可调度员工</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 权限边界 -->
+  <div class="card">
+    <div class="card-head">
+      <div style="flex:1">
+        <h3 class="card-title">权限边界</h3>
+        <div class="card-sub">协作者不能断开渠道，也不能管理协作者名单</div>
+      </div>
+      <span class="badge badge-danger">协作者受限</span>
+    </div>
+    <div class="card-body" style="padding:0">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>能力</th>
+            <th>创建者（owner）</th>
+            <th>协作者（collaborator）</th>
+            <th>仅创建者与管理员</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>配置凭证、挂载可调度员工、启停渠道</td>
+            <td><span class="badge badge-ok">可</span></td>
+            <td><span class="badge badge-ok">可</span></td>
+            <td><span class="badge">—</span></td>
+          </tr>
+          <tr>
+            <td>复制回调地址</td>
+            <td><span class="badge badge-ok">可</span></td>
+            <td><span class="badge badge-ok">可</span></td>
+            <td><span class="badge">—</span></td>
+          </tr>
+          <tr>
+            <td>生成绑定码 / 解除绑定</td>
+            <td><span class="badge badge-ok">可</span></td>
+            <td><span class="badge badge-ok">可</span></td>
+            <td><span class="badge">—</span></td>
+          </tr>
+          <tr>
+            <td>断开渠道接入</td>
+            <td><span class="badge badge-ok">可</span></td>
+            <td><span class="badge badge-danger">不可</span></td>
+            <td><span class="badge badge-info">仅创建者与管理员</span></td>
+          </tr>
+          <tr>
+            <td>管理协作者名单</td>
+            <td><span class="badge badge-ok">可</span></td>
+            <td><span class="badge badge-danger">不可</span></td>
+            <td><span class="badge badge-info">仅创建者与管理员</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card-foot">
+      <button class="btn btn-sm" onclick="toast('协作者强行调用将返回 403：Only the creator or administrator can manage this channel binding')">查看被拒表现</button>
+      <button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="toast('断开企业微信接入？（创建者或管理员可操作）')">断开接入</button>
+    </div>
+  </div>
+</section>
+<!-- ============================================================
+     B 组片段：普通员工端页面（12 个 data-page）
+     仅包含 <section> 页面块与其中的抽屉/弹窗，无 html/head/body/style/script。
+     所有交互仅调用骨架已实现的 go / setTab / openEl / closeEl / toast / toggleSlash。
+     抽屉与弹窗 id 统一加 b- 前缀；斜杠面板固定 id="slashPanel"。
+     ============================================================ -->
+
+<!-- ==================== 1. 员工档案（默认「工作记录」） ==================== -->
+<section class="page hide" data-page="dashboard">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">李瑞 · 客户成功助手</h1>
+      <p class="page-desc">
+        岗位：客户成功工程师　·　
+        <span class="badge badge-ok"><span class="badge-dot"></span>在线</span>　·　
+        创建者：李瑞（本人）　·　入职时间：2026-03-12
+      </p>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="toast('打开「编辑资料」：员工姓名 / 岗位 / 入职时间 / 工作状态 / 看板摘要 / 最大调用轮次（1–100，默认 32）')">编辑资料</button>
+      <button class="btn" onclick="toast('打开「更换头像」：11 个预设头像 + 自定义上传（≤5MB，裁剪 360×360 PNG）')">更换头像</button>
+      <button class="btn btn-primary" onclick="go('chat')">去对话</button>
+    </div>
+  </div>
+
+  <!-- 档案标签页：工作记录为默认页，其余跳转到独立页面 -->
+  <div class="tabs">
+    <button class="tab active" onclick="toast('已切换到「工作记录」')">工作记录</button>
+    <button class="tab" onclick="go('scheduled-tasks')">定时任务</button>
+    <button class="tab" onclick="go('memories')">记忆</button>
+    <button class="tab" onclick="go('feedback')">对话日志</button>
+  </div>
+
+  <!-- 四项指标卡 -->
+  <div class="grid g4" style="margin-bottom:14px">
+    <div class="stat">
+      <div class="stat-value">1,286</div>
+      <div class="stat-label">对话次数</div>
+      <div class="stat-delta">较上周 +8.4%</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">342</div>
+      <div class="stat-label">反馈次数</div>
+      <div class="stat-delta">较上周 +3.1%</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">93.6%</div>
+      <div class="stat-label">好评率</div>
+      <div class="stat-delta">较上周 +1.2%</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">6.4%</div>
+      <div class="stat-label">差评率</div>
+      <div class="stat-delta" style="color:var(--danger)">较上周 -0.8%</div>
+    </div>
+  </div>
+
+  <div class="grid g2" style="margin-bottom:14px">
+    <!-- 活动时间轴 + 时间视图切换 -->
+    <div class="card">
+      <div class="card-head">
+        <h3 class="card-title">活动时间轴</h3>
+        <span class="card-sub">2026-10-21</span>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <button class="chip active" onclick="toast('已切换为「按日」视图')">Day</button>
+          <button class="chip" onclick="toast('已切换为「按周」视图')">Week</button>
+          <button class="chip" onclick="toast('已切换为「按月」视图')">Month</button>
+        </div>
+      </div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;gap:10px;border-left:2px solid var(--line);padding-left:12px">
+          <span class="badge badge-info" style="flex:0 0 auto">09:12</span>
+          <div>
+            <div style="font-size:13px">完成对话「多租户部署咨询 · 华东区客户」</div>
+            <div class="card-sub">产出 1 份交付检查清单，引用「产品交付手册」4 处</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;border-left:2px solid var(--line);padding-left:12px">
+          <span class="badge badge-ok" style="flex:0 0 auto">10:40</span>
+          <div>
+            <div style="font-size:13px">定时任务「每周客户健康度巡检」执行成功</div>
+            <div class="card-sub">耗时 42s，共检查 18 个客户实例</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;border-left:2px solid var(--line);padding-left:12px">
+          <span class="badge badge-warn" style="flex:0 0 auto">14:05</span>
+          <div>
+            <div style="font-size:13px">收到 1 条差评反馈，已归因「知识库缺失 · 交付验收流程」</div>
+            <div class="card-sub">进入自进化候选池，等待重新校验</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;border-left:2px solid transparent;padding-left:12px">
+          <span class="badge" style="flex:0 0 auto">16:22</span>
+          <div>
+            <div style="font-size:13px">知识库「产品交付手册」重建索引完成</div>
+            <div class="card-sub">新增 12 个文档切分块，SOP 发现 2 项</div>
+          </div>
+        </div>
+      </div>
+      <div class="card-foot">
+        <span class="card-sub">当日共 8 条活动记录</span>
+        <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="toast('已加载更早的活动记录')">查看更多</button>
+      </div>
+    </div>
+
+    <!-- 成长时间轴：空态示例 -->
+    <div class="card">
+      <div class="card-head">
+        <h3 class="card-title">成长时间轴</h3>
+        <span class="card-sub">能力沉淀轨迹</span>
+      </div>
+      <div class="card-body">
+        <div class="empty">
+          <div class="empty-ic">✦</div>
+          <strong>暂无成长轨迹</strong>
+          <span>该数字员工还没有可展示的能力成长记录，产生反馈与自进化后会自动沉淀。</span>
+          <div class="empty-actions">
+            <button class="btn btn-sm" onclick="go('knowledge')">去完善知识库</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已刷新成长轨迹')">刷新</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 六张能力卡片 -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-head">
+      <h3 class="card-title">能力概览</h3>
+      <span class="card-sub">点击卡片进入对应能力页面</span>
+    </div>
+    <div class="card-body">
+      <div class="grid g3">
+        <div class="card" style="box-shadow:none;cursor:pointer" onclick="go('knowledge')">
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:8px"><span class="ic">▩</span><strong>知识库</strong></div>
+            <div class="stat-value" style="font-size:20px;margin-top:6px">3 个</div>
+            <div class="card-sub">共 486 个文档 · 引用 2,140 次</div>
+          </div>
+        </div>
+        <div class="card" style="box-shadow:none;cursor:pointer" onclick="go('general-skills')">
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:8px"><span class="ic">✦</span><strong>技能</strong></div>
+            <div class="stat-value" style="font-size:20px;margin-top:6px">7 个</div>
+            <div class="card-sub">已发布 5 · 草稿 2</div>
+          </div>
+        </div>
+        <div class="card" style="box-shadow:none;cursor:pointer" onclick="go('skills')">
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:8px"><span class="ic">⇉</span><strong>SOP</strong></div>
+            <div class="stat-value" style="font-size:20px;margin-top:6px">4 个</div>
+            <div class="card-sub">启用 3 · 停用 1</div>
+          </div>
+        </div>
+        <div class="card" style="box-shadow:none;cursor:pointer" onclick="go('tools')">
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:8px"><span class="ic">⚙</span><strong>工具</strong></div>
+            <div class="stat-value" style="font-size:20px;margin-top:6px">12 个</div>
+            <div class="card-sub">内置 9 · MCP 服务 3</div>
+          </div>
+        </div>
+        <div class="card" style="box-shadow:none;cursor:pointer" onclick="go('scheduled-tasks')">
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:8px"><span class="ic">◷</span><strong>定时任务</strong></div>
+            <div class="stat-value" style="font-size:20px;margin-top:6px">5 个</div>
+            <div class="card-sub">启用 4 · 已暂停 1</div>
+          </div>
+        </div>
+        <div class="card" style="box-shadow:none;cursor:pointer" onclick="go('feedback')">
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:8px"><span class="ic">☰</span><strong>对话日志</strong></div>
+            <div class="stat-value" style="font-size:20px;margin-top:6px">342 条</div>
+            <div class="card-sub">近 7 天新增 46 条</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 反馈自进化面板（仅本人创建员工可见） -->
+  <div class="card">
+    <div class="card-head">
+      <h3 class="card-title">反馈自进化</h3>
+      <span class="card-sub">基于差评反馈生成能力候选</span>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn btn-sm btn-primary" onclick="toast('已扫描近 7 天 342 条反馈，生成 3 个候选')">扫描反馈并生成候选</button>
+        <button class="btn btn-sm" onclick="toast('正在重新校验 3 个候选…')">重新校验</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="proto-note">仅「本人创建员工」可见该面板；接口要求 ensure_agent_scope_manager，非 owner 返回 403。</div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>资源名称</th>
+            <th>类型</th>
+            <th>风险等级</th>
+            <th>状态</th>
+            <th>证据数</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>产品交付手册 · 交付验收流程</td>
+            <td><span class="tag">知识库</span></td>
+            <td><span class="badge badge-warn">中风险</span></td>
+            <td><span class="badge badge-info">待批准</span></td>
+            <td>14</td>
+            <td>
+              <button class="btn btn-sm" onclick="toast('已批准候选「产品交付手册 · 交付验收流程」')">批准</button>
+              <button class="btn btn-sm btn-ghost" onclick="toast('已拒绝该候选')">拒绝</button>
+            </td>
+          </tr>
+          <tr>
+            <td>客户健康度巡检 SOP</td>
+            <td><span class="tag">SOP</span></td>
+            <td><span class="badge">低风险</span></td>
+            <td><span class="badge badge-ok">已上线</span></td>
+            <td>9</td>
+            <td>
+              <button class="btn btn-sm" onclick="toast('已回滚该候选至上一版本')">回滚</button>
+              <button class="btn btn-sm btn-ghost" onclick="toast('已拒绝该候选')">拒绝</button>
+            </td>
+          </tr>
+          <tr>
+            <td>发票信息提取（MCP）</td>
+            <td><span class="tag">工具</span></td>
+            <td><span class="badge badge-danger">高风险</span></td>
+            <td><span class="badge">待校验</span></td>
+            <td>5</td>
+            <td>
+              <button class="btn btn-sm" onclick="toast('已批准候选「发票信息提取」')">批准</button>
+              <button class="btn btn-sm btn-ghost" onclick="toast('已拒绝该候选')">拒绝</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 2. 定时任务 ==================== -->
+<section class="page hide" data-page="scheduled-tasks">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">定时任务</h1>
+      <p class="page-desc">仅可见本人创建的任务与执行记录；列表按创建者过滤，非本人任务直访返回 403。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" onclick="go('scheduled-task-edit')">新建定时任务</button>
+    </div>
+  </div>
+
+  <div class="tabs" data-tabgroup="sched">
+    <button class="tab active" onclick="setTab(this,'sched','list')">任务列表</button>
+    <button class="tab" onclick="setTab(this,'sched','runs')">执行记录</button>
+  </div>
+
+  <!-- 任务列表 -->
+  <div data-pane="sched" data-target="list">
+    <div class="toolbar">
+      <span class="card-sub">任务状态：</span>
+      <button class="chip active" onclick="toast('筛选：全部任务')">全部</button>
+      <button class="chip" onclick="toast('筛选：待完成')">待完成</button>
+      <button class="chip" onclick="toast('筛选：已完成')">已完成</button>
+      <button class="chip" onclick="toast('筛选：已暂停')">已暂停</button>
+      <div class="search" style="margin-left:auto">
+        <i class="ic">🔍</i>
+        <input placeholder="搜索任务名称 / 描述"  />
+      </div>
+    </div>
+
+    <div class="card">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>定时任务</th>
+            <th>计划</th>
+            <th>状态</th>
+            <th>下次执行</th>
+            <th>已执行</th>
+            <th>最近结果</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <div style="font-weight:500">每周客户健康度巡检</div>
+              <div class="card-sub">巡检所有在服客户实例并输出健康度周报</div>
+            </td>
+            <td>每周一 09:00</td>
+            <td><span class="badge badge-ok"><span class="badge-dot"></span>待完成</span></td>
+            <td>2026-10-26 09:00</td>
+            <td>28 次</td>
+            <td><span class="badge badge-ok">成功</span> 42s</td>
+            <td>
+              <button class="btn btn-sm" onclick="toast('查看该任务的执行记录（原型内切换到「执行记录」标签页）')">查看记录</button>
+              <button class="btn btn-sm" onclick="go('scheduled-task-edit')">编辑</button>
+              <button class="btn btn-sm" onclick="toast('已提交「立即执行」，任务进入队列')">立即执行</button>
+              <button class="btn btn-sm" onclick="toast('任务已暂停')">暂停</button>
+              <button class="btn btn-sm btn-danger" onclick="toast('删除后该任务与其执行记录将一并移除，操作不可撤销。')">删除</button>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <div style="font-weight:500">每月发票归档</div>
+              <div class="card-sub">每月 1 号汇总上月发票并推送至财务</div>
+            </td>
+            <td>每月 1 号 08:30</td>
+            <td><span class="badge badge-ok"><span class="badge-dot"></span>待完成</span></td>
+            <td>2026-11-01 08:30</td>
+            <td>6 次</td>
+            <td><span class="badge badge-danger">失败</span> 超时</td>
+            <td>
+              <button class="btn btn-sm" onclick="toast('查看该任务的执行记录（原型内切换到「执行记录」标签页）')">查看记录</button>
+              <button class="btn btn-sm" onclick="go('scheduled-task-edit')">编辑</button>
+              <button class="btn btn-sm" onclick="toast('已提交「立即执行」，任务进入队列')">立即执行</button>
+              <button class="btn btn-sm" onclick="toast('任务已暂停')">暂停</button>
+              <button class="btn btn-sm btn-danger" onclick="toast('删除后该任务与其执行记录将一并移除，操作不可撤销。')">删除</button>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <div style="font-weight:500">交付文档质量抽查</div>
+              <div class="card-sub">每日抽查 3 份交付文档的结构完整性</div>
+            </td>
+            <td>每天 18:00</td>
+            <td><span class="badge badge-warn"><span class="badge-dot"></span>已完成</span></td>
+            <td>—</td>
+            <td>112 次</td>
+            <td><span class="badge badge-ok">成功</span> 18s</td>
+            <td>
+              <button class="btn btn-sm" onclick="toast('查看该任务的执行记录（原型内切换到「执行记录」标签页）')">查看记录</button>
+              <button class="btn btn-sm" onclick="go('scheduled-task-edit')">编辑</button>
+              <button class="btn btn-sm" onclick="toast('已提交「立即执行」，任务进入队列')">立即执行</button>
+              <button class="btn btn-sm" onclick="toast('任务已暂停')">暂停</button>
+              <button class="btn btn-sm btn-danger" onclick="toast('删除后该任务与其执行记录将一并移除，操作不可撤销。')">删除</button>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <div style="font-weight:500">竞品动态周报</div>
+              <div class="card-sub">每周五汇总竞品公开信息</div>
+            </td>
+            <td>每周五 17:00</td>
+            <td><span class="badge"><span class="badge-dot"></span>已暂停</span></td>
+            <td>—</td>
+            <td>14 次</td>
+            <td><span class="badge badge-ok">成功</span> 36s</td>
+            <td>
+              <button class="btn btn-sm" onclick="toast('查看该任务的执行记录（原型内切换到「执行记录」标签页）')">查看记录</button>
+              <button class="btn btn-sm" onclick="go('scheduled-task-edit')">编辑</button>
+              <button class="btn btn-sm" onclick="toast('已提交「立即执行」，任务进入队列')">立即执行</button>
+              <button class="btn btn-sm btn-primary" onclick="toast('任务已启用')">启用</button>
+              <button class="btn btn-sm btn-danger" onclick="toast('删除后该任务与其执行记录将一并移除，操作不可撤销。')">删除</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pager">
+        <span>共 4 条 · 每页 10 条</span>
+        <button class="pg active">1</button>
+        <button class="pg" onclick="toast('已在第 1 页')">›</button>
+      </div>
+    </div>
+
+    <!-- 空态示例 -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-head"><h3 class="card-title">空态示例</h3><span class="card-sub">无任务时展示</span></div>
+      <div class="card-body">
+        <div class="empty">
+          <div class="empty-ic">◷</div>
+          <strong>暂无定时任务</strong>
+          <span>创建一个定时任务，让数字员工按计划自动执行。</span>
+          <div class="empty-actions">
+            <button class="btn btn-sm btn-primary" onclick="go('scheduled-task-edit')">新建定时任务</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 执行记录 -->
+  <div data-pane="sched" data-target="runs" class="hide">
+    <div class="toolbar">
+      <span class="card-sub">执行记录状态：</span>
+      <button class="chip active" onclick="toast('筛选：全部执行记录')">全部</button>
+      <button class="chip" onclick="toast('筛选：待完成')">待完成</button>
+      <button class="chip" onclick="toast('筛选：已完成')">已完成</button>
+      <button class="chip" onclick="toast('筛选：失败')">失败</button>
+      <button class="chip" onclick="toast('筛选：跳过')">跳过</button>
+    </div>
+    <div class="card">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>所属任务</th>
+            <th>状态</th>
+            <th>开始时间</th>
+            <th>耗时</th>
+            <th>结果摘要</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>每周客户健康度巡检</td>
+            <td><span class="badge badge-ok">已完成</span></td>
+            <td>2026-10-21 09:00</td>
+            <td>42s</td>
+            <td>检查 18 个客户实例，2 个存在风险，已生成周报</td>
+          </tr>
+          <tr>
+            <td>交付文档质量抽查</td>
+            <td><span class="badge badge-ok">已完成</span></td>
+            <td>2026-10-20 18:00</td>
+            <td>18s</td>
+            <td>抽查 3 份文档，均通过结构校验</td>
+          </tr>
+          <tr>
+            <td>每月发票归档</td>
+            <td><span class="badge badge-danger">失败</span></td>
+            <td>2026-10-01 08:30</td>
+            <td>300s</td>
+            <td>调用财务系统超时，已重试 2 次仍失败</td>
+          </tr>
+          <tr>
+            <td>竞品动态周报</td>
+            <td><span class="badge">跳过</span></td>
+            <td>2026-10-17 17:00</td>
+            <td>—</td>
+            <td>任务处于暂停状态，本次执行被跳过</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pager">
+        <span>共 4 条 · 每页 10 条</span>
+        <button class="pg active">1</button>
+        <button class="pg" onclick="toast('已在第 1 页')">›</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 3. 新建定时任务 ==================== -->
+<section class="page hide" data-page="scheduled-task-edit">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">新建定时任务</h1>
+      <p class="page-desc">为当前数字员工配置一个按计划执行的自动化任务。</p>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="go('scheduled-tasks')">返回定时任务</button>
+      <button class="btn btn-primary" onclick="toast('已保存定时任务「每周客户健康度巡检」')">保存</button>
+    </div>
+  </div>
+
+  <div class="proto-note">非管理员仅见本人创建的任务；执行记录同样按创建者收敛（列表与详情均按 created_by_user_id 过滤）。</div>
+
+  <div class="card">
+    <div class="card-head"><h3 class="card-title">基础信息</h3></div>
+    <div class="card-body">
+      <div class="field">
+        <label class="label">任务名称<span class="req">*</span></label>
+        <input class="input" placeholder="例如：每周客户健康度巡检" value="每周客户健康度巡检" />
+        <span class="hint">必填；名称将展示在任务列表首列。</span>
+      </div>
+      <div class="field">
+        <label class="label">执行任务描述</label>
+        <textarea class="textarea" placeholder="用自然语言描述本任务需要数字员工做什么">巡检所有在服客户实例，汇总健康度指标并输出周报。</textarea>
+        <span class="hint">描述会作为执行时的指令上下文。</span>
+      </div>
+      <div class="field">
+        <label class="label">指定 SOP</label>
+        <select class="select">
+          <option>不指定（由模型自行规划）</option>
+          <option>客户健康度巡检 SOP</option>
+          <option>交付验收流程 SOP</option>
+        </select>
+        <span class="hint">指定后将优先按该 SOP 的流程节点执行。</span>
+      </div>
+      <div class="field">
+        <label class="label">SOP 版本策略</label>
+        <select class="select">
+          <option>跟随最新版本</option>
+          <option>锁定当前版本</option>
+        </select>
+        <span class="hint">「跟随最新版本」会在 SOP 更新后自动使用新版本。</span>
+      </div>
+      <div class="field">
+        <label class="label">内部备注</label>
+        <input class="input" placeholder="仅内部可见，例如：客户成功组内部巡检" />
+      </div>
+      <div class="field">
+        <label class="label">启用状态</label>
+        <select class="select">
+          <option>启用</option>
+          <option>暂停</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <div class="card-head"><h3 class="card-title">调度配置</h3></div>
+    <div class="card-body">
+      <div class="field">
+        <label class="label">调度类型<span class="req">*</span></label>
+        <select class="select">
+          <option>按周</option>
+          <option>按天</option>
+          <option>按月</option>
+        </select>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="label">执行时间</label>
+          <input class="input" type="time" value="09:00" />
+          <span class="hint">时区跟随系统设置（Asia/Shanghai）。</span>
+        </div>
+        <div class="field">
+          <label class="label">执行日期</label>
+          <select class="select">
+            <option>星期一</option>
+            <option>星期二</option>
+            <option>星期五</option>
+          </select>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="label">每月几号</label>
+          <input class="input" placeholder="调度类型为「按月」时填写，如 1" />
+          <span class="hint">仅当调度类型为「按月」时生效。</span>
+        </div>
+        <div class="field">
+          <label class="label">最大运行次数</label>
+          <input class="input" placeholder="留空表示不限制" />
+          <span class="hint">达到上限后任务自动停止执行。</span>
+        </div>
+      </div>
+      <div class="form-err">示例校验提示：任务名称为必填项，请填写后再保存。</div>
+    </div>
+    <div class="card-foot">
+      <button class="btn" onclick="go('scheduled-tasks')">返回定时任务</button>
+      <button class="btn btn-primary" onclick="toast('已保存定时任务「每周客户健康度巡检」')">保存</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 4. 记忆 ==================== -->
+<section class="page hide" data-page="memories">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">记忆</h1>
+      <p class="page-desc">查看数字员工沉淀的长期记忆，可按用户与关键词筛选。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-danger" onclick="openEl('b-modal-clear-memory')">清空我的记忆</button>
+    </div>
+  </div>
+
+  <div class="proto-note">若本人是该员工 owner，可见该员工全部用户记忆；否则仅本人记忆。</div>
+
+  <div class="toolbar">
+    <select class="select" style="flex:0 0 240px" disabled>
+      <option>全部用户（仅管理员可选）</option>
+    </select>
+    <div class="search">
+      <i class="ic">🔍</i>
+      <input placeholder="搜索用户名 / 用户ID / 关键词"  />
+    </div>
+    <button class="btn btn-sm" onclick="toast('已按当前条件刷新记忆列表')">刷新</button>
+  </div>
+
+  <div class="card">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>用户名</th>
+          <th>用户ID</th>
+          <th>类型</th>
+          <th>记忆数</th>
+          <th>最近更新</th>
+          <th>摘要</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>李瑞</td>
+          <td>u_10231</td>
+          <td><span class="tag">长期记忆</span></td>
+          <td>48</td>
+          <td>2026-10-21 14:05</td>
+          <td>从事客户成功工作，偏好多租户部署方案；关注交付验收流程与发票归档。</td>
+          <td><button class="btn btn-sm" onclick="toast('查看用户 u_10231 的记忆详情')">查看</button></td>
+        </tr>
+        <tr>
+          <td>王敏</td>
+          <td>u_10478</td>
+          <td><span class="tag">长期记忆</span></td>
+          <td>22</td>
+          <td>2026-10-20 09:41</td>
+          <td>负责华东区客户交付，习惯先看知识库再提问。</td>
+          <td><button class="btn btn-sm" onclick="toast('查看用户 u_10478 的记忆详情')">查看</button></td>
+        </tr>
+        <tr>
+          <td>陈涛</td>
+          <td>u_10655</td>
+          <td><span class="tag">长期记忆</span></td>
+          <td>13</td>
+          <td>2026-10-18 16:12</td>
+          <td>关注运维巡检与告警处理，偏好简洁结论。</td>
+          <td><button class="btn btn-sm" onclick="toast('查看用户 u_10655 的记忆详情')">查看</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pager">
+      <span>共 3 条 · 每页 10 条</span>
+      <button class="pg active">1</button>
+      <button class="pg" onclick="toast('已在第 1 页')">›</button>
+    </div>
+  </div>
+
+  <!-- 清空记忆确认弹窗 -->
+  <div class="modal" id="b-modal-clear-memory">
+    <div class="modal-head">
+      <h3>清空我的记忆</h3>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0">将清空当前员工下你的长期记忆，不会影响其他用户。确定继续？</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEl('b-modal-clear-memory')">取消</button>
+      <button class="btn btn-danger" onclick="closeEl('b-modal-clear-memory');toast('已清空当前员工下你的长期记忆')">确定清空</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 5. 对话日志 ==================== -->
+<section class="page hide" data-page="feedback">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">对话日志</h1>
+      <p class="page-desc">仅展示本人相关会话的对话记录与评价，可按评价与对话用户筛选。</p>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="toast('已导出 8 条对话日志')">批量导出</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="toast('筛选：全部评价')">全部</button>
+    <button class="tab" onclick="toast('筛选：仅好评')">好评</button>
+    <button class="tab" onclick="toast('筛选：仅差评')">差评</button>
+    <button class="tab" onclick="toast('筛选：未评价')">未评价</button>
+  </div>
+
+  <div class="toolbar">
+    <select class="select" style="flex:0 0 220px">
+      <option>全部对话用户（12）</option>
+      <option>李瑞（6）</option>
+      <option>王敏（4）</option>
+      <option>陈涛（2）</option>
+    </select>
+    <div class="search">
+      <i class="ic">🔍</i>
+      <input placeholder="搜索对话内容 / 用户"  />
+    </div>
+    <span class="card-sub" style="margin-left:auto">共 8 条 · 每页 10 条（超过 500 条请缩小范围）</span>
+  </div>
+
+  <div class="card">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>对话任务（数字员工）</th>
+          <th>来源</th>
+          <th>用户</th>
+          <th>状态</th>
+          <th>问题归因</th>
+          <th>最近内容</th>
+          <th>时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>客户成功助手</td>
+          <td>网页</td>
+          <td>李瑞</td>
+          <td><span class="badge badge-ok">好评</span></td>
+          <td>—</td>
+          <td>多租户部署步骤说明很清晰，检查清单可直接使用。</td>
+          <td>2026-10-21 09:12</td>
+          <td>
+            <button class="btn btn-sm" onclick="openEl('b-drawer-log-detail')">查看</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已导出单条对话日志')">导出</button>
+          </td>
+        </tr>
+        <tr>
+          <td>客户成功助手</td>
+          <td>企业微信</td>
+          <td>王敏</td>
+          <td><span class="badge badge-danger">差评</span></td>
+          <td>知识库缺失 · 交付验收流程</td>
+          <td>没有找到交付验收的具体通过标准，答案偏笼统。</td>
+          <td>2026-10-21 14:05</td>
+          <td>
+            <button class="btn btn-sm" onclick="openEl('b-drawer-log-detail')">查看</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已导出单条对话日志')">导出</button>
+          </td>
+        </tr>
+        <tr>
+          <td>客户成功助手</td>
+          <td>网页</td>
+          <td>陈涛</td>
+          <td><span class="badge">未评价</span></td>
+          <td>—</td>
+          <td>帮我列一下当前客户的续约风险点。</td>
+          <td>2026-10-20 17:30</td>
+          <td>
+            <button class="btn btn-sm" onclick="openEl('b-drawer-log-detail')">查看</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已导出单条对话日志')">导出</button>
+          </td>
+        </tr>
+        <tr>
+          <td>客户成功助手</td>
+          <td>飞书</td>
+          <td>王敏</td>
+          <td><span class="badge badge-ok">好评</span></td>
+          <td>—</td>
+          <td>周报汇总得很及时，节省了手工整理时间。</td>
+          <td>2026-10-20 09:41</td>
+          <td>
+            <button class="btn btn-sm" onclick="openEl('b-drawer-log-detail')">查看</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已导出单条对话日志')">导出</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pager">
+      <span>共 8 条</span>
+      <button class="pg" onclick="toast('上一页')">‹</button>
+      <button class="pg active">1</button>
+      <button class="pg" onclick="toast('第 2 页')">2</button>
+      <button class="pg" onclick="toast('下一页')">›</button>
+    </div>
+  </div>
+
+  <!-- 对话日志详情抽屉 -->
+  <div class="drawer" id="b-drawer-log-detail">
+    <div class="drawer-head">
+      <div>
+        <div style="font-size:15px;font-weight:600">对话详情 · 客户成功助手</div>
+        <div class="card-sub">用户：王敏　·　来源：企业微信　·　2026-10-21 14:05</div>
+      </div>
+      <button class="btn btn-sm btn-icon btn-ghost" style="margin-left:auto" onclick="closeEl('b-drawer-log-detail')">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div>
+          <div class="label">用户</div>
+          <div>没有找到交付验收的具体通过标准，答案偏笼统。</div>
+        </div>
+        <div>
+          <div class="label">数字员工</div>
+          <div>交付验收的标准包含…（以下为示例回答节选）</div>
+        </div>
+        <div>
+          <div class="label">评价</div>
+          <span class="badge badge-danger">差评</span>
+        </div>
+        <div>
+          <div class="label">问题归因</div>
+          <div>知识库缺失 · 交付验收流程</div>
+        </div>
+        <div>
+          <div class="label">引用来源</div>
+          <div class="counts">
+            <span class="tag">产品交付手册 · 第 3 章</span>
+            <span class="tag">交付验收 SOP</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="drawer-foot">
+      <button class="btn" onclick="closeEl('b-drawer-log-detail')">关闭</button>
+      <button class="btn btn-primary" onclick="toast('已导出该条对话日志')">导出该条</button>
+    </div>
+  </div>
+
+  <!-- 空态示例 -->
+  <div class="card" style="margin-top:14px">
+    <div class="card-head"><h3 class="card-title">空态示例</h3><span class="card-sub">无日志时展示</span></div>
+    <div class="card-body">
+      <div class="empty">
+        <div class="empty-ic">☰</div>
+        <strong>暂无对话日志</strong>
+        <span>当数字员工与用户产生对话后，日志会在这里汇总。</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 6. 知识库 ==================== -->
+<section class="page hide" data-page="knowledge">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">知识库</h1>
+      <p class="page-desc">管理当前数字员工的知识库与文档，支持导入、重建索引与删除。</p>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="toast('整体员工知识库对普通员工只读，不可新建')">新增知识库</button>
+      <button class="btn btn-primary" onclick="openEl('b-modal-import-knowledge')">导入文档</button>
+    </div>
+  </div>
+
+  <div class="proto-note">整体员工知识库对普通员工只读，不可新建；本人员工可完整管理（新增、导入、重建索引、删除）。</div>
+
+  <div class="toolbar">
+    <div class="search">
+      <i class="ic">🔍</i>
+      <input placeholder="搜索知识库名称"  />
+    </div>
+    <button class="btn btn-sm" onclick="toast('已刷新知识库列表')">刷新</button>
+  </div>
+
+  <div class="card">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>知识库名称</th>
+          <th>文档数</th>
+          <th>目录数</th>
+          <th>引用数</th>
+          <th>更新时间</th>
+          <th>来源</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>产品交付手册</td>
+          <td>186</td>
+          <td>24</td>
+          <td>1,204</td>
+          <td>2026-10-21 16:22</td>
+          <td><span class="tag">员工范围</span></td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('查看知识库「产品交付手册」详情')">查看</button>
+            <button class="btn btn-sm" onclick="toast('正在重建「产品交付手册」索引…')">重建索引</button>
+            <button class="btn btn-sm btn-danger" onclick="toast('删除知识库将同时移除其文档与索引，操作不可撤销。')">删除</button>
+          </td>
+        </tr>
+        <tr>
+          <td>客户成功话术库</td>
+          <td>142</td>
+          <td>18</td>
+          <td>612</td>
+          <td>2026-10-19 11:03</td>
+          <td><span class="tag">员工范围</span></td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('查看知识库「客户成功话术库」详情')">查看</button>
+            <button class="btn btn-sm" onclick="toast('正在重建「客户成功话术库」索引…')">重建索引</button>
+            <button class="btn btn-sm btn-danger" onclick="toast('删除知识库将同时移除其文档与索引，操作不可撤销。')">删除</button>
+          </td>
+        </tr>
+        <tr>
+          <td>平台通用产品知识库</td>
+          <td>1,024</td>
+          <td>96</td>
+          <td>8,430</td>
+          <td>2026-10-15 08:00</td>
+          <td><span class="tag">整体</span></td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('查看知识库「平台通用产品知识库」详情')">查看</button>
+            <button class="btn btn-sm" disabled title="整体员工知识库只读">重建索引</button>
+            <button class="btn btn-sm btn-danger" disabled title="整体员工知识库只读">删除</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pager">
+      <span>共 3 条 · 每页 10 条</span>
+      <button class="pg active">1</button>
+      <button class="pg" onclick="toast('已在第 1 页')">›</button>
+    </div>
+  </div>
+
+  <!-- 导入文档弹窗 -->
+  <div class="modal modal-lg" id="b-modal-import-knowledge">
+    <div class="modal-head">
+      <h3>导入文档到「产品交付手册」</h3>
+      <button class="btn btn-sm btn-icon btn-ghost" style="margin-left:auto" onclick="closeEl('b-modal-import-knowledge')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="label">选择文件</label>
+        <input class="input" type="file" multiple />
+        <span class="hint">支持 .docx / .txt / .md / .markdown / .html / .htm / .pdf；.doc 请先转换为 .docx 后上传。</span>
+      </div>
+      <div class="field">
+        <label class="label">切分与解析</label>
+        <span class="hint">入库阶段：排队 → 解析 → 切分 → 向量化 → 发现 SOP / 工具；每 1400ms 轮询进度。</span>
+      </div>
+      <div class="card" style="box-shadow:none">
+        <div class="card-head"><h3 class="card-title">导入进度</h3><span class="card-sub">2 / 3 完成</span></div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-ok">成功</span><span>交付手册-v3.docx</span><span class="card-sub" style="margin-left:auto">已切分 128 块</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-ok">成功</span><span>验收标准.md</span><span class="card-sub" style="margin-left:auto">已切分 42 块</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-danger">失败</span><span>旧版交付手册.doc</span><span class="card-sub" style="margin-left:auto">请转换为 .docx 后上传</span>
+          </div>
+        </div>
+      </div>
+      <div class="proto-note" style="margin-top:12px">完成弹窗会提示「发现可新增资源」，可一键将发现的 SOP / 工具加入当前员工。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEl('b-modal-import-knowledge')">取消</button>
+      <button class="btn btn-primary" onclick="closeEl('b-modal-import-knowledge');toast('已提交导入，正在解析与切分…')">开始导入</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 7. 技能 ==================== -->
+<section class="page hide" data-page="general-skills">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">技能</h1>
+      <p class="page-desc">管理当前数字员工可调用的技能包；整体员工技能只读。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" onclick="toast('打开技能新建：多文件技能包，必须包含 SKILL.md')">新建技能</button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search">
+      <i class="ic">🔍</i>
+      <input placeholder="搜索技能名称 / 描述"  />
+    </div>
+    <button class="btn btn-sm" onclick="toast('已刷新技能列表')">刷新</button>
+  </div>
+
+  <div class="card">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>技能名称</th>
+          <th>描述</th>
+          <th>来源</th>
+          <th>状态</th>
+          <th>版本</th>
+          <th>更新时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>客户健康度分析</td>
+          <td>基于用量与工单数据评估客户健康度并给出续约建议</td>
+          <td><span class="tag">员工</span></td>
+          <td><span class="badge badge-ok">已发布</span></td>
+          <td>v2.3</td>
+          <td>2026-10-21 10:15</td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('打开技能编辑：客户健康度分析')">编辑</button>
+            <button class="btn btn-sm" onclick="openEl('b-modal-skill-test')">试运行</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已复制到我的员工')">复制到我的员工</button>
+            <button class="btn btn-sm btn-danger" onclick="toast('删除技能将不可撤销。')">删除</button>
+          </td>
+        </tr>
+        <tr>
+          <td>交付文档排版检查</td>
+          <td>检查交付文档目录结构与格式规范</td>
+          <td><span class="tag">员工</span></td>
+          <td><span class="badge badge-warn">草稿</span></td>
+          <td>v0.4</td>
+          <td>2026-10-20 18:02</td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('打开技能编辑：交付文档排版检查')">编辑</button>
+            <button class="btn btn-sm" onclick="openEl('b-modal-skill-test')">试运行</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已复制到我的员工')">复制到我的员工</button>
+            <button class="btn btn-sm btn-danger" onclick="toast('删除技能将不可撤销。')">删除</button>
+          </td>
+        </tr>
+        <tr>
+          <td>发票信息提取</td>
+          <td>从发票图片/PDF 中提取结构化字段</td>
+          <td><span class="tag">整体</span></td>
+          <td><span class="badge badge-ok">已发布</span></td>
+          <td>v3.0</td>
+          <td>2026-10-12 09:30</td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('整体员工技能只读，不可编辑')">编辑</button>
+            <button class="btn btn-sm" onclick="openEl('b-modal-skill-test')">试运行</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已复制到我的员工')">复制到我的员工</button>
+            <button class="btn btn-sm btn-danger" onclick="toast('整体员工技能只读，不可删除')">删除</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pager">
+      <span>共 3 条 · 每页 10 条</span>
+      <button class="pg active">1</button>
+      <button class="pg" onclick="toast('已在第 1 页')">›</button>
+    </div>
+  </div>
+
+  <!-- 空态示例 -->
+  <div class="card" style="margin-top:14px">
+    <div class="card-head"><h3 class="card-title">空态示例</h3><span class="card-sub">无技能时展示</span></div>
+    <div class="card-body">
+      <div class="empty">
+        <div class="empty-ic">✦</div>
+        <strong>暂无技能</strong>
+        <span>技能包需包含 SKILL.md，可导入本地 zip / Markdown / 文件夹。</span>
+        <div class="empty-actions">
+          <button class="btn btn-sm btn-primary" onclick="toast('打开技能新建：多文件技能包，必须包含 SKILL.md')">新建技能</button>
+          <button class="btn btn-sm btn-ghost" onclick="toast('从开放广场浏览可复制的技能')">浏览开放广场</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 技能试运行弹窗 -->
+  <div class="modal" id="b-modal-skill-test">
+    <div class="modal-head">
+      <h3>试运行 · 客户健康度分析</h3>
+      <button class="btn btn-sm btn-icon btn-ghost" style="margin-left:auto" onclick="closeEl('b-modal-skill-test')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="label">输入参数</label>
+        <textarea class="textarea" placeholder="输入技能运行所需的参数（JSON 或自然语言）">{"客户名称":"华东区某制造企业","统计周期":"近30天"}</textarea>
+      </div>
+      <div class="field">
+        <label class="label">运行结果</label>
+        <div class="card" style="box-shadow:none">
+          <div class="card-body" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;background:var(--surface-subtle);border-radius:var(--r-md)">{
+  "health_score": 78,
+  "level": "关注",
+  "risks": ["工单响应变慢", "近两周活跃下降 18%"],
+  "suggestion": "建议安排一次续约沟通，并推送交付验收清单"
+}</div>
+        </div>
+        <span class="hint">运行通过流式接口返回，失败时会展示错误明细。</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEl('b-modal-skill-test')">关闭</button>
+      <button class="btn btn-primary" onclick="closeEl('b-modal-skill-test');toast('已重新运行技能')">重新运行</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 8. SOP ==================== -->
+<section class="page hide" data-page="skills">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">SOP</h1>
+      <p class="page-desc">管理当前数字员工的流程型技能（SOP），支持步骤编排与对话蒸馏。</p>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="toast('打开技能蒸馏：以对话方式生成 SOP，节点类型含收集信息 / 条件判断 / 调用工具 / 检索知识 / 回复用户 / 转人工 / 调用子 SOP')">技能蒸馏</button>
+      <button class="btn btn-primary" onclick="toast('打开 SOP 新建：左侧对话蒸馏，右侧流程图 / 源码工作区')">新建 SOP</button>
+    </div>
+  </div>
+
+  <div class="proto-note">SOP 是流程型技能，由多个流程节点按顺序编排并支持分支判断；与「技能」（可执行的技能包）不同：SOP 描述「怎么做」，技能提供「用什么做」。</div>
+
+  <div class="toolbar">
+    <div class="search">
+      <i class="ic">🔍</i>
+      <input placeholder="搜索 SOP 名称"  />
+    </div>
+    <button class="btn btn-sm" onclick="toast('已刷新 SOP 列表')">刷新</button>
+  </div>
+
+  <div class="card">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>SOP 名称</th>
+          <th>步骤数</th>
+          <th>版本</th>
+          <th>版本策略</th>
+          <th>状态</th>
+          <th>更新时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>交付验收流程 SOP</td>
+          <td>7</td>
+          <td>v2.1</td>
+          <td>跟随最新版本</td>
+          <td><span class="badge badge-ok">已启用</span></td>
+          <td>2026-10-21 11:40</td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('打开 SOP 编辑：交付验收流程 SOP')">编辑</button>
+            <button class="btn btn-sm" onclick="toast('SOP 已停用')">停用</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已复制 SOP 到我的员工')">复制</button>
+            <button class="btn btn-sm btn-danger" onclick="toast('删除 SOP 将不可撤销。')">删除</button>
+          </td>
+        </tr>
+        <tr>
+          <td>客户健康度巡检 SOP</td>
+          <td>5</td>
+          <td>v1.6</td>
+          <td>锁定当前版本</td>
+          <td><span class="badge badge-ok">已启用</span></td>
+          <td>2026-10-19 15:22</td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('打开 SOP 编辑：客户健康度巡检 SOP')">编辑</button>
+            <button class="btn btn-sm" onclick="toast('SOP 已停用')">停用</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已复制 SOP 到我的员工')">复制</button>
+            <button class="btn btn-sm btn-danger" onclick="toast('删除 SOP 将不可撤销。')">删除</button>
+          </td>
+        </tr>
+        <tr>
+          <td>工单升级处理 SOP</td>
+          <td>9</td>
+          <td>v0.9</td>
+          <td>跟随最新版本</td>
+          <td><span class="badge">已停用</span></td>
+          <td>2026-10-08 09:15</td>
+          <td>
+            <button class="btn btn-sm" onclick="toast('打开 SOP 编辑：工单升级处理 SOP')">编辑</button>
+            <button class="btn btn-sm btn-primary" onclick="toast('SOP 已启用')">启用</button>
+            <button class="btn btn-sm btn-ghost" onclick="toast('已复制 SOP 到我的员工')">复制</button>
+            <button class="btn btn-sm btn-danger" onclick="toast('删除 SOP 将不可撤销。')">删除</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pager">
+      <span>共 3 条 · 每页 10 条</span>
+      <button class="pg active">1</button>
+      <button class="pg" onclick="toast('已在第 1 页')">›</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 9. 工具 ==================== -->
+<section class="page hide" data-page="tools">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">工具</h1>
+      <p class="page-desc">管理数字员工可调用的内置工具与 MCP 服务；MCP 服务的增删改需租户管理员。</p>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="openEl('b-modal-mcp')">配置 MCP 服务</button>
+      <button class="btn btn-primary" onclick="toast('打开工具新建：名称 / 类型（MCP / A2A / HTTP）/ Method / URL')">新建工具</button>
+    </div>
+  </div>
+
+  <div class="tabs" data-tabgroup="tools">
+    <button class="tab active" onclick="setTab(this,'tools','builtin')">内置工具</button>
+    <button class="tab" onclick="setTab(this,'tools','mcp')">MCP 服务</button>
+  </div>
+
+  <!-- 内置工具 -->
+  <div data-pane="tools" data-target="builtin">
+    <div class="card">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>工具名</th>
+            <th>类型</th>
+            <th>描述</th>
+            <th>授权范围</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>knowledge_search</td>
+            <td><span class="tag">内置</span></td>
+            <td>在产品交付手册中检索答案并返回引用</td>
+            <td>员工范围</td>
+            <td><span class="badge badge-ok">已启用</span></td>
+            <td>
+              <button class="btn btn-sm" onclick="openEl('b-modal-tool-test')">测试</button>
+              <button class="btn btn-sm" onclick="toast('打开内置工具编辑：knowledge_search')">编辑</button>
+            </td>
+          </tr>
+          <tr>
+            <td>customer_lookup</td>
+            <td><span class="tag">内置</span></td>
+            <td>按客户名称查询客户基础信息与在服状态</td>
+            <td>员工范围</td>
+            <td><span class="badge badge-ok">已启用</span></td>
+            <td>
+              <button class="btn btn-sm" onclick="openEl('b-modal-tool-test')">测试</button>
+              <button class="btn btn-sm" onclick="toast('打开内置工具编辑：customer_lookup')">编辑</button>
+            </td>
+          </tr>
+          <tr>
+            <td>ticket_query</td>
+            <td><span class="tag">内置</span></td>
+            <td>查询工单列表与处理进度</td>
+            <td>员工范围</td>
+            <td><span class="badge">已停用</span></td>
+            <td>
+              <button class="btn btn-sm" onclick="openEl('b-modal-tool-test')">测试</button>
+              <button class="btn btn-sm" onclick="toast('打开内置工具编辑：ticket_query')">编辑</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pager">
+        <span>共 9 条 · 每页 10 条</span>
+        <button class="pg active">1</button>
+        <button class="pg" onclick="toast('已在第 1 页')">›</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MCP 服务 -->
+  <div data-pane="tools" data-target="mcp" class="hide">
+    <div class="card">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>服务名</th>
+            <th>传输方式</th>
+            <th>命令 / 地址</th>
+            <th>连接状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>invoice-mcp</td>
+            <td><span class="tag">stdio</span></td>
+            <td>npx -y @staffdeck/invoice-mcp</td>
+            <td><span class="badge badge-ok"><span class="badge-dot"></span>已连接</span></td>
+            <td>
+              <button class="btn btn-sm" onclick="openEl('b-modal-mcp')">编辑</button>
+              <button class="btn btn-sm" onclick="toast('发现 4 个工具：发票校验、字段提取、查重、归档')">发现工具</button>
+            </td>
+          </tr>
+          <tr>
+            <td>crm-bridge</td>
+            <td><span class="tag">SSE</span></td>
+            <td>https://mcp.example.com/crm/sse</td>
+            <td><span class="badge badge-warn"><span class="badge-dot"></span>连接中</span></td>
+            <td>
+              <button class="btn btn-sm" onclick="openEl('b-modal-mcp')">编辑</button>
+              <button class="btn btn-sm" onclick="toast('同步完成：新增 2，更新 1')">同步</button>
+            </td>
+          </tr>
+          <tr>
+            <td>ops-http-mcp</td>
+            <td><span class="tag">HTTP</span></td>
+            <td>https://ops.example.com/mcp</td>
+            <td><span class="badge badge-danger"><span class="badge-dot"></span>连接失败</span></td>
+            <td>
+              <button class="btn btn-sm" onclick="openEl('b-modal-mcp')">编辑</button>
+              <button class="btn btn-sm" onclick="toast('MCP 服务器增删改需租户管理员权限')">同步</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pager">
+        <span>共 3 条 · 每页 10 条</span>
+        <button class="pg active">1</button>
+        <button class="pg" onclick="toast('已在第 1 页')">›</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MCP 配置弹窗 -->
+  <div class="modal modal-lg" id="b-modal-mcp">
+    <div class="modal-head">
+      <h3>MCP 服务配置 · crm-bridge</h3>
+      <button class="btn btn-sm btn-icon btn-ghost" style="margin-left:auto" onclick="closeEl('b-modal-mcp')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="row2">
+        <div class="field">
+          <label class="label">服务名称<span class="req">*</span></label>
+          <input class="input" value="crm-bridge" />
+        </div>
+        <div class="field">
+          <label class="label">传输方式</label>
+          <select class="select">
+            <option>stdio</option>
+            <option selected>SSE</option>
+            <option>HTTP</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="label">命令或地址</label>
+        <input class="input" value="https://mcp.example.com/crm/sse" />
+        <span class="hint">stdio 方式填写启动命令；SSE / HTTP 方式填写服务地址。</span>
+      </div>
+      <div class="field">
+        <label class="label">启动参数</label>
+        <input class="input" placeholder="仅 stdio 方式需要，如 --token=*** " />
+      </div>
+      <div class="field">
+        <label class="label">环境变量</label>
+        <textarea class="textarea" placeholder="KEY=VALUE，每行一条">CRM_BASE_URL=https://crm.example.com
+CRM_TIMEOUT=30</textarea>
+      </div>
+      <div class="field">
+        <label class="label">鉴权头</label>
+        <input class="input" value="Authorization: Bearer ****" />
+        <span class="hint">鉴权信息仅用于服务端调用，不会在原型内真实传输。</span>
+      </div>
+      <div class="field">
+        <label class="label">连接测试结果</label>
+        <div class="card" style="box-shadow:none">
+          <div class="card-body" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;background:var(--surface-subtle);border-radius:var(--r-md)">GET  https://mcp.example.com/crm/sse
+→ 200 OK  (312ms)
+capabilities: tools/list, resources/list
+tools: 4  resources: 2</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="toast('正在测试连接…')">测试连接</button>
+      <button class="btn" onclick="closeEl('b-modal-mcp')">取消</button>
+      <button class="btn btn-primary" onclick="closeEl('b-modal-mcp');toast('MCP 服务配置已保存（需租户管理员完成生效）')">保存</button>
+    </div>
+  </div>
+
+  <!-- 工具测试弹窗 -->
+  <div class="modal" id="b-modal-tool-test">
+    <div class="modal-head">
+      <h3>工具测试 · knowledge_search</h3>
+      <button class="btn btn-sm btn-icon btn-ghost" style="margin-left:auto" onclick="closeEl('b-modal-tool-test')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="label">参数</label>
+        <input class="input" placeholder="query" value="交付验收的通过标准" />
+      </div>
+      <div class="field">
+        <label class="label">参数</label>
+        <input class="input" placeholder="top_k" value="3" />
+      </div>
+      <div class="field">
+        <label class="label">调用结果</label>
+        <div class="card" style="box-shadow:none">
+          <div class="card-body" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;background:var(--surface-subtle);border-radius:var(--r-md)">{
+  "ok": true,
+  "latency_ms": 186,
+  "results": [
+    { "source": "产品交付手册 · 第 3 章", "score": 0.91 },
+    { "source": "交付验收流程 SOP · 节点 2", "score": 0.84 },
+    { "source": "客户成功话术库 · 验收", "score": 0.72 }
+  ]
+}</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEl('b-modal-tool-test')">关闭</button>
+      <button class="btn btn-primary" onclick="toast('已重新调用工具')">重新调用</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 10. 数字员工广场（对话端） ==================== -->
+<section class="page hide" data-page="chat-gallery">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">数字员工广场</h1>
+      <p class="page-desc">选择一个在线数字员工发起对话；离线或忙碌的员工不可发起。</p>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="toast('打开「筛选会话」：按状态 / 组织 / 标签过滤')">筛选会话</button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search" style="flex:1 1 320px">
+      <i class="ic">🔍</i>
+      <input placeholder="搜索数字员工"  />
+    </div>
+    <button class="chip active" onclick="toast('分类：所有员工')">所有员工</button>
+    <button class="chip" onclick="toast('分类：我的数字员工')">我的数字员工</button>
+    <button class="chip" onclick="toast('分类：团队对话')">团队对话</button>
+    <button class="chip" onclick="toast('分类：数字员工广场')">数字员工广场</button>
+  </div>
+
+  <div class="grid g3">
+    <div class="emp-card">
+      <div class="emp-top">
+        <span class="avatar">李</span>
+        <div style="min-width:0">
+          <div class="emp-name">李瑞 <span class="badge badge-ok"><span class="badge-dot"></span>在线</span></div>
+          <div class="emp-meta">客户成功部 · 客户成功工程师</div>
+        </div>
+      </div>
+      <div class="emp-desc">专注客户健康度巡检与交付验收，能引用产品交付手册给出结构化答复。</div>
+      <div class="counts">
+        <span class="tag">客户成功</span>
+        <span class="tag">知识库 3</span>
+        <span class="tag">SOP 2</span>
+      </div>
+      <div class="emp-foot">
+        <button class="btn btn-sm btn-primary" onclick="go('chat')">发起对话</button>
+        <button class="btn btn-sm btn-ghost" onclick="toast('查看「李瑞」的资料')">查看资料</button>
+      </div>
+    </div>
+
+    <div class="emp-card">
+      <div class="emp-top">
+        <span class="avatar">客</span>
+        <div style="min-width:0">
+          <div class="emp-name">客户成功助手 <span class="badge badge-ok"><span class="badge-dot"></span>在线</span></div>
+          <div class="emp-meta">客户成功部 · 通用助手</div>
+        </div>
+      </div>
+      <div class="emp-desc">面向客户成功场景的通用数字员工，支持话术生成与工单跟进。</div>
+      <div class="counts">
+        <span class="tag">话术</span>
+        <span class="tag">工单</span>
+        <span class="tag">交付物</span>
+      </div>
+      <div class="emp-foot">
+        <button class="btn btn-sm btn-primary" onclick="go('chat')">发起对话</button>
+        <button class="btn btn-sm btn-ghost" onclick="toast('查看「客户成功助手」的资料')">查看资料</button>
+      </div>
+    </div>
+
+    <div class="emp-card">
+      <div class="emp-top">
+        <span class="avatar">交</span>
+        <div style="min-width:0">
+          <div class="emp-name">交付机器人 <span class="badge badge-warn"><span class="badge-dot"></span>忙碌</span></div>
+          <div class="emp-meta">交付中心 · 交付工程师</div>
+        </div>
+      </div>
+      <div class="emp-desc">负责交付文档排版检查与验收清单生成。</div>
+      <div class="counts">
+        <span class="tag">交付</span>
+        <span class="tag">文档检查</span>
+      </div>
+      <div class="emp-foot">
+        <button class="btn btn-sm btn-primary" disabled title="该员工忙碌中，暂不可发起">发起对话</button>
+        <button class="btn btn-sm btn-ghost" onclick="toast('查看「交付机器人」的资料')">查看资料</button>
+      </div>
+      <span class="card-sub">忙碌中，暂不可发起对话</span>
+    </div>
+
+    <div class="emp-card">
+      <div class="emp-top">
+        <span class="avatar">运</span>
+        <div style="min-width:0">
+          <div class="emp-name">运维巡检助手 <span class="badge"><span class="badge-dot"></span>离线</span></div>
+          <div class="emp-meta">基础架构部 · 运维工程师</div>
+        </div>
+      </div>
+      <div class="emp-desc">巡检告警与服务状态，生成运维日报。</div>
+      <div class="counts">
+        <span class="tag">运维</span>
+        <span class="tag">告警</span>
+      </div>
+      <div class="emp-foot">
+        <button class="btn btn-sm btn-primary" disabled title="该员工已下线，暂不可发起">发起对话</button>
+        <button class="btn btn-sm btn-ghost" onclick="toast('查看「运维巡检助手」的资料')">查看资料</button>
+      </div>
+      <span class="card-sub">已下线，暂不可发起对话</span>
+    </div>
+  </div>
+
+  <!-- 空态示例 -->
+  <div class="card" style="margin-top:14px">
+    <div class="card-head"><h3 class="card-title">空态示例</h3><span class="card-sub">无匹配员工时展示</span></div>
+    <div class="card-body">
+      <div class="empty">
+        <div class="empty-ic">◇</div>
+        <strong>暂无数字员工</strong>
+        <span>换个关键词试试，或前往「我的数字员工」创建一个。</span>
+        <div class="empty-actions">
+          <button class="btn btn-sm" onclick="toast('已清空搜索条件')">清空搜索</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 11. 会话页（重点） ==================== -->
+<section class="page hide" data-page="chat">
+  <div class="proto-note">仅管理员可配置模型；普通员工仅可改名 / 删除自己的会话（团队会话不显示改名与删除）。</div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <!-- 会话头部 -->
+    <div class="card-head">
+      <span class="avatar" style="width:32px;height:32px;flex:0 0 32px;font-size:13px">客</span>
+      <div>
+        <div style="font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px">
+          客户成功助手
+          <span class="badge badge-ok"><span class="badge-dot"></span>在线</span>
+        </div>
+        <div class="card-sub">模型：全局默认模型（gpt-4o-mini）· 会话已保存</div>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn btn-sm" onclick="toast('会话已清空（仅清空当前会话消息）')">清空</button>
+        <button class="btn btn-sm" onclick="toast('已导出当前会话为 Markdown')">导出</button>
+      </div>
+    </div>
+
+    <!-- 消息列表 -->
+    <div class="card-body" style="display:flex;flex-direction:column;gap:14px;max-height:520px;overflow-y:auto">
+      <!-- 用户消息 -->
+      <div style="align-self:flex-end;max-width:72%;background:var(--accent-soft);border-radius:var(--r-xl);padding:10px 12px">
+        <div>帮我整理一下「产品交付手册」里关于多租户部署的章节，并生成一份交付检查清单。</div>
+        <div class="card-sub" style="text-align:right;margin-top:4px">14:02 ✓✓</div>
+      </div>
+
+      <!-- 助手消息（含可折叠执行记录） -->
+      <div style="align-self:flex-start;max-width:78%;background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--r-xl);padding:10px 12px">
+        <div>好的，我先检索知识库，再按交付检查清单模板整理。</div>
+        <details style="margin-top:8px">
+          <summary class="card-sub" style="cursor:pointer">执行记录（3 步，已折叠）</summary>
+          <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;align-items:center;gap:8px"><span class="badge badge-info">1</span><span>调用工具 knowledge_search</span><span class="card-sub" style="margin-left:auto">186ms</span></div>
+            <div style="display:flex;align-items:center;gap:8px"><span class="badge badge-info">2</span><span>调用工具 customer_lookup</span><span class="card-sub" style="margin-left:auto">94ms</span></div>
+            <div style="display:flex;align-items:center;gap:8px"><span class="badge badge-info">3</span><span>生成交付检查清单.xlsx</span><span class="card-sub" style="margin-left:auto">1.2s</span></div>
+          </div>
+        </details>
+      </div>
+
+      <!-- 工具调用结果 -->
+      <div style="align-self:flex-start;max-width:78%;background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--r-xl);padding:10px 12px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><span class="ic">⚙</span><strong>工具调用 · knowledge_search</strong></div>
+        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;background:#fff;border:1px solid var(--border);border-radius:var(--r-md);padding:8px">{ "ok": true, "count": 4, "latency_ms": 186 }</div>
+      </div>
+
+      <!-- 知识引用列表 -->
+      <div style="align-self:flex-start;max-width:78%;background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--r-xl);padding:10px 12px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><span class="ic">▩</span><strong>知识引用</strong></div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px"><span class="tag">产品交付手册 · 第 3 章</span><span class="card-sub">相似度 0.91</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><span class="tag">产品交付手册 · 附录 A</span><span class="card-sub">相似度 0.86</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><span class="tag">交付验收流程 SOP</span><span class="card-sub">相似度 0.79</span></div>
+        </div>
+      </div>
+
+      <!-- 交付物下载卡片 -->
+      <div style="align-self:flex-start;max-width:78%;background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--r-xl);padding:10px 12px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="empty-ic" style="width:36px;height:36px;font-size:14px">XLS</span>
+          <div>
+            <div style="font-weight:500">交付检查清单.xlsx</div>
+            <div class="card-sub">128 KB · 生成于 14:04</div>
+          </div>
+          <button class="btn btn-sm btn-primary" style="margin-left:auto" onclick="toast('开始下载「交付检查清单.xlsx」')">下载</button>
+        </div>
+      </div>
+
+      <!-- 定时任务草稿卡 -->
+      <div style="align-self:flex-start;max-width:78%;background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:var(--r-xl);padding:10px 12px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><span class="ic">◷</span><strong style="color:var(--warn-fg)">定时任务草案</strong></div>
+        <div style="color:var(--warn-fg);font-size:13px">是否每周一 09:00 自动生成一次「客户健康度巡检周报」？</div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn btn-sm btn-primary" onclick="go('scheduled-tasks')">创建定时任务</button>
+          <button class="btn btn-sm" onclick="toast('已忽略该草案')">忽略</button>
+        </div>
+      </div>
+
+      <!-- 错误消息 -->
+      <div style="align-self:flex-start;max-width:78%;background:var(--danger-soft);border:1px solid #f3c9c3;border-radius:var(--r-xl);padding:10px 12px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span class="ic">⚠</span><strong style="color:var(--danger)">发送失败</strong></div>
+        <div style="color:var(--danger);font-size:13px">本次响应连接中断，未能确认服务端会话。请重试发送。</div>
+        <button class="btn btn-sm" style="margin-top:8px" onclick="toast('已重试发送上一条消息')">重试</button>
+      </div>
+    </div>
+
+    <!-- 输入区 -->
+    <div class="card-foot" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div class="banner banner-warn" style="margin:0">
+        <span>⚠</span>
+        <span>系统管理员尚未配置可用模型，数字员工暂不能调用模型。请联系管理员完成模型配置。</span>
+      </div>
+
+      <!-- 斜杠命令面板 -->
+      <div class="card hide" id="slashPanel" style="box-shadow:none">
+        <div class="card-body" style="padding:8px">
+          <div class="card-sub" style="padding:4px 6px">斜杠命令（候选由后端按员工绑定动态生成；以需求书 6.2 节为准）</div>
+          <div style="display:flex;flex-direction:column">
+            <button class="btn btn-ghost" style="justify-content:flex-start" onclick="toast('插入命令 /help')">/help　查看可用命令</button>
+            <button class="btn btn-ghost" style="justify-content:flex-start" onclick="toast('插入命令 /new')">/new　开启新对话</button>
+            <button class="btn btn-ghost" style="justify-content:flex-start" onclick="toast('插入命令 /clear')">/clear　清空当前会话</button>
+            <button class="btn btn-ghost" style="justify-content:flex-start" onclick="toast('插入命令 /sop（/流程）')">/sop（/流程）　指定 SOP 执行</button>
+            <button class="btn btn-ghost" style="justify-content:flex-start" onclick="toast('插入命令 /skill（/技能）')">/skill（/技能）　调用技能</button>
+            <button class="btn btn-ghost" style="justify-content:flex-start" onclick="toast('插入命令 /tool（/工具）')">/tool（/工具）　调用工具</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <button class="btn btn-icon" onclick="toast('打开附件选择：多选不限类型，单次最多 8 个、单文件 ≤12MB')">📎</button>
+        <button class="btn btn-icon" onclick="toggleSlash()">/</button>
+        <textarea class="textarea" style="flex:1;min-height:44px;max-height:200px" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+        <button class="btn" disabled title="当前无可用模型，发送已阻断">发送</button>
+        <button class="btn btn-ghost" onclick="toast('已停止本次生成')">停止</button>
+      </div>
+      <span class="hint">无内容且无就绪附件或上传中时，发送按钮置灰；当前因模型未配置处于禁用态示例。</span>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 12. 新手引导与快速开始 ==================== -->
+<section class="page hide" data-page="onboarding">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">新手引导与快速开始</h1>
+      <p class="page-desc">登录后自动挂载的引导流程；完成引导后会记录状态，不再重复弹出。</p>
+    </div>
+    <div class="actions">
+      <button class="btn btn-ghost" onclick="toast('已跳过新手引导')">跳过引导</button>
+      <button class="btn btn-primary" onclick="toast('已完成新手引导')">完成引导</button>
+    </div>
+  </div>
+
+  <div class="proto-note">管理员为 10 步（多一步模型 API Key），普通员工不显示该步，因此快速开始为 9 步。</div>
+
+  <!-- 引导 2 步 -->
+  <div class="grid g2" style="margin-bottom:14px">
+    <div class="card">
+      <div class="card-head"><h3 class="card-title">第 1 步 · 欢迎</h3><span class="card-sub">1 / 2</span></div>
+      <div class="card-body">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">欢迎使用 StaffDeck</div>
+        <p class="card-sub" style="margin:0">在这里你可以创建属于自己的数字员工，让它帮你处理客户成功、交付、运维等日常工作。本端已按普通员工权限收敛，仅展示你可操作的功能。</p>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-ghost" onclick="toast('已跳过新手引导')">跳过</button>
+        <button class="btn btn-primary" style="margin-left:auto" onclick="toast('进入第 2 步：核心概念')">下一步</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3 class="card-title">第 2 步 · 核心概念</h3><span class="card-sub">2 / 2</span></div>
+      <div class="card-body">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div><span class="tag">数字员工</span> 具备知识库、技能、SOP 与工具的可对话智能体。</div>
+          <div><span class="tag">能力</span> 知识库 / 技能 / SOP / 工具，共同决定数字员工能做什么。</div>
+          <div><span class="tag">对话端</span> 与数字员工实际对话的入口，支持斜杠命令与附件。</div>
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn btn-ghost" onclick="toast('返回第 1 步：欢迎')">上一步</button>
+        <button class="btn btn-primary" style="margin-left:auto" onclick="toast('已完成新手引导')">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 快速开始 9 步 -->
+  <div class="card">
+    <div class="card-head">
+      <h3 class="card-title">快速开始（9 步）</h3>
+      <span class="card-sub">已完 3 / 9</span>
+      <div style="margin-left:auto">
+        <button class="btn btn-sm btn-ghost" onclick="toast('已跳过快速开始引导')">跳过</button>
+      </div>
+    </div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="badge badge-ok">✓</span>
+        <div style="flex:1"><div style="font-weight:500">1. 创建你的数字员工</div><div class="card-sub">在「我的数字员工」中从空白或广场复制创建。</div></div>
+        <button class="btn btn-sm" onclick="toast('已前往「我的数字员工」')">去看看</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="badge badge-ok">✓</span>
+        <div style="flex:1"><div style="font-weight:500">2. 逛一逛开放广场</div><div class="card-sub">浏览整体员工与可复制的能力资源。</div></div>
+        <button class="btn btn-sm" onclick="toast('已前往「开放广场平台」')">去看看</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="badge badge-ok">✓</span>
+        <div style="flex:1"><div style="font-weight:500">3. 完善员工档案</div><div class="card-sub">设置岗位、工作风格与看板摘要。</div></div>
+        <button class="btn btn-sm" onclick="go('dashboard')">去看看</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="badge"><span class="badge-dot"></span></span>
+        <div style="flex:1"><div style="font-weight:500">4. 配置定时任务</div><div class="card-sub">让数字员工按计划自动执行。</div></div>
+        <button class="btn btn-sm btn-primary" onclick="go('scheduled-tasks')">去配置</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="badge"><span class="badge-dot"></span></span>
+        <div style="flex:1"><div style="font-weight:500">5. 了解记忆</div><div class="card-sub">查看与清理数字员工沉淀的长期记忆。</div></div>
+        <button class="btn btn-sm" onclick="go('memories')">去看看</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="badge"><span class="badge-dot"></span></span>
+        <div style="flex:1"><div style="font-weight:500">6. 建设知识库</div><div class="card-sub">导入文档，让答复有据可依。</div></div>
+        <button class="btn btn-sm" onclick="go('knowledge')">去导入</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="badge"><span class="badge-dot"></span></span>
+        <div style="flex:1"><div style="font-weight:500">7. 添加技能</div><div class="card-sub">导入含 SKILL.md 的技能包。</div></div>
+        <button class="btn btn-sm" onclick="go('general-skills')">去添加</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="badge"><span class="badge-dot"></span></span>
+        <div style="flex:1"><div style="font-weight:500">8. 编排 SOP</div><div class="card-sub">用对话蒸馏生成流程型技能。</div></div>
+        <button class="btn btn-sm" onclick="go('skills')">去编排</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0">
+        <span class="badge"><span class="badge-dot"></span></span>
+        <div style="flex:1"><div style="font-weight:500">9. 开始对话</div><div class="card-sub">在对话端与你的数字员工协作。</div></div>
+        <button class="btn btn-sm btn-primary" onclick="go('chat-gallery')">去对话</button>
+      </div>
+    </div>
+    <div class="card-foot">
+      <span class="card-sub">管理员会额外看到「立即添加模型 API Key」一步；普通员工不显示该步。</span>
+    </div>
+  </div>
+</section>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeAll()"></div>
+<div class="toast" id="toast"></div>
+<div class="proto-ribbon">StaffDeck 普通员工端 · 原型演示（数据为示例）</div>
+
+<script>
+  /* ===== 页面切换 ===== */
+  const TITLES = {
+    platform:['开放广场平台','管理端 / 开放广场平台'],
+    'platform-kind':['开放广场平台 · 数字员工广场','管理端 / 开放广场平台 / 数字员工广场'],
+    agents:['我的数字员工','管理端 / 我的数字员工'],
+    teams:['我的团队','管理端 / 我的团队'],
+    'team-detail':['团队详情','管理端 / 我的团队 / 数字员工开发组'],
+    channels:['渠道接入','管理端 / 渠道接入'],
+    dashboard:['员工档案','管理端 / 员工档案'],
+    'scheduled-tasks':['定时任务','管理端 / 定时任务'],
+    'scheduled-task-edit':['新建定时任务','管理端 / 定时任务 / 新建'],
+    memories:['记忆','管理端 / 记忆'],
+    feedback:['对话日志','管理端 / 对话日志'],
+    knowledge:['知识库','管理端 / 知识库'],
+    'general-skills':['技能','管理端 / 技能'],
+    skills:['SOP','管理端 / SOP'],
+    tools:['工具','管理端 / 工具'],
+    'chat-gallery':['数字员工广场','对话端 / 数字员工广场'],
+    chat:['会话 · 客户成功助手','对话端 / 会话'],
+    onboarding:['新手引导与快速开始','引导']
+  };
+
+  function go(id){
+    document.querySelectorAll('.page').forEach(p=>p.classList.toggle('hide',p.dataset.page!==id));
+    document.querySelectorAll('#nav .nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===id));
+    const t = TITLES[id]||['',''];
+    document.getElementById('crumbs').innerHTML = t[1];
+    document.title = 'StaffDeck 普通员工端 · ' + t[0];
+    document.getElementById('content').scrollTop = 0;
+    window.scrollTo(0,0);
+    closeAll();
+  }
+  document.querySelectorAll('#nav .nav-item').forEach(b=>b.addEventListener('click',()=>go(b.dataset.page)));
+
+  /* ===== 标签页 ===== */
+  function setTab(el, group, target){
+    document.querySelectorAll('[data-tabgroup="'+group+'"] .tab').forEach(t=>t.classList.remove('active'));
+    el.classList.add('active');
+    document.querySelectorAll('[data-pane="'+group+'"]').forEach(p=>p.classList.toggle('hide',p.dataset.target!==target));
+  }
+
+  /* ===== 抽屉 / 弹窗 / 遮罩 ===== */
+  function openEl(id){
+    document.getElementById('overlay').classList.add('open');
+    document.getElementById(id).classList.add('open');
+  }
+  function closeEl(id){
+    document.getElementById(id).classList.remove('open');
+    document.getElementById('overlay').classList.remove('open');
+  }
+  function closeAll(){
+    document.querySelectorAll('.drawer.open,.modal.open').forEach(e=>e.classList.remove('open'));
+    document.getElementById('overlay').classList.remove('open');
+  }
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeAll(); });
+
+  /* ===== 轻提示 ===== */
+  let toastTimer;
+  function toast(msg){
+    const t=document.getElementById('toast');
+    t.textContent=msg; t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer=setTimeout(()=>t.classList.remove('show'),2600);
+  }
+
+  /* ===== 斜杠命令面板 ===== */
+  function toggleSlash(){ document.getElementById('slashPanel').classList.toggle('hide'); }
+
+  /* 初始化 */
+  go('platform');
+</script>
+</body>
+</html>
