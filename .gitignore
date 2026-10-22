@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local runtime state (SQLite desktop mode)
+backend/*.db
+backend/*.db.*.lock
+
+# Frontend
+node_modules/
+frontend-enterprise/dist/
+
+# Docker / deployment secrets
+packaging/docker/.env
+
+# Agent/tooling scratch
+.superpowers/
+.workbuddy/

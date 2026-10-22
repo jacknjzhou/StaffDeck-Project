@@ -30,7 +30,7 @@ def upgrade() -> None:
     sa.Column('external_event_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('event_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('data_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('run_id', 'sequence', name='uq_a2a_task_event_sequence')
     )
@@ -63,10 +63,10 @@ def upgrade() -> None:
     sa.Column('last_event_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('cancel_requested', sa.Boolean(), nullable=False),
     sa.Column('recovery_attempts', sa.Integer(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('started_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('started_at', sa.DateTime(), nullable=True),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_a2a_task_runs_agent_id'), 'a2a_task_runs', ['agent_id'], unique=False)
@@ -86,7 +86,7 @@ def upgrade() -> None:
     sa.Column('session_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('event_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('payload_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_agent_events_event_type'), 'agent_events', ['event_type'], unique=False)
@@ -102,8 +102,8 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('sync_state', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'agent_id', 'knowledge_base_id', name='uq_agent_knowledge_branch')
     )
@@ -118,8 +118,8 @@ def upgrade() -> None:
     sa.Column('agent_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('role', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('model_config_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'agent_id', 'role', name='uq_agent_model_binding')
     )
@@ -137,8 +137,8 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('harness_max_actions', sa.Integer(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'name', name='uq_agent_profile_tenant_name')
     )
@@ -153,8 +153,8 @@ def upgrade() -> None:
     sa.Column('resource_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'agent_id', 'resource_type', 'resource_id', name='uq_agent_resource')
     )
@@ -175,8 +175,8 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('sync_state', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('change_summary', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'agent_id', 'skill_id', 'version', name='uq_agent_skill_branch_version')
     )
@@ -199,8 +199,8 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('sync_state', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'agent_id', 'skill_id', name='uq_agent_skill_branch')
     )
@@ -216,8 +216,8 @@ def upgrade() -> None:
     sa.Column('user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('agent_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'user_id', 'agent_id', name='uq_agent_usage_user_agent')
     )
@@ -235,7 +235,7 @@ def upgrade() -> None:
     sa.Column('resource_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('status_code', sa.Integer(), nullable=False),
     sa.Column('duration_ms', sa.Float(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_api_audit_logs_credential_id'), 'api_audit_logs', ['credential_id'], unique=False)
@@ -253,8 +253,8 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('created_by_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'name', name='uq_api_client_tenant_name')
     )
@@ -271,11 +271,11 @@ def upgrade() -> None:
     sa.Column('key_digest', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('scopes_json', sa.JSON(), nullable=True),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('last_used_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('revoked_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('expires_at', sa.DateTime(), nullable=True),
+    sa.Column('last_used_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.Column('revoked_at', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('key_prefix', name='uq_api_credential_prefix')
     )
@@ -297,9 +297,9 @@ def upgrade() -> None:
     sa.Column('status_code', sa.Integer(), nullable=False),
     sa.Column('response_json', sa.JSON(), nullable=True),
     sa.Column('resource_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('expires_at', sa.DateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('credential_id', 'method', 'path', 'idempotency_key', name='uq_api_idempotency_request')
     )
@@ -316,7 +316,7 @@ def upgrade() -> None:
     sa.Column('event_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('data_json', sa.JSON(), nullable=True),
     sa.Column('public', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('job_id', 'sequence', name='uq_api_job_event_sequence')
     )
@@ -340,12 +340,12 @@ def upgrade() -> None:
     sa.Column('retryable', sa.Boolean(), nullable=False),
     sa.Column('execution_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('execution_generation', sa.Integer(), nullable=False),
-    sa.Column('lease_expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('lease_expires_at', sa.DateTime(), nullable=True),
     sa.Column('session_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('started_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('started_at', sa.DateTime(), nullable=True),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_api_jobs_agent_id'), 'api_jobs', ['agent_id'], unique=False)
@@ -371,9 +371,9 @@ def upgrade() -> None:
     sa.Column('validation_json', sa.JSON(), nullable=True),
     sa.Column('etag', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('created_by_credential_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('published_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('published_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_api_sop_drafts_agent_id'), 'api_sop_drafts', ['agent_id'], unique=False)
@@ -390,9 +390,9 @@ def upgrade() -> None:
     sa.Column('tenant_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('code', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('used_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('expires_at', sa.DateTime(), nullable=False),
+    sa.Column('used_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'code', name='uq_channel_bind_code_tenant_code'),
     sa.UniqueConstraint('tenant_id', 'user_id', name='uq_channel_bind_code_tenant_user')
@@ -407,7 +407,7 @@ def upgrade() -> None:
     sa.Column('agent_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('is_default', sa.Boolean(), nullable=False),
     sa.Column('sort_order', sa.Integer(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('binding_id', 'agent_id', name='uq_channel_binding_agent')
     )
@@ -420,8 +420,8 @@ def upgrade() -> None:
     sa.Column('binding_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('granted_by_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('granted_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('revoked_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('granted_at', sa.DateTime(), nullable=False),
+    sa.Column('revoked_at', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('binding_id', 'user_id', name='uq_channel_binding_manager')
     )
@@ -444,10 +444,10 @@ def upgrade() -> None:
     sa.Column('provider_tenant_key', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('config_revision', sa.Integer(), server_default='0', nullable=False),
     sa.Column('connected', sa.Boolean(), nullable=False),
-    sa.Column('last_connected_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('last_connected_at', sa.DateTime(), nullable=True),
     sa.Column('created_by_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_channel_bindings_agent_id'), 'channel_bindings', ['agent_id'], unique=False)
@@ -466,9 +466,9 @@ def upgrade() -> None:
     sa.Column('external_conv_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('current_agent_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('routing_revision', sa.Integer(), server_default='0', nullable=False),
-    sa.Column('manual_pin_until', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('manual_pin_until', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('binding_id', 'external_conv_id', name='uq_channel_conv_state')
     )
@@ -485,16 +485,16 @@ def upgrade() -> None:
     sa.Column('text', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('attempts', sa.Integer(), nullable=False),
-    sa.Column('next_attempt_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('sending_since', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('next_attempt_at', sa.DateTime(), nullable=True),
+    sa.Column('sending_since', sa.DateTime(), nullable=True),
     sa.Column('delivery_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('delivery_generation', sa.Integer(), server_default='0', nullable=False),
     sa.Column('last_error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('idempotency_key', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('first_attempt_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('delivered_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('first_attempt_at', sa.DateTime(), nullable=True),
+    sa.Column('delivered_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_channel_deliveries_binding_id'), 'channel_deliveries', ['binding_id'], unique=False)
@@ -514,8 +514,8 @@ def upgrade() -> None:
     sa.Column('external_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('staffdeck_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('display_name', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'channel', 'external_account_scope', 'external_user_id', name='uq_channel_identity_scope_external')
     )
@@ -535,11 +535,11 @@ def upgrade() -> None:
     sa.Column('reaction_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('processor_run_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('processor_lease_expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('processor_lease_expires_at', sa.DateTime(), nullable=True),
     sa.Column('error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('processed_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('processed_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('binding_id', 'event_id', name='uq_channel_inbound_event_binding')
     )
@@ -575,11 +575,11 @@ def upgrade() -> None:
     sa.Column('error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('created_by_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('reviewed_by_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('reviewed_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('published_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('rolled_back_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.Column('reviewed_at', sa.DateTime(), nullable=True),
+    sa.Column('published_at', sa.DateTime(), nullable=True),
+    sa.Column('rolled_back_at', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_evolution_proposals_agent_id'), 'evolution_proposals', ['agent_id'], unique=False)
@@ -600,7 +600,7 @@ def upgrade() -> None:
     sa.Column('event_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('event_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('data_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('task_id', 'event_id', name='uq_external_business_task_event')
     )
@@ -628,15 +628,15 @@ def upgrade() -> None:
     sa.Column('status_url', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('status_config_json', sa.JSON(), nullable=True),
     sa.Column('poll_interval_seconds', sa.Float(), nullable=False),
-    sa.Column('next_poll_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('next_poll_at', sa.DateTime(), nullable=True),
     sa.Column('poll_attempts', sa.Integer(), nullable=False),
     sa.Column('lease_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('lease_expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('accepted_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('lease_expires_at', sa.DateTime(), nullable=True),
+    sa.Column('expires_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('accepted_at', sa.DateTime(), nullable=True),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'user_id', 'tool_id', 'external_task_id', name='uq_external_business_task')
     )
@@ -663,8 +663,8 @@ def upgrade() -> None:
     sa.Column('external_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('session_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('credential_id', 'external_session_id', name='uq_external_session_credential_id')
     )
@@ -688,8 +688,8 @@ def upgrade() -> None:
     sa.Column('capability_scope', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('permissions_json', sa.JSON(), nullable=True),
     sa.Column('runtime_config_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'slug', name='uq_general_skill_tenant_slug')
     )
@@ -710,9 +710,9 @@ def upgrade() -> None:
     sa.Column('checkpoint_json', sa.JSON(), nullable=True),
     sa.Column('last_run_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('state_version', sa.Integer(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('session_id', 'loop_key', name='uq_harness_agent_loop_session_key')
     )
@@ -741,10 +741,10 @@ def upgrade() -> None:
     sa.Column('result_json', sa.JSON(), nullable=True),
     sa.Column('response_cache_json', sa.JSON(), nullable=True),
     sa.Column('approval_json', sa.JSON(), nullable=True),
-    sa.Column('started_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('started_at', sa.DateTime(), nullable=False),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('run_id', 'call_id', name='uq_harness_invocation_run_call')
     )
@@ -769,15 +769,15 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('attempt_no', sa.Integer(), nullable=False),
     sa.Column('lease_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('lease_expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('lease_expires_at', sa.DateTime(), nullable=True),
     sa.Column('action_count', sa.Integer(), nullable=False),
     sa.Column('task_requirement_json', sa.JSON(), nullable=True),
     sa.Column('capability_snapshot_json', sa.JSON(), nullable=True),
     sa.Column('result_json', sa.JSON(), nullable=True),
-    sa.Column('started_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('started_at', sa.DateTime(), nullable=False),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_harness_runs_agent_loop_id'), 'harness_runs', ['agent_loop_id'], unique=False)
@@ -794,9 +794,9 @@ def upgrade() -> None:
     sa.Column('tenant_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('session_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('lease_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('lease_expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('lease_expires_at', sa.DateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'session_id', name='uq_harness_session_execution_lease')
     )
@@ -827,9 +827,9 @@ def upgrade() -> None:
     sa.Column('state_version', sa.Integer(), nullable=False),
     sa.Column('attempt_no', sa.Integer(), nullable=False),
     sa.Column('lease_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('lease_expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('lease_expires_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('session_id', 'task_id', name='uq_harness_task_frame_session_task')
     )
@@ -853,14 +853,14 @@ def upgrade() -> None:
     sa.Column('request_digest', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('lease_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('lease_expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('lease_expires_at', sa.DateTime(), nullable=False),
     sa.Column('user_message_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('response_json', sa.JSON(), nullable=True),
     sa.Column('error_json', sa.JSON(), nullable=True),
-    sa.Column('started_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('started_at', sa.DateTime(), nullable=False),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'session_id', 'client_turn_id', name='uq_harness_turn_client_receipt')
     )
@@ -887,9 +887,9 @@ def upgrade() -> None:
     sa.Column('human_reply', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('resume_payload_json', sa.JSON(), nullable=True),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('answered_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.Column('answered_at', sa.DateTime(), nullable=True),
     sa.Column('notify_message_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
@@ -912,8 +912,8 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('capability_scope', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'knowledge_base_id', 'version', name='uq_knowledge_base_version')
     )
@@ -930,8 +930,8 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('capability_scope', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'name', name='uq_knowledge_base_tenant_name')
     )
@@ -949,8 +949,8 @@ def upgrade() -> None:
     sa.Column('summary', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('token_estimate', sa.Integer(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_knowledge_buckets_bucket_key'), 'knowledge_buckets', ['bucket_key'], unique=False)
@@ -970,8 +970,8 @@ def upgrade() -> None:
     sa.Column('summary', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('source_ref', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_knowledge_chunks_bucket_id'), 'knowledge_chunks', ['bucket_id'], unique=False)
@@ -996,8 +996,8 @@ def upgrade() -> None:
     sa.Column('citations_json', sa.JSON(), nullable=True),
     sa.Column('source_refs_json', sa.JSON(), nullable=True),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'knowledge_base_version_id', 'concept_id', name='uq_knowledge_concept_version_path')
     )
@@ -1021,8 +1021,8 @@ def upgrade() -> None:
     sa.Column('payload_json', sa.JSON(), nullable=True),
     sa.Column('source_refs_json', sa.JSON(), nullable=True),
     sa.Column('reason', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_knowledge_discovery_suggestions_bucket_id'), 'knowledge_discovery_suggestions', ['bucket_id'], unique=False)
@@ -1045,8 +1045,8 @@ def upgrade() -> None:
     sa.Column('chunk_count', sa.Integer(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
     sa.Column('error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_knowledge_documents_file_type'), 'knowledge_documents', ['file_type'], unique=False)
@@ -1066,10 +1066,10 @@ def upgrade() -> None:
     sa.Column('progress', sa.Float(), nullable=False),
     sa.Column('error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('started_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('started_at', sa.DateTime(), nullable=True),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_knowledge_ingest_jobs_document_id'), 'knowledge_ingest_jobs', ['document_id'], unique=False)
@@ -1094,11 +1094,11 @@ def upgrade() -> None:
     sa.Column('apps_mode', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('negotiated_capabilities_json', sa.JSON(), nullable=True),
     sa.Column('discovered_tools_json', sa.JSON(), nullable=True),
-    sa.Column('last_synced_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('last_synced_at', sa.DateTime(), nullable=True),
     sa.Column('capability_scope', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('enabled', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'name', name='uq_mcp_server_tenant_name')
     )
@@ -1118,8 +1118,8 @@ def upgrade() -> None:
     sa.Column('content', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('importance', sa.Float(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_memories_kind'), 'memories', ['kind'], unique=False)
@@ -1140,9 +1140,9 @@ def upgrade() -> None:
     sa.Column('analysis_summary', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('analysis_confidence', sa.Float(), nullable=True),
     sa.Column('analysis_json', sa.JSON(), nullable=True),
-    sa.Column('analyzed_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('analyzed_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'message_id', 'user_id', name='uq_feedback_message_user')
     )
@@ -1160,7 +1160,7 @@ def upgrade() -> None:
     sa.Column('role', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('content', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_messages_session_id'), 'messages', ['session_id'], unique=False)
@@ -1179,8 +1179,8 @@ def upgrade() -> None:
     sa.Column('total_amount', sa.Float(), nullable=False),
     sa.Column('currency', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('order_id')
     )
     op.create_index(op.f('ix_mock_orders_product_id'), 'mock_orders', ['product_id'], unique=False)
@@ -1201,10 +1201,10 @@ def upgrade() -> None:
     sa.Column('protocol_options_json', sa.JSON(), nullable=True),
     sa.Column('legacy_unmapped_options_json', sa.JSON(), nullable=True),
     sa.Column('trust_status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('verified_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('verified_at', sa.DateTime(), nullable=True),
     sa.Column('verified_fingerprint', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('verification_attempt_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('verification_started_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('verification_started_at', sa.DateTime(), nullable=True),
     sa.Column('verification_attempt_status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('verification_attempt_error_code', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('config_revision', sa.Integer(), nullable=False),
@@ -1212,8 +1212,8 @@ def upgrade() -> None:
     sa.Column('key_revision', sa.Integer(), nullable=False),
     sa.Column('is_default', sa.Boolean(), nullable=False),
     sa.Column('enabled', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_model_configs_api_protocol'), 'model_configs', ['api_protocol'], unique=False)
@@ -1223,8 +1223,8 @@ def upgrade() -> None:
     op.create_table('persona_configs',
     sa.Column('tenant_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('system_prompt', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('tenant_id')
     )
     op.create_table('scheduled_task_runs',
@@ -1234,15 +1234,15 @@ def upgrade() -> None:
     sa.Column('agent_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('session_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('scheduled_for', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('scheduled_for', sa.DateTime(), nullable=False),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('started_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('finished_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('started_at', sa.DateTime(), nullable=True),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
     sa.Column('result_summary', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('trace_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('scheduled_task_id', 'scheduled_for', name='uq_scheduled_task_run_due_time')
     )
@@ -1271,17 +1271,17 @@ def upgrade() -> None:
     sa.Column('concurrency_policy', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('misfire_policy', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('max_runs', sa.Integer(), nullable=True),
-    sa.Column('end_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('next_run_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('last_run_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('end_at', sa.DateTime(), nullable=True),
+    sa.Column('next_run_at', sa.DateTime(), nullable=True),
+    sa.Column('last_run_at', sa.DateTime(), nullable=True),
     sa.Column('last_status', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('run_count', sa.Integer(), nullable=False),
     sa.Column('lease_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('lease_until', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('lease_until', sa.DateTime(), nullable=True),
     sa.Column('source_session_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_scheduled_tasks_agent_id'), 'scheduled_tasks', ['agent_id'], unique=False)
@@ -1323,8 +1323,8 @@ def upgrade() -> None:
     sa.Column('channel_binding_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('channel_account_key', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('team_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_sessions_agent_id'), 'sessions', ['agent_id'], unique=False)
@@ -1342,8 +1342,8 @@ def upgrade() -> None:
     sa.Column('message_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('rating', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'message_id', 'user_id', name='uq_skill_feedback_message_user')
     )
@@ -1365,8 +1365,8 @@ def upgrade() -> None:
     sa.Column('description', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('content_json', sa.JSON(), nullable=False),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'skill_id', 'version', name='uq_skill_version')
     )
@@ -1384,8 +1384,8 @@ def upgrade() -> None:
     sa.Column('description', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('content_json', sa.JSON(), nullable=False),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'skill_id', name='uq_skill_tenant_skill_id')
     )
@@ -1404,8 +1404,8 @@ def upgrade() -> None:
     sa.Column('citation_json', sa.JSON(), nullable=True),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('pinned', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_team_blackboard_entries_source_agent_id'), 'team_blackboard_entries', ['source_agent_id'], unique=False)
@@ -1419,7 +1419,7 @@ def upgrade() -> None:
     sa.Column('team_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('agent_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('role', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('team_id', 'agent_id', name='uq_team_member_agent')
     )
@@ -1437,9 +1437,9 @@ def upgrade() -> None:
     sa.Column('synthesis_session_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('final_message_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('completed_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.Column('completed_at', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tl_session_id', 'source_turn_id', name='uq_team_run_tl_session_source_turn')
     )
@@ -1462,7 +1462,7 @@ def upgrade() -> None:
     sa.Column('content', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('score', sa.Float(), nullable=True),
     sa.Column('score_rationale', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('task_id', 'agent_id', 'round', 'kind', name='uq_team_task_bid_round')
     )
@@ -1479,7 +1479,7 @@ def upgrade() -> None:
     sa.Column('actor_id', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column('event_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('payload_json', sa.JSON(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_team_task_events_actor_id'), 'team_task_events', ['actor_id'], unique=False)
@@ -1507,8 +1507,8 @@ def upgrade() -> None:
     sa.Column('report_json', sa.JSON(), nullable=True),
     sa.Column('review_json', sa.JSON(), nullable=True),
     sa.Column('version', sa.Integer(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_team_tasks_assignee_agent_id'), 'team_tasks', ['assignee_agent_id'], unique=False)
@@ -1530,8 +1530,8 @@ def upgrade() -> None:
     sa.Column('payload_json', sa.JSON(), nullable=True),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_team_wake_events_status'), 'team_wake_events', ['status'], unique=False)
@@ -1547,8 +1547,8 @@ def upgrade() -> None:
     sa.Column('owner_user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('config_json', sa.JSON(), nullable=True),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'name', name='uq_team_tenant_name')
     )
@@ -1558,8 +1558,8 @@ def upgrade() -> None:
     op.create_table('tenants',
     sa.Column('id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('tools',
@@ -1582,8 +1582,8 @@ def upgrade() -> None:
     sa.Column('capability_scope', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('capability_scope_inherited', sa.Boolean(), nullable=False),
     sa.Column('enabled', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'name', name='uq_tool_tenant_name')
     )
@@ -1612,14 +1612,14 @@ def upgrade() -> None:
     sa.Column('sandbox_network_mode', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('sandbox_allowed_domains', sa.JSON(), nullable=True),
     sa.Column('harness_storage_path', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('tenant_id')
     )
     op.create_table('user_avatars',
     sa.Column('user_id', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('data_url', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('user_id')
     )
     op.create_table('users',
@@ -1630,8 +1630,8 @@ def upgrade() -> None:
     sa.Column('role', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('source', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('password_hash', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('tenant_id', 'username', name='uq_user_tenant_username')
     )
@@ -1649,14 +1649,14 @@ def upgrade() -> None:
     sa.Column('payload_json', sa.JSON(), nullable=True),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('delivery_owner', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('lease_expires_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('lease_expires_at', sa.DateTime(), nullable=True),
     sa.Column('attempt_count', sa.Integer(), nullable=False),
-    sa.Column('next_attempt_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
+    sa.Column('next_attempt_at', sa.DateTime(), nullable=True),
     sa.Column('last_status_code', sa.Integer(), nullable=True),
     sa.Column('last_error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('delivered_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('delivered_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('endpoint_id', 'event_id', name='uq_webhook_delivery_event')
     )
@@ -1677,8 +1677,8 @@ def upgrade() -> None:
     sa.Column('secret_encrypted', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('events_json', sa.JSON(), nullable=True),
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_webhook_endpoints_client_id'), 'webhook_endpoints', ['client_id'], unique=False)
@@ -1695,9 +1695,9 @@ def upgrade() -> None:
     sa.Column('status', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('sync_cursor', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('last_error', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
-    sa.Column('last_sync_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True),
-    sa.Column('created_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
-    sa.Column('updated_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
+    sa.Column('last_sync_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('binding_id', 'open_kfid', name='uq_wechat_kf_account_binding_kfid'),
     sa.UniqueConstraint('tenant_id', 'open_kfid', name='uq_wechat_kf_account_tenant_kfid')

@@ -1,0 +1,16 @@
+# Keep the build context small and reproducible.
+.git
+.superpowers
+.workbuddy
+**/__pycache__
+**/*.pyc
+**/*.pyo
+backend/.venv
+backend/*.egg-info
+backend/*.db
+backend/*.db.*.lock
+frontend-enterprise/node_modules
+frontend-enterprise/dist
+packaging/docker/.env
+docs
+staffdeck-architecture-report
