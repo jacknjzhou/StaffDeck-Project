@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: staffdeck
+      POSTGRES_USER: staffdeck
+      POSTGRES_PASSWORD: ${STAFFDECK_PG_PASSWORD:?STAFFDECK_PG_PASSWORD must be set}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U staffdeck"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile.server
+    environment: &app_env
+      DATABASE_URL: postgresql+psycopg://staffdeck:${STAFFDECK_PG_PASSWORD}@postgres:5432/staffdeck
+      APP_SECRET: ${STAFFDECK_APP_SECRET:?STAFFDECK_APP_SECRET must be set}
+      REDIS_URL: redis://redis:6379/0
+      PROCESS_ROLE: api
+      STAFFDECK_RUN_MIGRATIONS: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5173/api/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile.server
+    environment:
+      <<: *app_env
+      PROCESS_ROLE: worker
+      STAFFDECK_RUN_MIGRATIONS: "0"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  connector:
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile.server
+    environment:
+      <<: *app_env
+      PROCESS_ROLE: connector
+      STAFFDECK_RUN_MIGRATIONS: "0"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:

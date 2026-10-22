@@ -1,0 +1,50 @@
+# ── Stage 1: build frontend dist ─────────────────────────────────────────────
+FROM node:20-slim AS frontend
+WORKDIR /build
+COPY frontend-enterprise/package.json frontend-enterprise/package-lock.json ./
+RUN npm ci
+COPY frontend-enterprise/ ./
+RUN npm run build
+
+# ── Stage 2: Python runtime ───────────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+# server_app.py is a flat-layout module next to the `app` package, and
+# static_serving resolves the frontend dist as <backend_dir>/../frontend-enterprise/dist,
+# so the working directory must be the backend root.
+WORKDIR /app/backend
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    STAFFDECK_SERVER_MODE=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+# Install uv to honour uv.lock. A plain `pip install` resolves sqlmodel/sqlalchemy
+# to the newest release, and sqlalchemy 2.1 rejects the naive timestamps produced by
+# app.db.models.utc_now() -> the seeded server dies on first boot.
+RUN pip install --no-cache-dir uv
+
+# Copy the dependency manifest + sources needed to build the project package.
+COPY backend/pyproject.toml backend/uv.lock backend/README.md* ./
+COPY backend/app ./app
+COPY backend/mock_servers ./mock_servers
+COPY backend/server_app.py ./server_app.py
+# setuptools py-modules lists these; they must exist for the project build even
+# though the server entrypoint never imports the desktop-only launchers.
+COPY backend/desktop_launcher.py backend/single_port_app.py backend/feishu_connector_worker.py ./
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/alembic ./alembic
+
+# --frozen fails loudly if uv.lock and pyproject.toml ever drift apart.
+RUN uv sync --frozen --no-dev
+
+# Frontend bundle: static_serving looks for ../frontend-enterprise/dist from backend/.
+COPY --from=frontend /build/dist ../frontend-enterprise/dist
+
+COPY packaging/docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 5173
+
+CMD ["/entrypoint.sh"]
