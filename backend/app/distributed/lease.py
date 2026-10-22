@@ -6,8 +6,6 @@ import socket
 import uuid
 from typing import Any
 
-from redis import Redis
-
 _RELEASE_LUA = (
     "if redis.call('get', KEYS[1]) == ARGV[1] then "
     "return redis.call('del', KEYS[1]) else return 0 end"
@@ -39,6 +37,17 @@ class RedisLease:
         self._client.eval(_RELEASE_LUA, 1, self._key, self._holder)
 
 
+def _build_client(url: str) -> Any:
+    """Construct the Redis client for a lease.
+
+    Kept as a module-level function so tests can monkeypatch it with a fake
+    client (for example fakeredis) without touching a real Redis server.
+    """
+    from redis import Redis
+
+    return Redis.from_url(url, decode_responses=True)
+
+
 def acquire_role_lease(role: str, ttl_seconds: int = 60) -> RedisLease | None:
     """Acquire the process-role lease; None means 'no redis configured, skip'."""
     from app.config import get_settings
@@ -46,7 +55,7 @@ def acquire_role_lease(role: str, ttl_seconds: int = 60) -> RedisLease | None:
     url = get_settings().redis_url
     if not url:
         return None
-    client = Redis.from_url(url, decode_responses=True)
+    client = _build_client(url)
     lease = RedisLease(client, f"staffdeck:lease:{role}", ttl_seconds=ttl_seconds)
     if not lease.acquire():
         raise RuntimeError(f"another {role} process holds the lease")

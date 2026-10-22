@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
@@ -40,7 +42,9 @@ from app.core.harness_recovery import (
     stop_harness_recovery_sweeper,
 )
 from app.db import engine, init_db
+from app.db.database_path import sqlite_database_path
 from app.db.seed import seed_demo_data
+from app.distributed.lease import RedisLease, acquire_role_lease
 from app.public_api import create_public_api_app
 from app.public_api.jobs import cleanup_public_api_records, recover_public_jobs
 from app.public_api.maintenance import start_public_api_maintenance, stop_public_api_maintenance
@@ -87,36 +91,64 @@ def _role_enables(capability: str) -> bool:
     )
 
 
+# 本进程持有的角色租约（PG + redis_url 部署下防同角色双进程）。
+# SQLite 桌面/单机模式靠文件锁互斥，redis_url 为空时租约获取内部直接跳过。
+_held_leases: list[RedisLease] = []
+
+
+def _release_held_leases() -> None:
+    for lease in _held_leases:
+        # 释放尽力而为：shutdown 阶段 Redis 不可达不应阻塞进程退出，
+        # 租约本身带 TTL 会自动过期。
+        with contextlib.suppress(Exception):
+            lease.release()
+    _held_leases.clear()
+
+
 @app.on_event("startup")
 def on_startup() -> None:
-    acquire_runtime_instance_lock()
+    # 实例文件锁只用于 SQLite 数据库的单机互斥；PG 部署允许多进程/多机，
+    # 由下方角色租约负责互斥。
+    if sqlite_database_path(get_settings().database_url) is not None:
+        acquire_runtime_instance_lock()
+    _held_leases.clear()
     try:
-        init_db()
-        if _role_enables("api"):
-            with Session(engine) as db:
-                seed_demo_data(db)
-            recover_codex_a2a_tasks()
-        if _role_enables("worker"):
-            start_async_jobs()
-            with Session(engine) as db:
-                recover_orphan_harness_runs(db, startup=True)
-            recover_a2a_client_tasks()
-            start_external_task_worker()
-            start_background_worker()
-            start_timeout_sweeper()
-            start_harness_recovery_sweeper()
-            # Internal durable jobs (for example feedback analysis) use the same
-            # recovery table even when the externally exposed API is disabled.
-            recover_public_jobs()
-            if settings.public_api_enabled:
-                cleanup_public_api_records()
-                enqueue_due_webhook_deliveries()
-                start_public_api_maintenance()
-        if _role_enables("connector"):
-            start_channel_services()
+        for capability in ("api", "worker", "connector"):
+            if _role_enables(capability):
+                lease = acquire_role_lease(capability)
+                if lease is not None:
+                    _held_leases.append(lease)
+        _startup_by_role()
     except Exception:
+        _release_held_leases()
         release_runtime_instance_lock()
         raise
+
+
+def _startup_by_role() -> None:
+    init_db()
+    if _role_enables("api"):
+        with Session(engine) as db:
+            seed_demo_data(db)
+        recover_codex_a2a_tasks()
+    if _role_enables("worker"):
+        start_async_jobs()
+        with Session(engine) as db:
+            recover_orphan_harness_runs(db, startup=True)
+        recover_a2a_client_tasks()
+        start_external_task_worker()
+        start_background_worker()
+        start_timeout_sweeper()
+        start_harness_recovery_sweeper()
+        # Internal durable jobs (for example feedback analysis) use the same
+        # recovery table even when the externally exposed API is disabled.
+        recover_public_jobs()
+        if settings.public_api_enabled:
+            cleanup_public_api_records()
+            enqueue_due_webhook_deliveries()
+            start_public_api_maintenance()
+    if _role_enables("connector"):
+        start_channel_services()
 
 
 @app.on_event("shutdown")
@@ -133,6 +165,7 @@ def on_shutdown() -> None:
         if _role_enables("connector"):
             stop_channel_services()
     finally:
+        _release_held_leases()
         release_runtime_instance_lock()
 
 
