@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -609,4 +610,53 @@ def _account_api_credential_read(
         last_used_at=row.last_used_at,
         created_at=row.created_at,
         revoked_at=row.revoked_at,
+    )
+
+
+@router.get("/oidc/login")
+def oidc_login():
+    """发起 OIDC 授权码流程:302 到 IdP 授权端点,state 存内存字典。"""
+    from app.security import oidc as oidc_mod
+
+    settings = oidc_mod.get_settings()
+    if not settings.oidc_enabled:
+        raise HTTPException(status_code=404, detail="OIDC disabled")
+    discovery = oidc_mod._discover(settings.oidc_issuer)
+    state = oidc_mod.new_state()
+    return RedirectResponse(oidc_mod.authorization_url(discovery, state), status_code=302)
+
+
+@router.get("/oidc/callback")
+def oidc_callback(code: str, state: str, db: Session = Depends(get_session)):
+    """OIDC 回调:换 token → userinfo → 按邮箱找/建 User → 302 前端携带 JWT。
+
+    前端 /login 复用现有 localStorage 登录态逻辑消费 token 参数。
+    """
+    from app.security import oidc as oidc_mod
+
+    settings = oidc_mod.get_settings()
+    if not settings.oidc_enabled or not oidc_mod.consume_state(state):
+        raise HTTPException(status_code=400, detail="Invalid OIDC state")
+    discovery = oidc_mod._discover(settings.oidc_issuer)
+    tokens = oidc_mod._exchange_code(discovery, code)
+    userinfo = oidc_mod._fetch_userinfo(discovery, tokens["access_token"])
+    email = (userinfo.get("email") or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="OIDC account missing email")
+    user = db.exec(select(User).where(User.username == email)).first()
+    if user is None:
+        user = User(
+            tenant_id="tenant_demo",
+            username=email,
+            display_name=(userinfo.get("name") or email).strip()[:80],
+            # 不可用占位:OIDC 账号不走密码校验(verify_password 对非法哈希恒 False)
+            password_hash="oidc",
+            source="oidc",
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    token = create_access_token(user)
+    return RedirectResponse(
+        f"{settings.frontend_base_url}/login?token={token}", status_code=302
     )

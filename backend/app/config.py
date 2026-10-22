@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     # 绑定回滚。
     channel_feishu_trace_compact_sop: bool = True
 
+    # OIDC SSO 登录(M1):httpx 手工授权码流程,成功后映射到现有 JWT 会话。
+    # state 存进程内存字典(单组 api 进程内有效);tenant 固定 tenant_demo,M2 再演进。
+    oidc_enabled: bool = False
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_uri: str = ""
+    frontend_base_url: str = "http://localhost:5173"
+
     model_config = SettingsConfigDict(
         env_file=_os.environ.get("ULTRARAG_DOTENV", ".env"),
         env_file_encoding="utf-8", extra="ignore",
