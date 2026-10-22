@@ -47,8 +47,8 @@ from app.knowledge.schema import (
     KnowledgeBaseRollbackRequest,
     KnowledgeBaseUpdateRequest,
 )
+from app.knowledge.concepts import ensure_okf_concepts_for_version
 from app.knowledge.okf import (
-    build_okf_for_document,
     export_okf_bundle,
     lint_okf_concepts,
     normalize_concept_id,
@@ -824,48 +824,7 @@ def _ensure_okf_concepts_for_version(
     knowledge_base_id: str,
     version_id: str,
 ) -> None:
-    documents = db.exec(
-        select(KnowledgeDocument).where(
-            KnowledgeDocument.tenant_id == tenant_id,
-            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
-            KnowledgeDocument.knowledge_base_version_id == version_id,
-            KnowledgeDocument.status == "ready",
-        )
-    ).all()
-    for document in documents:
-        existing = db.exec(
-            select(KnowledgeConcept.id).where(
-                KnowledgeConcept.tenant_id == tenant_id,
-                KnowledgeConcept.knowledge_base_id == knowledge_base_id,
-                KnowledgeConcept.knowledge_base_version_id == version_id,
-                KnowledgeConcept.document_id == document.id,
-            )
-        ).first()
-        if existing:
-            continue
-        metadata = document.metadata_json or {}
-        section_nodes = (
-            metadata.get("section_tree") if isinstance(metadata.get("section_tree"), list) else []
-        )
-        buckets = db.exec(
-            select(KnowledgeBucket)
-            .where(
-                KnowledgeBucket.tenant_id == tenant_id,
-                KnowledgeBucket.knowledge_base_id == knowledge_base_id,
-                KnowledgeBucket.knowledge_base_version_id == version_id,
-                KnowledgeBucket.document_id == document.id,
-            )
-            .order_by(KnowledgeBucket.created_at.asc())
-        ).all()
-        if not section_nodes and not buckets:
-            continue
-        upsert_concepts(
-            db,
-            tenant_id,
-            knowledge_base_id,
-            version_id,
-            build_okf_for_document(document, section_nodes, buckets),
-        )
+    ensure_okf_concepts_for_version(db, tenant_id, knowledge_base_id, version_id)
 
 
 def _get_concept(
