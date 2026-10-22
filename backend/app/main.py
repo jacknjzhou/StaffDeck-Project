@@ -71,29 +71,49 @@ app.add_middleware(
 )
 
 
+# 进程角色 -> 启用的能力组。/api/chat、/api/enterprise、/api/v1 路由全部进程
+# 都挂载（无状态 HTTP 处理成本低），后台线程/worker 只在 worker 角色启动。
+_ROLE_MAP = {
+    "all": {"api", "worker", "connector"},
+    "api": {"api"},
+    "worker": {"worker"},
+    "connector": {"connector"},
+}
+
+
+def _role_enables(capability: str) -> bool:
+    return capability in _ROLE_MAP.get(
+        get_settings().process_role, {"api", "worker", "connector"}
+    )
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     acquire_runtime_instance_lock()
     try:
-        start_async_jobs()
         init_db()
-        with Session(engine) as db:
-            seed_demo_data(db)
-            recover_orphan_harness_runs(db, startup=True)
-        recover_codex_a2a_tasks()
-        recover_a2a_client_tasks()
-        start_external_task_worker()
-        start_background_worker()
-        start_channel_services()
-        start_timeout_sweeper()
-        start_harness_recovery_sweeper()
-        # Internal durable jobs (for example feedback analysis) use the same
-        # recovery table even when the externally exposed API is disabled.
-        recover_public_jobs()
-        if settings.public_api_enabled:
-            cleanup_public_api_records()
-            enqueue_due_webhook_deliveries()
-            start_public_api_maintenance()
+        if _role_enables("api"):
+            with Session(engine) as db:
+                seed_demo_data(db)
+            recover_codex_a2a_tasks()
+        if _role_enables("worker"):
+            start_async_jobs()
+            with Session(engine) as db:
+                recover_orphan_harness_runs(db, startup=True)
+            recover_a2a_client_tasks()
+            start_external_task_worker()
+            start_background_worker()
+            start_timeout_sweeper()
+            start_harness_recovery_sweeper()
+            # Internal durable jobs (for example feedback analysis) use the same
+            # recovery table even when the externally exposed API is disabled.
+            recover_public_jobs()
+            if settings.public_api_enabled:
+                cleanup_public_api_records()
+                enqueue_due_webhook_deliveries()
+                start_public_api_maintenance()
+        if _role_enables("connector"):
+            start_channel_services()
     except Exception:
         release_runtime_instance_lock()
         raise
@@ -102,14 +122,16 @@ def on_startup() -> None:
 @app.on_event("shutdown")
 def on_shutdown() -> None:
     try:
-        stop_codex_a2a_tasks()
-        stop_external_task_worker()
-        stop_public_api_maintenance()
-        stop_channel_services()
-        stop_background_worker()
-        stop_timeout_sweeper()
-        stop_harness_recovery_sweeper()
-        shutdown_async_jobs()
+        if _role_enables("worker"):
+            stop_codex_a2a_tasks()
+            stop_external_task_worker()
+            stop_public_api_maintenance()
+            stop_background_worker()
+            stop_timeout_sweeper()
+            stop_harness_recovery_sweeper()
+            shutdown_async_jobs()
+        if _role_enables("connector"):
+            stop_channel_services()
     finally:
         release_runtime_instance_lock()
 
