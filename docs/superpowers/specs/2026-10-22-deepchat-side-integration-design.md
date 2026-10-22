@@ -135,7 +135,7 @@ export const digitalEmployeeSchema = z.object({
 **接入约束（M4 已交付，D4 按此实现）**：
 
 - 端点 `{host}/api/v1/mcp`，`type: 'http'`，请求头 `Authorization: Bearer <sd_live_*>`（scope `mcp:invoke`）；
-- `tools/list` 与 `tools/call` 必须携带 `params._meta.agentId`，否则服务端无法确定员工上下文，返回 JSON-RPC `-32602`；凭据若绑定单员工可省略；
+- **员工寻址走 URL**：端点有两个形态，`POST {host}/api/v1/mcp/agents/{agent_id}`（推荐）与 `POST {host}/api/v1/mcp`。前者把员工写进 URL，因为 deepchat 的 `MCPServerConfig` 只有静态 `customHeaders`，无法在每次 `tools/list` 里注入 `_meta`；后者需在每次请求携带 `params._meta.agentId`，或使用绑定单员工的凭据。两种来源同时出现时以路径为准；都没有则返回 JSON-RPC `-32602`。员工级凭据（`agent_id` 绑定的 key）已允许申请 `mcp:invoke`；
 - `initialize` 响应头带 `Mcp-Session-Id`，后续请求建议回带；服务端不做强制校验（多实例下无粘性），缺失不会报错；
 - `GET /mcp` 返回 405：不提供服务器主动推送，客户端不要依赖 SSE 长连接；
 - 工具名逐字等于 `tools[]` 里的字符串，不存在大小写/分隔符转换；`tools/list` 里出现的每个工具都保证可被 `tools/call` 派发（已由服务端 e2e 守护）；

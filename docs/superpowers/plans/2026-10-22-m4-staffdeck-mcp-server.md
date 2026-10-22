@@ -40,7 +40,8 @@
 
 - 命名空间前缀 `staffdeck:`，与 M2 下发的 `tools[]` 字符串**逐字对应**（`app/digital_employees/payload.py:_tool_names` 用同一个 `TOOL_PREFIX`）
 - `tools/call` 的 `name` 必须是 `staffdeck:{slug}`；去掉前缀后作为 `Tool.name` 精确匹配
-- 员工上下文来源：`tools/call` 的参数里带 `_meta.agentId`（MCP 规范的 `_meta` 字段），未带则退回「该 credential 绑定的 agent」（`principal.agent_id`）；两者都无则拒绝，**不猜**
+- 员工上下文来源（**按顺序解析，路径优先**）：① `POST /mcp/agents/{id}` 的路径段；② `params._meta.agentId`；③ 该 credential 绑定的 agent（`principal.agent_id`）。三者皆无则拒绝，**不猜**
+- **为什么必须有路径形态**：标准 MCP 客户端的 `tools/list` 只发 `params: {}` 或 `{"cursor": ...}`（见 `app/tools/mcp_client.py:_list_all_pages`），deepchat 的 `MCPServerConfig` 只有静态 `customHeaders`，无法按请求注入 `_meta`。没有路径形态时，这个端点对任何真实客户端都不可达——这是实现后才发现的设计缺口，已补并加了回归测试
 
 ### 知识检索工具
 
@@ -1181,13 +1182,13 @@ Expected: PASS（1 passed）
 `docs/superpowers/specs/2026-10-22-staffdeck-server-side-design.md` §6.3，在「暴露三类工具」列表后补一条实现说明：
 
 ```markdown
-**实现说明（M4 落地时确认）**：本期只交付 ①②，③（远端续跑工具）延后——deepchat 已有 `runs:stream` 直连能力（通道④），再包一层 MCP 工具属于重复路径。工具命名严格等于分发 payload 的 `tools[]` 字符串（`staffdeck:{Tool.name}`），`tools/call` 的员工上下文经 MCP 规范的 `_meta.agentId` 传递，无需额外协议字段。知识检索工具为虚拟工具 `staffdeck:knowledge_search`，仅在员工有已开启同步的知识库时出现。
+**实现说明（M4 落地时确认）**：本期只交付 ①②，③（远端续跑工具）延后——deepchat 已有 `runs:stream` 直连能力（通道④），再包一层 MCP 工具属于重复路径。工具命名严格等于分发 payload 的 `tools[]` 字符串（`staffdeck:{Tool.name}`）。员工上下文按 `POST /mcp/agents/{id}` → `params._meta.agentId` → 单员工绑定凭据的顺序解析，路径优先。知识检索工具为虚拟工具 `staffdeck:knowledge_search`，仅在员工有已开启同步的知识库时出现。
 ```
 
 `docs/superpowers/specs/2026-10-22-deepchat-side-integration-design.md` §5.2（D4 技能/工具段），补：
 
 ```markdown
-**MCP 注册方式**：StaffDeck 端点为 `{host}/api/v1/mcp`，`type: 'http'`，请求头带 `Authorization: Bearer <sd_live_*>`（scope `mcp:invoke`）。`tools/list` / `tools/call` 必须携带 `params._meta.agentId`，否则服务端无法确定员工上下文并返回 `-32602`。GET 返回 405（不提供服务器推送），客户端不要依赖 SSE 通道。
+**MCP 注册方式**：推荐注册 `{host}/api/v1/mcp/agents/{agent_id}`（员工级 URL），`type: 'http'`，请求头带 `Authorization: Bearer <sd_live_*>`（scope `mcp:invoke`）。也可以注册 `{host}/api/v1/mcp`，但那需要在每次 `tools/list` / `tools/call` 携带 `params._meta.agentId`——标准 MCP 客户端做不到，只有绑定单员工的凭据才行。GET 返回 405（不提供服务器推送），客户端不要依赖 SSE 通道。
 ```
 
 - [ ] **Step 4: 全量回归与 lint**
