@@ -37,10 +37,21 @@ cd "$COMPOSE_DIR"
 if [[ ! -f .env ]]; then
   log "creating .env from .env.example (edit it for real deployments)"
   cp .env.example .env
-  # Inject throwaway values so the stack can boot unattended.
-  sed -i.bak "s|^STAFFDECK_PG_PASSWORD=.*|STAFFDECK_PG_PASSWORD=smoke-$(date +%s)|" .env
-  sed -i.bak "s|^STAFFDECK_APP_SECRET=.*|STAFFDECK_APP_SECRET=smoke-secret-$(date +%s)|" .env
+  # Inject fixed throwaway values so the stack can boot unattended.
+  # These MUST be stable across runs: PostgreSQL only applies POSTGRES_PASSWORD
+  # when it initialises the data directory, so a fresh random password would
+  # fail authentication against an existing pgdata volume.
+  sed -i.bak "s|^STAFFDECK_PG_PASSWORD=.*|STAFFDECK_PG_PASSWORD=staffdeck-smoke|" .env
+  sed -i.bak "s|^STAFFDECK_APP_SECRET=.*|STAFFDECK_APP_SECRET=staffdeck-smoke-secret-change-me|" .env
   rm -f .env.bak
+fi
+
+# PostgreSQL only applies POSTGRES_PASSWORD when it initialises the data
+# directory. Reusing a volume from an earlier run with a different password
+# fails auth in a way that looks like a hang, so mention the reset up front.
+if docker volume inspect docker_pgdata >/dev/null 2>&1; then
+  log "note: an existing pgdata volume was found; if startup stalls on auth,"
+  log "      reset it with: (cd packaging/docker && docker compose down -v)"
 fi
 
 log "starting stack (port ${PORT})"
