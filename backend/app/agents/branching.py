@@ -31,7 +31,6 @@ from app.llm.model_config_resolver import (
     resolve_model_config_for_runtime,
 )
 
-
 DEFAULT_AGENT_ROLES = ("default", "router", "step", "response", "general_skill")
 OPEN_GALLERY_SCOPE = "open_gallery"
 AGENT_PRIVATE_SCOPE = "agent_private"
@@ -98,7 +97,7 @@ def get_overall_agent(db: Session, tenant_id: str) -> AgentProfile | None:
     return db.exec(
         select(AgentProfile).where(
             AgentProfile.tenant_id == tenant_id,
-            AgentProfile.is_overall == True,  # noqa: E712
+            AgentProfile.is_overall == True,
             AgentProfile.status != "archived",
         )
     ).first()
@@ -181,7 +180,7 @@ def mark_resource_open_gallery(
     metadata = open_gallery_metadata(
         {**(getattr(resource, "metadata_json", None) or {}), **(metadata_json or {})}
     )
-    setattr(resource, "metadata_json", metadata)
+    resource.metadata_json = metadata
 
 
 def mark_resource_private_for_agent(
@@ -194,7 +193,7 @@ def mark_resource_private_for_agent(
     metadata = agent_private_metadata(
         agent_id, {**(getattr(resource, "metadata_json", None) or {}), **(metadata_json or {})}
     )
-    setattr(resource, "metadata_json", metadata)
+    resource.metadata_json = metadata
 
 
 def ensure_open_gallery_binding(
@@ -519,6 +518,44 @@ def _tool_runtime_enabled(db: Session, row: Tool) -> bool:
         and server.tenant_id == row.tenant_id
         and server.enabled
     )
+
+
+def visible_general_skill_rows(
+    db: Session,
+    tenant_id: str,
+    agent_id: str | None = None,
+) -> list[GeneralSkill]:
+    """Published general skills the caller's agent may actually use."""
+    agent = get_agent(db, tenant_id, agent_id)
+    if agent_id and not agent:
+        return []
+    rows = db.exec(
+        select(GeneralSkill).where(
+            GeneralSkill.tenant_id == tenant_id,
+            GeneralSkill.status == "published",
+        )
+    ).all()
+    if not agent or agent.is_overall:
+        return [
+            row for row in rows if is_open_gallery_resource(db, tenant_id, "general_skill", row)
+        ]
+    bindings = db.exec(
+        select(AgentResourceBinding).where(
+            AgentResourceBinding.tenant_id == tenant_id,
+            AgentResourceBinding.agent_id == agent.id,
+            AgentResourceBinding.resource_type == "general_skill",
+            AgentResourceBinding.status == "active",
+        )
+    ).all()
+    by_id = {row.id: row for row in rows}
+    visible: list[GeneralSkill] = []
+    for binding in bindings:
+        row = by_id.get(binding.resource_id)
+        if row is not None and is_bound_resource_visible_for_agent(
+            db, tenant_id, "general_skill", row, binding
+        ):
+            visible.append(row)
+    return visible
 
 
 def ensure_agent_skill_branch(
@@ -991,8 +1028,8 @@ def model_for_agent(
     model = db.exec(
         select(ModelConfig).where(
             ModelConfig.tenant_id == tenant_id,
-            ModelConfig.is_default == True,  # noqa: E712
-            ModelConfig.enabled == True,  # noqa: E712
+            ModelConfig.is_default == True,
+            ModelConfig.enabled == True,
         )
     ).first()
     return _runtime_model(db, tenant_id, model) if model else None
