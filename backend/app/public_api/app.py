@@ -16,6 +16,7 @@ from app.public_api import (
     examples,
     gallery,
     jobs,
+    knowledge_sync,
     operations,
     resources,
     runs,
@@ -76,6 +77,10 @@ def create_public_api_app() -> FastAPI:
     app.include_router(credentials.router)
     app.include_router(gallery.router)
     app.include_router(agents.router)
+    # knowledge_sync must register before digital_employees: FastAPI matches in
+    # registration order, and the latter's /{agent_id} would swallow the nested
+    # knowledge-package routes.
+    app.include_router(knowledge_sync.router)
     app.include_router(digital_employees.router)
     app.include_router(sessions.router)
     app.include_router(runs.router)

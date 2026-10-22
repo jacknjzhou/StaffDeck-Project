@@ -17,7 +17,7 @@ from app.public_api.utils import etag_for, if_none_match_hit
 router = APIRouter(prefix="/digital-employees", tags=["digital-employees"])
 
 
-def _distribution_agents(db: Session, principal: PublicPrincipal) -> list[AgentProfile]:
+def distribution_agents(db: Session, principal: PublicPrincipal) -> list[AgentProfile]:
     """The gallery set, resolved back to ORM rows for payload building."""
     allowed = {row.id for row in visible_gallery_agents(db, principal)}
     if not allowed:
@@ -29,6 +29,10 @@ def _distribution_agents(db: Session, principal: PublicPrincipal) -> list[AgentP
         )
     ).all()
     return [row for row in rows if row.status == "active"]
+
+
+# Kept as an alias so the distribution endpoints and their tests keep working.
+_distribution_agents = distribution_agents
 
 
 @router.get("", response_model=dict)
