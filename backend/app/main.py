@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import logging
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,6 +60,8 @@ from app.version import app_version
 
 settings = get_settings()
 
+logger = logging.getLogger("staffdeck.main")
+
 app = FastAPI(
     title=settings.app_name,
     version=app_version(),
@@ -94,9 +98,52 @@ def _role_enables(capability: str) -> bool:
 # 本进程持有的角色租约（PG + redis_url 部署下防同角色双进程）。
 # SQLite 桌面/单机模式靠文件锁互斥，redis_url 为空时租约获取内部直接跳过。
 _held_leases: list[RedisLease] = []
+_lease_renew_stop = threading.Event()
+_lease_renew_thread: threading.Thread | None = None
+LEASE_RENEW_INTERVAL_SECONDS = 20.0
+
+
+def _start_lease_renewer() -> None:
+    """Keep held role leases alive.
+
+    Leases carry a short TTL so a crashed process cannot block its role forever,
+    which means a healthy long-running process must renew them. Without this the
+    lease silently expires after LEASE_TTL_SECONDS and the exclusivity guarantee
+    disappears for every process that outlives it.
+    """
+    global _lease_renew_thread
+    if not _held_leases:
+        return
+    _lease_renew_stop.clear()
+
+    def renew_loop() -> None:
+        while not _lease_renew_stop.wait(LEASE_RENEW_INTERVAL_SECONDS):
+            for lease in list(_held_leases):
+                try:
+                    if not lease.renew():
+                        logger.error(
+                            "角色租约续期失败（租约已被他人持有或已过期）：%s", lease
+                        )
+                except Exception:  # noqa: BLE001 - 续期失败不应打断进程
+                    logger.exception("角色租约续期异常")
+
+    _lease_renew_thread = threading.Thread(
+        target=renew_loop, name="staffdeck-lease-renewer", daemon=True
+    )
+    _lease_renew_thread.start()
+
+
+def _stop_lease_renewer() -> None:
+    global _lease_renew_thread
+    _lease_renew_stop.set()
+    thread = _lease_renew_thread
+    if thread is not None:
+        thread.join(timeout=5.0)
+    _lease_renew_thread = None
 
 
 def _release_held_leases() -> None:
+    _stop_lease_renewer()
     for lease in _held_leases:
         # 释放尽力而为：shutdown 阶段 Redis 不可达不应阻塞进程退出，
         # 租约本身带 TTL 会自动过期。
@@ -118,6 +165,7 @@ def on_startup() -> None:
                 lease = acquire_role_lease(capability)
                 if lease is not None:
                     _held_leases.append(lease)
+        _start_lease_renewer()
         _startup_by_role()
     except Exception:
         _release_held_leases()

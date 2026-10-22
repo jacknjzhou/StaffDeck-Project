@@ -40,6 +40,11 @@ class _FakeLease:
     def __init__(self, capability: str) -> None:
         self.capability = capability
         self.released = False
+        self.renewed = 0
+
+    def renew(self) -> bool:
+        self.renewed += 1
+        return True
 
     def release(self) -> None:
         self.released = True
@@ -143,3 +148,46 @@ def test_startup_failure_releases_leases_and_file_lock(monkeypatch):
     assert leases[0].released
     assert released == ["file"]
     assert main_mod._held_leases == []
+
+
+def test_held_leases_are_renewed_while_process_runs(monkeypatch):
+    """租约带短 TTL，进程活着就必须续期，否则互斥保护在 60s 后静默失效。
+
+    这里把续期间隔压到极短，验证 renewer 线程确实调用了 lease.renew()，
+    并在 shutdown 时停止。
+    """
+    import time as _time
+
+    main_mod = _patch_settings(
+        monkeypatch,
+        database_url="postgresql+psycopg://x",
+        redis_url="redis://example:6379/0",
+        process_role="api",
+    )
+    monkeypatch.setattr(main_mod, "LEASE_RENEW_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(main_mod, "acquire_runtime_instance_lock", lambda: None)
+    monkeypatch.setattr(main_mod, "release_runtime_instance_lock", lambda: None)
+
+    held: list[_FakeLease] = []
+
+    def fake_acquire(capability):
+        lease = _FakeLease(capability)
+        held.append(lease)
+        return lease
+
+    monkeypatch.setattr(main_mod, "acquire_role_lease", fake_acquire)
+    monkeypatch.setattr(main_mod, "_startup_by_role", lambda: None)
+
+    main_mod.on_startup()
+    try:
+        assert main_mod._lease_renew_thread is not None
+        assert main_mod._lease_renew_thread.is_alive()
+        deadline = _time.monotonic() + 3.0
+        while held[0].renewed < 2 and _time.monotonic() < deadline:
+            _time.sleep(0.02)
+        assert held[0].renewed >= 2, "held lease was never renewed"
+    finally:
+        main_mod.on_shutdown()
+
+    assert not main_mod._lease_renew_thread
+    assert held[0].released
