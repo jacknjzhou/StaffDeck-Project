@@ -23,6 +23,24 @@ def etag_for(value: Any) -> str:
     return f'"{hashlib.sha256(canonical.encode("utf-8")).hexdigest()}"'
 
 
+def if_none_match_hit(header_value: str | None, etag: str) -> bool:
+    """RFC 9110 §13.1.2 comparison for If-None-Match.
+
+    Accepts weak validators (`W/"x"`), comma separated lists, and the `*` form,
+    because HTTP caches and proxies rewrite the header in all three ways.
+    """
+    if not header_value:
+        return False
+    candidates = [item.strip() for item in header_value.split(",") if item.strip()]
+    if "*" in candidates:
+        return True
+    normalized = etag.strip()
+    for candidate in candidates:
+        if candidate.removeprefix("W/").strip() == normalized:
+            return True
+    return False
+
+
 def encode_cursor(created_at: Any, row_id: str) -> str:
     raw = json.dumps([str(created_at), row_id], separators=(",", ":"))
     return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
