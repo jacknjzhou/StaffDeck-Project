@@ -7,6 +7,7 @@
 from datetime import UTC, datetime
 from unittest.mock import patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
@@ -23,6 +24,22 @@ DISCOVERY_FULL = {
     "userinfo_endpoint": "https://idp.example.com/userinfo",
 }
 
+_TIMESTAMP_FIELDS = ("created_at", "updated_at")
+
+
+@pytest.fixture(autouse=True)
+def _restore_user_default_factories():
+    """保存并在测试结束后恢复 User 时间戳 default_factory。
+
+    pydantic v2 的 model_fields 是类属性 dict,_test_engine() 对它的改写若不
+    恢复会泄漏到同进程后续所有 import User 的测试(fix round 1 评审发现)。
+    fixture yield 即 try/finally 语义:测试体中途失败也会恢复。
+    """
+    saved = {name: User.model_fields[name].default_factory for name in _TIMESTAMP_FIELDS}
+    yield
+    for name, factory in saved.items():
+        User.model_fields[name].default_factory = factory
+
 
 def _test_engine():
     engine = create_engine(
@@ -34,7 +51,8 @@ def _test_engine():
     # 存量兼容:SQLModel 0.0.48 的 UTCDateTime 要求 tz-aware,而 models.utc_now
     # 返回 naive(全仓同类失败的一部分,本任务不修)。测试局部把 User 时间戳
     # default_factory 换成 aware 实现,使本用例可真实走通 INSERT。
-    for field_name in ("created_at", "updated_at"):
+    # 恢复由上方 autouse fixture 负责(参见 fix round 1)。
+    for field_name in _TIMESTAMP_FIELDS:
         User.model_fields[field_name].default_factory = lambda: datetime.now(UTC)
     return engine
 
