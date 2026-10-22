@@ -38,8 +38,17 @@ def _acquire_connector_process_lock() -> bool:
 
     database_path = engine.url.database
     if engine.url.get_backend_name() != "sqlite" or not database_path or database_path == ":memory:":
-        logger.error("渠道服务要求文件 SQLite 进程锁；当前数据库不支持可靠的单实例 Outbox")
-        return False
+        # Server deployments run on PostgreSQL, where a per-file flock cannot
+        # fence instances. Exclusivity is enforced instead by the Redis role
+        # lease that on_startup() acquires for the "connector" capability before
+        # _startup_by_role() runs, so reaching this point already means we own it.
+        if get_settings().redis_url:
+            return True
+        logger.warning(
+            "渠道服务在非 SQLite 数据库且未配置 REDIS_URL 时无单实例保护；"
+            "请确保仅部署一个 connector 进程"
+        )
+        return True
     lock_path = Path(database_path).resolve().with_name(f"{Path(database_path).name}.connector.lock")
     handle = lock_path.open("a+b")
     try:
@@ -108,6 +117,22 @@ def get_wecom_stream_manager():
     return _wecom_stream_manager
 
 
+def _feishu_supported() -> bool:
+    """Feishu long-connection connectors need a file-backed SQLite database.
+
+    The child process stages inbound messages with ``sqlite3.connect`` directly,
+    so PostgreSQL deployments cannot host this channel yet (M1 server mode).
+    """
+    from app.db import engine
+
+    database = engine.url.database
+    return (
+        engine.url.get_backend_name() == "sqlite"
+        and bool(database)
+        and database != ":memory:"
+    )
+
+
 def get_feishu_process_manager():
     global _feishu_process_manager
     if _feishu_process_manager is None:
@@ -115,6 +140,20 @@ def get_feishu_process_manager():
 
         _feishu_process_manager = FeishuProcessManager()
     return _feishu_process_manager
+
+
+def _optional_feishu_manager():
+    """Feishu manager when the backing database can host it, else None.
+
+    Binding lifecycle helpers (pause/resume/wait) must stay safe to call on
+    PostgreSQL deployments, where the Feishu channel is unavailable.
+    """
+    if not _feishu_supported():
+        return None
+    try:
+        return get_feishu_process_manager()
+    except RuntimeError:
+        return None
 
 
 def get_dingtalk_stream_manager():
@@ -165,7 +204,7 @@ def _ingress_manager(channel: str):
     if channel == "wecom":
         return get_wecom_stream_manager()
     if channel == "feishu":
-        return get_feishu_process_manager()
+        return _optional_feishu_manager()
     if channel == "dingtalk":
         return get_dingtalk_stream_manager()
     return None
@@ -211,7 +250,10 @@ def wait_binding_ingress_stopped(channel: str, binding_id: str, timeout_seconds:
     if channel == "wecom":
         return get_wecom_stream_manager().wait_binding_stopped(binding_id, timeout_seconds)
     if channel == "feishu":
-        return get_feishu_process_manager().wait_binding_stopped(binding_id, timeout_seconds)
+        manager = _optional_feishu_manager()
+        if manager is None:
+            return True
+        return manager.wait_binding_stopped(binding_id, timeout_seconds)
     if channel == "dingtalk":
         return get_dingtalk_stream_manager().wait_binding_stopped(binding_id, timeout_seconds)
     return True
@@ -242,7 +284,16 @@ def start_channel_services() -> None:
 
         get_wechat_poll_manager().start()
         get_wecom_stream_manager().start()
-        get_feishu_process_manager().start()
+        if _feishu_supported():
+            get_feishu_process_manager().start()
+        else:
+            # The Feishu long-connection connector speaks sqlite3 directly from its
+            # child process, so it cannot run against PostgreSQL yet. Skip it rather
+            # than failing the whole connector role (other channels stay available).
+            logger.warning(
+                "飞书长连接 connector 需要文件 SQLite；当前数据库不支持，已跳过飞书渠道。"
+                "其他渠道照常运行。"
+            )
         get_dingtalk_stream_manager().start()
         start_delivery_daemon()
         start_staged_inbound_daemon()

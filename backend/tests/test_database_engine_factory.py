@@ -1,4 +1,3 @@
-import pytest
 from sqlalchemy import Engine
 
 from app.db.database import build_engine
