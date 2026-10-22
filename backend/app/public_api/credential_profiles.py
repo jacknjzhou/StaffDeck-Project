@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-
 AgentCredentialAccess = Literal["runtime", "full_access"]
 
 AGENT_RUNTIME_SCOPES = frozenset(
@@ -16,6 +15,10 @@ AGENT_RUNTIME_SCOPES = frozenset(
         "sessions:write",
         "artifacts:read",
         "traces:read",
+        # An employee-scoped key is how deepchat connects to the MCP endpoint for
+        # one employee; without this the MCP server is unreachable for the very
+        # keys the per-employee runtime issues.
+        "mcp:invoke",
     }
 )
 

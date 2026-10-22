@@ -258,3 +258,89 @@ def test_every_call_is_audited(monkeypatch):
         rows = db.exec(select(APIAuditLog).where(APIAuditLog.path == "/mcp")).all()
     assert rows
     assert any(row.resource_id == FINANCE_AGENT for row in rows)
+
+
+# --- employee-addressed endpoint -------------------------------------------------
+# A standard MCP client (deepchat included) cannot inject _meta into tools/list:
+# its config carries static customHeaders only. The path form is what makes this
+# endpoint usable by a real MCP client, so it must stay covered.
+
+
+def test_agent_path_scopes_tools_list_without_any_meta(monkeypatch):
+    client, _engine, token = _client(monkeypatch)
+    key = _key(client, token, ["mcp:invoke"])
+    response = client.post(
+        f"/mcp/agents/{FINANCE_AGENT}",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert response.status_code == 200, response.text
+    names = [tool["name"] for tool in response.json()["result"]["tools"]]
+    assert names and all(name.startswith("staffdeck:") for name in names)
+
+
+def test_agent_path_scopes_tools_call_without_any_meta(monkeypatch):
+    client, _engine, token = _client(monkeypatch)
+    key = _key(client, token, ["mcp:invoke"])
+    response = client.post(
+        f"/mcp/agents/{FINANCE_AGENT}",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "staffdeck:expense.quota_query", "arguments": {}},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["result"]["content"][0]["type"] == "text"
+
+
+def test_agent_path_wins_over_a_conflicting_meta(monkeypatch):
+    client, _engine, token = _client(monkeypatch)
+    key = _key(client, token, ["mcp:invoke"])
+    response = client.post(
+        f"/mcp/agents/{FINANCE_AGENT}",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "staffdeck:expense.quota_query",
+                "arguments": {},
+                "_meta": {"agentId": "agent_preset_sales_001"},
+            },
+        },
+    )
+    # The path is authoritative; the sales employee has no tools at all, so a
+    # meta-driven dispatch would have failed with TOOL_NOT_FOUND here.
+    assert response.json()["result"]["isError"] is False
+
+
+def test_agent_path_rejects_an_employee_outside_the_credential_scope(monkeypatch):
+    client, _engine, token = _client(monkeypatch)
+    admin = {"Authorization": f"Bearer {token}"}
+    client_id = client.post(
+        "/api-clients", headers=admin, json={"name": "dc-bound", "scopes": ["mcp:invoke"]}
+    ).json()["id"]
+    key = client.post(
+        f"/api-clients/{client_id}/credentials",
+        headers=admin,
+        json={"name": "bound", "scopes": ["mcp:invoke"], "agent_id": FINANCE_AGENT},
+    ).json()["api_key"]
+
+    allowed = client.post(
+        f"/mcp/agents/{FINANCE_AGENT}",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert allowed.status_code == 200
+
+    # A key bound to finance must not reach another employee through the path.
+    denied = client.post(
+        "/mcp/agents/agent_preset_sales_001",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert denied.status_code == 403
