@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "staffdeck://tests/fixtures/deepchat/digital-employee.schema.json",
   "title": "deepchat digitalEmployeeSchema",
-  "$comment": "Transcribed from jacknjzhou/deepchat-project@202610211551 src/shared/contracts/routes/digitalEmployee.routes.ts. zod strings use min/max on UTF-16 length; arrays use .max(n). Objects are non-strict, so extra properties are allowed.",
+  "$comment": "Transcribed from jacknjzhou/deepchat-project branch feature/staffdeck-d1 src/shared/contracts/routes/digitalEmployee.routes.ts (base 202610211551 plus the StaffDeck superset extension). zod strings use min/max on UTF-16 length; arrays use .max(n). Objects are non-strict, so extra properties are allowed. Verified against the real zod schema by parsing a live /digital-employees response: 10 employees, zero violations, zero dropped keys.",
   "type": "object",
   "required": [
     "id",
@@ -18,7 +18,8 @@
     "skillIds",
     "tools",
     "enabled",
-    "updatedAt"
+    "updatedAt",
+    "executionMode"
   ],
   "additionalProperties": true,
   "properties": {
@@ -63,6 +64,23 @@
       "items": { "type": "string", "minLength": 1 }
     },
     "enabled": { "type": "boolean" },
-    "updatedAt": { "type": "string", "minLength": 1 }
+    "updatedAt": { "type": "string", "minLength": 1 },
+    "executionMode": { "type": "string", "enum": ["local", "remote", "hybrid"] },
+    "configHash": { "type": "string", "maxLength": 128 },
+    "skills": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "downloadUrl"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "downloadUrl": { "type": "string", "minLength": 1, "maxLength": 512 }
+        }
+      }
+    },
+    "knowledgePackagesUrl": { "type": "string", "maxLength": 512 }
   }
 }
