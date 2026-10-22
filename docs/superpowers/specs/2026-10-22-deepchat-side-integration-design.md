@@ -119,11 +119,12 @@ export const digitalEmployeeSchema = z.object({
 ### 5.4 知识同步任务
 
 - 新增后台同步器（主进程，worker 化）：
-  1. `GET /digital-employees/{id}/knowledge-packages` 取清单（kb_version + 文档 hash 列表）；
-  2. 与本地索引对比 hash，差异文档经 `:export-manifest` / `:download` 拉取；
+  1. `GET /digital-employees/{id}/knowledge-packages` 取清单（每包 `configHash` + 每个 concept 的 `hash` / `size`）；
+  2. 与本地索引对比 hash，差异概念经 `{kb_id}/concepts/{concept_id}:download` 拉取；
   3. 重建本地知识库副本索引（复用现有 knowledgeClient / 本地向量检索）；
 - 一致性规则：版本不齐（412/409）→ 全量重拉；同步失败 → 沿用旧副本 + `stale` 标记（对话 UI 可提示「知识可能过期」）；后台定时重试；
 - 同步粒度按员工（只同步其 `knowledgeBaseIds`），不全量镜像租户知识。
+- **实现对齐（2026-10-22）**：知识包以 OKF bundle（zip）传输，内含 `index.md` + `log.md` + 每概念一个 `{concept_id}.md`；清单里每个 concept 带 `hash`（`sha256` 前 16 位）与 `size`（UTF-8 字节数），本地据此跳过未变概念。同步开关是 `KnowledgeBaseVersion.metadata_json.deepchat_sync_enabled === true`，未开启的库在清单里根本不出现。服务端已无 `:export-manifest` 端点——清单接口本身即 manifest。
 
 ### 5.5 MCP 白名单接入远端工具
 

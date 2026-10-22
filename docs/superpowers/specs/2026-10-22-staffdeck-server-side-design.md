@@ -113,10 +113,14 @@ GET /digital-employees/{id}:export-skill    → GeneralSkill 导出为 SKILL.md 
 ### 6.2 通道②：知识同步
 
 ```
-GET /digital-employees/{id}/knowledge-packages          → 增量清单（kb_version + 文档 hash 列表）
-GET /knowledge-bases/{kb_id}:export-manifest
-GET /knowledge-bases/{kb_id}/documents/{doc_id}:download
+GET /digital-employees/{id}/knowledge-packages                       → 增量清单（含每个 concept 的 hash）
+GET /digital-employees/{id}/knowledge-packages/{kb_id}:export-bundle  → OKF bundle（zip：index.md + log.md + concepts）
+GET /digital-employees/{id}/knowledge-packages/{kb_id}/concepts/{concept_id}:download → 单个 concept 的 markdown
 ```
+
+- **勘误（2026-10-22 核对源码）**：原设计写的是 `documents/{doc_id}:download`，但 `KnowledgeDocument` 表**不存原始文件正文**（上传件解析后即丢弃，只留 `filename`/`file_type`/`metadata.section_tree`/`chunk_stats`）。正文的最小可寻址单元是 `KnowledgeConcept.content_md`，故端点改为按 concept 下载。传输格式沿用既有的 OKF（`app/knowledge/okf.py:export_okf_bundle`），不新建格式。
+- 同步开关是 `KnowledgeBaseVersion.metadata_json.deepchat_sync_enabled === true`；未开启的库在清单里根本不出现（不泄露「存在但未授权导出」）。
+- 概念 id 形如 `sources/<文档名>/sections/sec-1`，含斜杠与中文，作 URL 路径参数时必须 encode；服务端用 path 转换器原样捕获。
 
 - 同步协议：清单 hash 对比 → 拉取变更文档/条目 → deepchat 本地重建索引；版本不齐全量重拉；失败用旧副本并标 stale（deepchat 侧行为）。
 - 导出仅覆盖**已授权且开启同步开关**的知识库；导出行为写 AuditLog。
