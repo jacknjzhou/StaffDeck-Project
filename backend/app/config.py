@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     channel_delivery_poll_seconds: float = 1.0
     channel_delivery_max_attempts: int = 8
     public_api_enabled: bool = True
+    redis_url: str = ""
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
     public_api_key_pepper: str = ""
     public_api_idempotency_ttl_seconds: int = 60 * 60 * 24
     public_api_retention_days: int = 30
