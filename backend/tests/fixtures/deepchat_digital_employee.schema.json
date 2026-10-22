@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "staffdeck://tests/fixtures/deepchat/digital-employee.schema.json",
+  "title": "deepchat digitalEmployeeSchema",
+  "$comment": "Transcribed from jacknjzhou/deepchat-project@202610211551 src/shared/contracts/routes/digitalEmployee.routes.ts. zod strings use min/max on UTF-16 length; arrays use .max(n). Objects are non-strict, so extra properties are allowed.",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "role",
+    "description",
+    "avatar",
+    "capabilities",
+    "greeting",
+    "systemPrompt",
+    "sops",
+    "knowledgeBaseIds",
+    "skillIds",
+    "tools",
+    "enabled",
+    "updatedAt"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 50 },
+    "role": { "type": "string", "minLength": 1, "maxLength": 50 },
+    "description": { "type": "string", "maxLength": 500 },
+    "avatar": { "type": ["string", "null"], "maxLength": 256 },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "string", "minLength": 1, "maxLength": 30 }
+    },
+    "greeting": { "type": ["string", "null"], "maxLength": 500 },
+    "systemPrompt": { "type": "string", "minLength": 1, "maxLength": 10000 },
+    "sops": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["title", "content"],
+        "additionalProperties": true,
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "content": { "type": "string", "minLength": 1, "maxLength": 20000 }
+        }
+      }
+    },
+    "knowledgeBaseIds": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "skillIds": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "tools": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "enabled": { "type": "boolean" },
+    "updatedAt": { "type": "string", "minLength": 1 }
+  }
+}
