@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import io
+import zipfile
+
 from deepchat_contract import validate_digital_employee
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.db import get_session
-from app.db.models import User
+from app.db.models import APIAuditLog, User
 from app.db.seed import seed_demo_data
 from app.public_api.app import create_public_api_app
 from app.security.auth import create_access_token
@@ -167,3 +170,78 @@ def test_openapi_documents_the_distribution_endpoints(monkeypatch):
     paths = client.get("/openapi.json").json()["paths"]
     assert "/digital-employees" in paths
     assert "/digital-employees/{agent_id}" in paths
+
+
+def _first_employee_with_skills(client: TestClient, auth: dict) -> dict:
+    employees = client.get("/digital-employees", headers=auth).json()["employees"]
+    return next(item for item in employees if item["skills"])
+
+
+def test_export_skill_returns_importable_zip(monkeypatch):
+    client, _engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    target = _first_employee_with_skills(client, auth)
+    skill = target["skills"][0]
+
+    exported = client.get(
+        f"/digital-employees/{target['id']}:export-skill",
+        params={"slug": skill["slug"]},
+        headers=auth,
+    )
+    assert exported.status_code == 200, exported.text
+    assert exported.headers["content-type"] == "application/zip"
+    assert skill["slug"] in exported.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+        assert "SKILL.md" in archive.namelist()
+
+
+def test_export_skill_rejects_an_unrelated_employee(monkeypatch):
+    client, _engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    response = client.get(
+        "/digital-employees/agent_missing:export-skill",
+        params={"slug": "whatever"},
+        headers=auth,
+    )
+    assert response.status_code == 404
+    assert response.json()["code"] == "AGENT_NOT_FOUND"
+
+
+def test_export_skill_for_an_undistributed_skill_is_404(monkeypatch):
+    client, _engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    target = _first_employee_with_skills(client, auth)
+    response = client.get(
+        f"/digital-employees/{target['id']}:export-skill",
+        params={"slug": "not-a-real-skill"},
+        headers=auth,
+    )
+    assert response.status_code == 404
+    assert response.json()["code"] == "SKILL_NOT_FOUND"
+
+
+def test_export_skill_is_audited(monkeypatch):
+    client, engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    target = _first_employee_with_skills(client, auth)
+    slug = target["skills"][0]["slug"]
+    client.get(
+        f"/digital-employees/{target['id']}:export-skill",
+        params={"slug": slug},
+        headers=auth,
+    )
+    # 审计中间件在响应返回后才写，用一个必然成功的请求刷新一次
+    client.get("/digital-employees", headers=auth)
+    with Session(engine) as db:
+        row = db.exec(
+            select(APIAuditLog)
+            .where(APIAuditLog.resource_type == "general_skill")
+            .order_by(APIAuditLog.created_at.desc())
+        ).first()
+    assert row is not None
+    assert row.resource_id
+    assert ":export-skill" in row.path
