@@ -136,6 +136,8 @@ GET /digital-employees/{id}/knowledge-packages/{kb_id}/concepts/{concept_id}:dow
 - 命名空间 `staffdeck:{tool_slug}`，与员工 `tools[]` 白名单一一对应；deepchat 会话级白名单机制不变。
 - 公共（无凭证）MCPServer 配置仍随分发 payload 下发连接信息，由 deepchat 本地直连。
 
+**实现说明（M4 落地时确认）**：本期只交付 ①②，③（远端续跑工具）**不做**——deepchat 已有 `runs:stream` 直连能力（通道④），再包一层 MCP 工具属于重复路径。工具名严格等于分发 payload 的 `tools[]` 字符串（`staffdeck:{Tool.name}`），`tools/call` 的员工上下文经 MCP 规范的 `_meta.agentId` 传递，不引入额外协议字段。知识检索为虚拟工具 `staffdeck:knowledge_search`，**仅在员工有已开启同步的知识库时才出现**。GET 返回 405（不提供服务器推送），只支持 POST 的请求/响应模式。
+
 ### 6.4 通道④：远端执行（复用现有 API，零新增）
 
 - `executionMode=remote|hybrid` 的员工：deepchat 调 `POST /agents/{id}/sessions` + `POST /agents/{id}/runs:stream`（SSE），SOP 状态由 `awaiting_input` 语义驱动，同 session_id 续跑。
