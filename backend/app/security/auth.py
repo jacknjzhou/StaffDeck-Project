@@ -62,15 +62,16 @@ def get_current_user(
     return user
 
 
-def ensure_current_user_tenant(tenant_id: str, current_user: User) -> None:
+def ensure_current_user_tenant(tenant_id: str | None, current_user: User) -> None:
     if not isinstance(current_user, User):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if tenant_id != current_user.tenant_id:
+    # tenant_id 未传(None)时以 JWT 中的用户身份为准;显式传入且不匹配才拒绝
+    if tenant_id is not None and tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
 
 
 def require_current_tenant(
-    tenant_id: str = Query(...),
+    tenant_id: str | None = Query(None),
     current_user: User = Depends(get_current_user),
 ) -> User:
     ensure_current_user_tenant(tenant_id, current_user)
