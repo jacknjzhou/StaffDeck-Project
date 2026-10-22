@@ -108,6 +108,8 @@ GET /digital-employees/{id}:export-skill    → GeneralSkill 导出为 SKILL.md 
 
 - 增量拉取：`ETag` / `If-None-Match`（复用现有 ETag 机制）。
 
+- **契约勘误（2026-10-22 核对 fork `202610211551` 源码）**：`digitalEmployeeSchema` 实际为 `skillIds.max(20)`、`tools.max(50)`（本文早前记作 10/20）。分发实现以源码为准，`backend/tests/fixtures/deepchat_digital_employee.schema.json` 为唯一参照物。另注：zod 的 `.max()` 按 UTF-16 code unit 计长（emoji 占 2），故实现侧用 `zod_len` / `clamp_text` 裁剪而非 `len()`。
+
 ### 6.2 通道②：知识同步
 
 ```

@@ -91,6 +91,8 @@ export const digitalEmployeeSchema = z.object({
 现状：`src/main/digital-employee/provider.ts` 已有 `DigitalEmployeeProvider` 接口与 mock 实现，HTTP 骨架预留。
 
 改造：
+- **路径对齐**：现有骨架 `HttpDigitalEmployeeProvider.list()` 请求 `${baseUrl}/employees`；StaffDeck 分发端点是 `GET {staffdeck}/api/v1/digital-employees`。D2 落地时把 `STAFFDECK_BASE_URL` 约定为 `{host}/api/v1`，provider 改请求 `${baseUrl}/digital-employees`，响应 `{employees[], configVersion, fetchedAt}` 与 `digitalEmployeeListRoute.output` 完全一致。
+- 条件请求：列表与单员工端点均返回 `ETag`，服务端按 RFC 9110 §13.1.2 做弱校验器与多值列表匹配；`If-None-Match` 命中返回 `304`（带 `ETag`、无 body）。provider 首次拉取存 `configVersion`，之后带 `If-None-Match` 请求，`304` 时直接复用本地缓存。
 - `providerFactory.ts` 按运行配置选择 mock / http 实现（配置缺失时保持 mock，供离线与开发）；
 - `HttpDigitalEmployeeProvider`：读取 `STAFFDECK_BASE_URL`、`STAFFDECK_API_KEY`、`STAFFDECK_EXTERNAL_USER_ID`（构建时注入，对齐 `docs/managed` 构建期端点注入惯例）；
 - 拉取策略：进入广场/启动时拉取，命中 ETag 缓存则不重新解析；`configHash` 变化的员工标记「配置已更新」；

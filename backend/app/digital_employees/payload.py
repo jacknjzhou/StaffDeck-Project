@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session
 
@@ -33,7 +33,11 @@ from app.digital_employees.contract import (
     zod_len,
 )
 from app.digital_employees.sop_text import select_sop_documents
-from app.public_api.auth import PublicPrincipal
+
+if TYPE_CHECKING:
+    # Imported for typing only: app.public_api.__init__ eagerly imports the
+    # whole Open API app, so a runtime import here would close an import cycle.
+    from app.public_api.auth import PublicPrincipal
 
 MODES = {"local", "remote", "hybrid"}
 DEFAULT_MODE = "local"
