@@ -66,6 +66,23 @@
 - 技能安装只在显式准备时发生。管理员改完技能后，用户要重开一次对话才会拉到新版本（版本判据是 `skills[].id`，会正确识别为已变更）。
 - 本机 `test_harness_v2.py` 有 3 个既有的 Windows 长路径失败（`WinError 206`），与本次改动无关。
 
+## 全量回归结果（deepchat，本机 Windows）
+
+`vitest run` 全量：**916 文件 / 11578 用例通过**，52 文件 / 121 用例失败。
+
+失败集中在 **POSIX 路径语义在 Windows 上不成立** 一类：`cli/launcherService`（期望 `/home/tester/...`，实际得到反斜杠）、`skill/settings`、`skill/skillExecutionService`（`/package/scripts/run.py` vs `\\package\\scripts\\run.py`）、`documentsTableMigration`、`cuaEmbeddedAdapter`（`/tmp/deepchat-cua-*.sock` 不满足 POSIX socket 命名）、`lightOcrProcessHost`、`memoryVectorStore` 等。与本轮改动**文件零交集**（D4 只碰 `digital-employee/`、`contracts/`、`composition.ts` 与对应测试）。
+
+按模块核对：
+
+| 范围 | 结果 |
+|---|---|
+| `test/main/digital-employee` | 19 文件 / 213 用例全部通过 |
+| `test/main/contracts` | 全部通过 |
+| `test/renderer/stores/digitalEmployeeStore` + `pages/digitalEmployee` | 全部通过 |
+| StaffDeck D4 相关 7 个测试文件 | 53 passed |
+
+另注：本机全量跑不动一次性过——默认堆 OOM，`--max-old-space-size=8192` + `maxForks=2` 仍 OOM，最终以 6GB 堆 + 2 fork 跑满 19 分钟完成。这是机器规模限制，不是测试缺陷。
+
 ## 下一步
 
 D5 对话回流（`POST /external-sessions` + `events:batch`），然后是 StaffDeck M6 观测整合。
