@@ -183,6 +183,22 @@ export const digitalEmployeeSchema = z.object({
 - 可靠性：本地 SQLite 队列暂存，指数退避重试；服务端 24h 幂等窗口，409 冲突视为已上报跳过；
 - 隐私：上报内容与远端执行同一审计口径；用户可在设置中关闭回流（关闭时管理端无该会话记录，UI 明示）。
 
+> **实现修订（2026-10-23，D5 交付后据实记录）**：上面两条端点都改了，原因分别是「重复」和「会丢数据」。
+>
+> **建会话不需要新端点。** 原文的 `POST /external-sessions` 与既有 `POST /agents/{agent_id}/sessions` 功能重叠——后者本来就接受 `external_session_id`，并按 `(credential_id, external_session_id)` 幂等 upsert（`sessions.py` 的 `create_public_session_row`），`StaffdeckRemoteClient.createSession` 一直在走它。再开一个就是同一规则两处实现，一旦漂移，同一对话会在服务端产生两行、消息各写一半。**故只保留事件追加端点**，路径放进既有命名空间：`POST /agents/{agent_id}/sessions/{session_id}/events:batch`。
+>
+> **幂等必须按单事件，不能按整批。** 客户端重试必然重发整批。整批幂等的话，只要重发时夹带一条已存事件，整批就被 409 拒掉，随行的新事件全部丢失。服务端改为按 `event_id` 逐条去重（存于 `Message.metadata_json["external_event_id"]`），响应 `{accepted, duplicates}`；`accepted: 0` 是「重试生效」，不是错误。
+>
+> **鉴权三层，第三层不可省。** agent 属本租户 → session 属该 agent 且同租户 → **该凭证在绑定表里拥有这个 session**。只校验租户的话，任何同租户 key 都能往它叫得出名字的会话里写，等于把只读权限升级成写权限。
+>
+> **远端员工不上报。** `executionMode=remote` 的对话本来就在服务端，再报一次会让管理端看到每条消息两份。
+>
+> **开关缺省视为开启。** 读 `!== false` 而非 `=== true`：误关会留审计盲区，误开只是多归档一条用户本来就期望归档的对话。
+>
+> **失败即停，不跳过。** 跳过失败块会在归档里留一个洞，而调用方分不清「已发过」和「丢了」，那一段就永远补不回来。
+>
+> 服务端实现 `backend/app/public_api/external_sessions.py`，客户端 `src/main/digital-employee/backflow.ts` + `backflowRoutes.ts`。
+
 ### 5.7 部署与配置注入
 
 - 构建时/运行时配置：`STAFFDECK_BASE_URL`、`STAFFDECK_API_KEY`、`STAFFDECK_EXTERNAL_USER_ID`（端上用户唯一标识生成规则：首启生成 UUID 并持久化）、`STAFFDECK_SYNC_INTERVAL`（知识同步间隔）；
