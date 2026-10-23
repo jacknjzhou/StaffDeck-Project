@@ -116,6 +116,18 @@ export const digitalEmployeeSchema = z.object({
 - 走现有 Skills 管理的导入能力装进 `digital-employee:<id>` agentId 隔离目录；主进程在会话创建时按 `skillIds` 解析注册，不引入「技能安装」确认流程（企业分发场景默认信任）；
 - 仓库根 `skills/staffdeck-api-*` 4 个 OpenAPI 调用技能包可作为可选内置项安装（使本地 Agent 具备直接调用 StaffDeck OpenAPI 的能力）。
 
+> **实现修订（2026-10-23，D4 交付后据实记录）**：上面两条里的 `digital-employee:<id>` 与 `skillIds` **都不能照字面实现**，实测各自会静默失效。
+>
+> **agentId 不能带冒号，也没有「每员工一个 agent」。** 数字员工的全部对话都跑在内置 agent `deepchat` 下（`DIGITAL_EMPLOYEE_AGENT_ID = 'deepchat'`），不存在可以按员工分配的 agent 目录。而且 `assertSafeSkillAgentId`（`main/skill/agentSkillRoots.ts`）只接受 `^[A-Za-z0-9][A-Za-z0-9._-]*$`，冒号直接拒绝；Windows 目录名同样不允许冒号。**技能隔离靠名字前缀**：安装时用 `targetName = de-{employeeId}-{slug}`（`main/digital-employee/employeeScope.ts`），装进内置 agent 的技能根。
+>
+> **`downloadUrl` 不可用，必须用客户端 baseUrl 重拼。** 该字段由服务端 `get_settings().normalized_tool_base_url` 拼出（默认 `http://localhost:5173`），与客户端实际访问地址无关——D3 的 `bundleUrl` 同病。实际请求 `{clientBaseUrl}/digital-employees/{employeeId}:export-skill?slug={slug}`，slug 是 **query 参数**。
+>
+> **`skills[].slug` 必须在契约里显式声明。** zod 会剥掉未声明的键，漏声明就变成「每个技能都没有 slug」，导出请求全部 400/404，而界面上只表现为「技能没装上」。已在 `digitalEmployee.routes.ts` 补上（可选，兼容旧 payload）。
+>
+> **会话的 `activeSkills` 必须用安装后的名字。** 装出来的名字带员工前缀，payload 里的 slug 在本地技能目录中不存在，直接传 `skillIds` 会安静地激活不到任何技能。准备工作（`digitalEmployee.provision`）返回 `skillNames`，会话用它；仅在未做过准备时退回 `skillIds`。
+>
+> **解包复用 `extractSkillArchive`**，已用真实导出包验证（zip 根即 `SKILL.md`，见 `test/main/skill/staffdeckSkillArchive.test.ts` 与 fixture）。版本判据用 `skills[].id`——服务端每次保存都换 id，无需额外做内容 hash。
+
 ### 5.4 知识同步任务
 
 - 新增后台同步器（主进程，worker 化）：
@@ -144,6 +156,25 @@ export const digitalEmployeeSchema = z.object({
 - `GET /mcp` 返回 405：不提供服务器主动推送，客户端不要依赖 SSE 长连接；
 - 工具名逐字等于 `tools[]` 里的字符串，不存在大小写/分隔符转换；`tools/list` 里出现的每个工具都保证可被 `tools/call` 派发（已由服务端 e2e 守护）；
 - 工具执行是同步的：`execution_mode=detached` 的 HTTP 工具返回的是「已受理」凭证而非最终结果，D4 需自行决定是否轮询。
+
+> **实现修订（2026-10-23，D4 交付后据实记录）——联调实测结果**
+>
+> | 检查项 | 实测 |
+> |---|---|
+> | `initialize` → `POST /mcp/agents/{id}` | 200，`serverInfo = {name: 'StaffDeck MCP', version: '1.0.0'}` |
+> | `tools/list` | 3 个工具，名字形如 `staffdeck_expense_submit_2cf85157`，均匹配 `/^[a-zA-Z0-9_-]+$/`，最长 40 字符（未触 64 上限） |
+> | `tools/call` | 200，`isError: false` |
+> | `GET /mcp/agents/{id}` | **405**（确认，客户端不得依赖 SSE 长连接） |
+> | 坏 key / 未知 agent | **401** + `application/problem+json`（`INVALID_API_KEY`），不是 JSON-RPC 错误 |
+> | `:export-skill` | 200，`application/zip`，根目录仅 `SKILL.md` |
+>
+> **必须在会话创建前完成注册，这是硬顺序。** 会话级白名单是「当前可用工具列表的补集」：注册晚于 renderer 读取工具列表，第一轮对话就一个 `staffdeck_*` 工具都没有，且之后不会自动重试（白名单在建会话时写死）。因此准备工作是一条显式 route（`digitalEmployee.provision`），由 renderer 在 `loadTools()` **之前**调用，而不是后台异步预热。
+>
+> **注册是幂等的。** 每次会话都会请求准备，但 MCP server 配置未变时跳过写入——每次 `addMcpServer` 都会触发 MCP 全量重连，工具列表会在对话中途闪动。
+>
+> **准备永不阻塞对话。** 两条链路（工具注册、技能安装）各自独立吞掉异常并记录失败原因；任一条失败都只意味着「能力少一点」。同一员工的并发准备共享一次在途轮次，因为两者都写共享设置。
+>
+> **不做准备的两种情况**：`executionMode = remote`（服务端的工具与技能不需要在本地再放一份，且会污染工具列表）与 provider 降级到 mock（假员工 id 只会换来 404）。`remote` 分支还会顺手清掉可能残留的注册。
 
 ### 5.6 对话回流上报客户端
 
