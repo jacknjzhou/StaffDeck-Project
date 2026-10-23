@@ -8,6 +8,10 @@ __pycache__/
 
 # Local runtime state (SQLite desktop mode)
 backend/*.db
+# SQLite sidecars: -wal/-shm appear while the DB is open, and repair/backup
+# copies are local artefacts. None of them should ever be committed.
+backend/*.db-*
+backend/*.db.*
 backend/*.db.*.lock
 
 # Frontend
