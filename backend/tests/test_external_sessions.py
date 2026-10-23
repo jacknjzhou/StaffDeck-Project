@@ -55,8 +55,16 @@ def _headers(key):
 
 
 def _create(client, key, *, external_session_id="local-abc", agent_id=FINANCE_AGENT, **extra):
-    body = {"external_session_id": external_session_id, "agent_id": agent_id, **extra}
-    return client.post("/external-sessions", headers=_headers(key), json=body)
+    """Session creation goes through the existing public sessions endpoint.
+
+    There is deliberately no separate create endpoint for external sessions: it
+    already accepts `external_session_id`, and a second path would let the same
+    rule drift in two places.
+    """
+    body = {"external_session_id": external_session_id, **extra}
+    return client.post(
+        f"/agents/{agent_id}/sessions", headers=_headers(key), json=body
+    )
 
 
 def test_creates_a_session_and_binding(monkeypatch):
@@ -69,7 +77,6 @@ def test_creates_a_session_and_binding(monkeypatch):
     payload = response.json()
     assert payload["external_session_id"] == "local-abc"
     assert payload["agent_id"] == FINANCE_AGENT
-    assert payload["created"] is True
 
     with Session(engine) as db:
         binding = db.exec(
@@ -94,9 +101,7 @@ def test_repeated_external_session_id_reuses_the_same_session(monkeypatch):
     second = _create(client, key)
 
     assert first.status_code == 201
-    assert second.status_code == 200
-    assert second.json()["session_id"] == first.json()["session_id"]
-    assert second.json()["created"] is False
+    assert first.json()["id"] == second.json()["id"]
 
     with Session(engine) as db:
         rows = db.exec(
@@ -122,7 +127,7 @@ def test_binding_is_scoped_to_the_credential(monkeypatch):
 
     assert first.status_code == 201
     assert second.status_code == 201
-    assert first.json()["session_id"] != second.json()["session_id"]
+    assert first.json()["id"] != second.json()["id"]
 
 
 def test_requires_the_sessions_write_scope(monkeypatch):
@@ -144,22 +149,9 @@ def test_rejects_an_unknown_agent(monkeypatch):
     assert response.json()["title"] == "AGENT_NOT_FOUND"
 
 
-def test_rejects_a_missing_external_session_id(monkeypatch):
-    client, _engine, token = _client(monkeypatch)
-    key = _key(client, token, ["sessions:write"])
-
-    response = client.post(
-        "/external-sessions",
-        headers=_headers(key),
-        json={"agent_id": FINANCE_AGENT},
-    )
-
-    assert response.status_code == 422
-
-
 def _events(client, key, session_id, events):
     return client.post(
-        f"/external-sessions/{session_id}/events:batch",
+        f"/agents/{FINANCE_AGENT}/sessions/{session_id}/events:batch",
         headers=_headers(key),
         json={"events": events},
     )
@@ -172,7 +164,7 @@ def _message(event_id, content="hi", role="user"):
 def test_appends_messages_as_ordinary_session_messages(monkeypatch):
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
-    session_id = _create(client, key).json()["session_id"]
+    session_id = _create(client, key).json()["id"]
 
     response = _events(client, key, session_id, [_message("e1", "你好"), _message("e2", "在", "assistant")])
 
@@ -192,7 +184,7 @@ def test_a_resent_event_is_skipped_not_rejected(monkeypatch):
     """
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
-    session_id = _create(client, key).json()["session_id"]
+    session_id = _create(client, key).json()["id"]
 
     _events(client, key, session_id, [_message("e1"), _message("e2")])
     second = _events(client, key, session_id, [_message("e1"), _message("e2"), _message("e3")])
@@ -204,7 +196,7 @@ def test_a_resent_event_is_skipped_not_rejected(monkeypatch):
 def test_an_identical_resend_of_a_full_batch_is_a_no_op(monkeypatch):
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
-    session_id = _create(client, key).json()["session_id"]
+    session_id = _create(client, key).json()["id"]
     batch = [_message("e1"), _message("e2")]
 
     _events(client, key, session_id, batch)
@@ -218,7 +210,7 @@ def test_an_identical_resend_of_a_full_batch_is_a_no_op(monkeypatch):
 def test_records_tool_calls_and_usage(monkeypatch):
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
-    session_id = _create(client, key).json()["session_id"]
+    session_id = _create(client, key).json()["id"]
 
     response = _events(
         client,
@@ -271,7 +263,7 @@ def test_a_second_credential_cannot_append_to_the_first_credential_session(monke
     client, _engine, token = _client(monkeypatch)
     owner = _key(client, token, ["sessions:write"])
     other = _key(client, token, ["sessions:write"])
-    session_id = _create(client, owner).json()["session_id"]
+    session_id = _create(client, owner).json()["id"]
 
     response = _events(client, other, session_id, [_message("e1")])
 
@@ -282,7 +274,7 @@ def test_requires_the_sessions_write_scope_for_events(monkeypatch):
     client, _engine, token = _client(monkeypatch)
     writer = _key(client, token, ["sessions:write"])
     reader = _key(client, token, ["sessions:read"])
-    session_id = _create(client, writer).json()["session_id"]
+    session_id = _create(client, writer).json()["id"]
 
     response = _events(client, reader, session_id, [_message("e1")])
 

@@ -1,115 +1,53 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
 from app.db import get_session
 from app.db.models import ChatSession, ExternalSessionBinding, Message, new_id, utc_now
 from app.public_api.auth import PublicPrincipal, require_scopes
 from app.public_api.errors import PublicAPIError
-from app.public_api.schemas import (
-    ExternalEventsBatch,
-    ExternalEventsBatchResult,
-    ExternalSessionCreate,
-)
+from app.public_api.schemas import ExternalEventsBatch, ExternalEventsBatchResult
+from app.public_api.sessions import ensure_public_agent
 
-router = APIRouter(prefix="/external-sessions", tags=["external-sessions"])
+router = APIRouter(prefix="/agents/{agent_id}/sessions", tags=["sessions"])
 
-# Marks the event a row came from. Stored inside metadata so a resend of the
-# same batch can be told apart from a genuinely repeated message.
+# Marks the client-side event a row came from. Kept in metadata so a resent
+# batch can be told apart from a genuinely repeated message.
 EVENT_KEY = "external_event_id"
-
-
-def _binding_for(
-    db: Session, principal: PublicPrincipal, external_session_id: str
-) -> ExternalSessionBinding | None:
-    if not principal.credential_id:
-        raise PublicAPIError(
-            403, "API_KEY_REQUIRED", "External sessions are addressed by credential."
-        )
-    return db.exec(
-        select(ExternalSessionBinding).where(
-            ExternalSessionBinding.credential_id == principal.credential_id,
-            ExternalSessionBinding.external_session_id == external_session_id,
-        )
-    ).first()
-
-
-@router.post("", response_model=dict)
-def upsert_external_session(
-    body: ExternalSessionCreate,
-    response: Response,
-    principal: PublicPrincipal = Depends(require_scopes("sessions:write")),
-    db: Session = Depends(get_session),
-) -> dict:
-    """Announce a locally-created session, creating the server side on first sight.
-
-    Reuses `create_public_session_row` instead of its own insert so the
-    "same external id → same server session" rule is written once: the run
-    endpoint and this one must never disagree about it, or a conversation gets
-    two rows and its messages land in whichever one the caller saw last.
-    """
-    from app.public_api.schemas import PublicSessionCreate
-    from app.public_api.sessions import create_public_session_row
-
-    existing = _binding_for(db, principal, body.external_session_id)
-    if existing:
-        if existing.agent_id != body.agent_id:
-            raise PublicAPIError(
-                409,
-                "EXTERNAL_SESSION_CONFLICT",
-                "The external session is already bound to another agent.",
-            )
-        if not db.get(ChatSession, existing.session_id):
-            raise PublicAPIError(404, "SESSION_NOT_FOUND", "Session not found.")
-        response.status_code = 200
-        return {
-            "session_id": existing.session_id,
-            "external_session_id": existing.external_session_id,
-            "agent_id": existing.agent_id,
-            "created": False,
-        }
-
-    row, _ = create_public_session_row(
-        db,
-        principal,
-        body.agent_id,
-        PublicSessionCreate(
-            external_session_id=body.external_session_id,
-            external_user_id=body.external_user_id,
-            title=body.title,
-            metadata=body.metadata,
-        ),
-    )
-    response.status_code = 201
-    return {
-        "session_id": row.id,
-        "external_session_id": body.external_session_id,
-        "agent_id": body.agent_id,
-        "created": True,
-    }
 
 
 @router.post("/{session_id}/events:batch", response_model=ExternalEventsBatchResult)
 def append_events(
+    agent_id: str,
     session_id: str,
     body: ExternalEventsBatch,
     principal: PublicPrincipal = Depends(require_scopes("sessions:write")),
     db: Session = Depends(get_session),
 ) -> ExternalEventsBatchResult:
-    """Append a batch of local events to a session.
+    """Append events replayed from a conversation executed on the client.
 
-    Idempotency is per event: a retry resends the whole batch, so a stored event
-    must be skipped rather than rejecting the batch that carries it.
+    There is no matching "create external session" endpoint on purpose:
+    `POST /agents/{agent_id}/sessions` already takes `external_session_id` and is
+    idempotent on it. A second create path would give one rule two
+    implementations, and the day they diverge a conversation lands in two rows
+    with its messages split between them.
+
+    Idempotency is per event, because a retry resends the whole batch: a
+    batch-level key would reject the retry as soon as one event was already
+    stored, dropping every new event travelling with it.
     """
+    ensure_public_agent(db, principal, agent_id)
+
     row = db.get(ChatSession, session_id)
-    if not row or row.tenant_id != principal.tenant_id:
-        # Deliberately 404 rather than 403: the id belongs to another tenant, and
+    if not row or row.tenant_id != principal.tenant_id or row.agent_id != agent_id:
+        # 404 rather than 403: the id may belong to another tenant, and
         # confirming it exists would leak that.
         raise PublicAPIError(404, "SESSION_NOT_FOUND", "Session not found.")
 
-    # The credential must own this session through a binding. Without this a key
-    # could append to any same-tenant session it can name.
+    # Tenancy is not enough. Without the binding check any key in the tenant
+    # could append to any conversation it can name, turning a read scope into a
+    # write capability.
     owned = db.exec(
         select(ExternalSessionBinding).where(
             ExternalSessionBinding.credential_id == principal.credential_id,
@@ -143,10 +81,9 @@ def _stored_event_ids(db: Session, principal: PublicPrincipal, session_id: str) 
         )
     ).all()
     return {
-        str(entry[EVENT_KEY])
+        str(row.metadata_json[EVENT_KEY])
         for row in rows
         if isinstance(row.metadata_json, dict) and EVENT_KEY in row.metadata_json
-        for entry in [row.metadata_json]
     }
 
 
@@ -157,6 +94,8 @@ def _to_message(tenant_id: str, session_id: str, event) -> Message:
         content = event.content
         metadata.update(event.metadata)
     elif event.type == "tool_call":
+        # Stored as a `tool` role row so the existing transcript view shows it
+        # in place, next to the turn that produced it.
         role = "tool"
         content = event.name
         metadata.update(
@@ -168,6 +107,8 @@ def _to_message(tenant_id: str, session_id: str, event) -> Message:
             }
         )
     else:
+        # A usage record has no user-visible text; keeping it as a `system` row
+        # makes it queryable without inventing a table.
         role = "system"
         content = ""
         metadata.update(

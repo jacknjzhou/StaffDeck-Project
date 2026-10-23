@@ -16,29 +16,27 @@
 
 ## 1. 服务端（StaffDeck）
 
-### Task 1：`POST /api/v1/external-sessions`
+> **实施中修正**：原计划新建 `POST /external-sessions` 建会话端点，写完后发现
+> `POST /agents/{agent_id}/sessions` 已经接受 `external_session_id` 且按
+> `(credential_id, external_session_id)` 幂等 upsert。再建一个就是同一规则两处实现，
+> 一旦漂移，同一对话会在服务端产生两行、消息各写一半。因此只保留真正缺失的事件追加端点，
+> 并放进既有 sessions 命名空间。
 
-- 新建 `backend/app/public_api/external_sessions.py`，`router = APIRouter(prefix="/external-sessions")`。
-- 请求体 `ExternalSessionCreate`：`external_session_id`（必填）、`agent_id`（必填）、`external_user_id`（可选）、`title`（可选）、`metadata`（可选）。
-- 语义：按 `(credential_id, external_session_id)` 幂等 upsert。
-  - 已存在 → 200，返回既有 `session_id`（不新建 ChatSession，避免同一本地会话在管理端出现两条）。
-  - 不存在 → 201，建一条 `ChatSession` + `ExternalSessionBinding`。
-- 依赖 `sessions:write`，且必须校验 `agent_id` 属于本租户（复用 `enforce_agent_access` + 存在性检查）。
+### Task 1（已取消）：建会话端点
 
-### Task 2：`POST /api/v1/external-sessions/{session_id}/events:batch`
+不需要。`create_public_session_row` 已实现完整的幂等 upsert，deepchat 的 `createSession`
+本来就走这条路。
 
+### Task 2：`POST /api/v1/agents/{agent_id}/sessions/{session_id}/events:batch`
+
+- 实现于 `backend/app/public_api/external_sessions.py`，复用 sessions 路由前缀。
 - 请求体 `ExternalEventsBatch`：`events[]`，每项 `type ∈ {message, tool_call, usage}`。
-  - `message`：`role`、`content`、`created_at`（可选）、`event_id`（客户端侧唯一，用于幂等）。
+  - `message`：`role`、`content`、`created_at`（可选）、`event_id`（客户端侧唯一）。
   - `tool_call`：`name`、`status`、`duration_ms`、`error_code`（可选）。
   - `usage`：`prompt_tokens`、`completion_tokens`、`total_tokens`。
-- 幂等粒度是**单个事件**，不是整批：客户端重试会重发整批，必须靠 `event_id` 去重。存进 `Message.metadata_json["replay_event_id"]`，重复的跳过。这一条是关键——整批幂等会被「部分成功」打破。
-- 返回 `{ "accepted": n, "duplicates": m }`，客户端据此清队列。
-- 未知 `session_id` → 404；跨租户 → 同样 404（不泄露存在性）。
-
-### Task 3：审计与观测
-
-- 回流写入走既有 `APIAuditLog`，`resource_type="external_session"`。
-- 注意 D0 已踩过的坑：审计写入不能在同请求事务里，必须走既有审计队列（`_audit_queue`），否则 SQLite 写锁冲突。
+- 幂等粒度是**单个事件**，不是整批：客户端重试会重发整批，整批幂等会让「第二批里夹一条旧事件」整批被拒。
+- 鉴权三层：agent 属于本租户 → session 属于该 agent 且同租户 → **该凭证在绑定表里拥有这个 session**。第三层不能省：只校验租户，任何同租户 key 都能往它能叫出名字的会话里写，等于把只读权限升级成写权限。
+- 落库复用 `Message` 表，事件 id 存 `metadata_json["external_event_id"]`；不新建事件表，因为管理端会话页本来就读 `Message`。
 
 ## 2. 客户端（deepchat）
 

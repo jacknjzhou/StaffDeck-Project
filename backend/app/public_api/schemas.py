@@ -132,27 +132,6 @@ class PublicSessionUpdate(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-class ExternalSessionCreate(BaseModel):
-    """A local session announcing itself.
-
-    `external_session_id` is generated on the device, so it is only unique per
-    credential — two machines may legitimately produce the same string.
-    """
-
-    external_session_id: str = Field(min_length=1, max_length=200)
-    agent_id: str = Field(min_length=1, max_length=64)
-    external_user_id: str | None = Field(default=None, max_length=200)
-    title: str | None = Field(default=None, max_length=200)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class ExternalSessionRead(BaseModel):
-    session_id: str
-    external_session_id: str
-    agent_id: str
-    created: bool
-
-
 class ExternalMessageEvent(BaseModel):
     type: Literal["message"]
     event_id: str = Field(min_length=1, max_length=200)
