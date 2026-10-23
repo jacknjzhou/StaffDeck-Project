@@ -19,6 +19,7 @@ from app.public_api import (
     credentials,
     digital_employees,
     examples,
+    external_sessions,
     gallery,
     jobs,
     knowledge_sync,
@@ -191,6 +192,7 @@ def create_public_api_app() -> FastAPI:
     app.include_router(mcp.router)
     app.include_router(digital_employees.router)
     app.include_router(sessions.router)
+    app.include_router(external_sessions.router)
     app.include_router(runs.router)
     app.include_router(jobs.router)
     app.include_router(sops.router)

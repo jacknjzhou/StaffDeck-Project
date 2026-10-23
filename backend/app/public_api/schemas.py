@@ -132,6 +132,72 @@ class PublicSessionUpdate(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class ExternalSessionCreate(BaseModel):
+    """A local session announcing itself.
+
+    `external_session_id` is generated on the device, so it is only unique per
+    credential — two machines may legitimately produce the same string.
+    """
+
+    external_session_id: str = Field(min_length=1, max_length=200)
+    agent_id: str = Field(min_length=1, max_length=64)
+    external_user_id: str | None = Field(default=None, max_length=200)
+    title: str | None = Field(default=None, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExternalSessionRead(BaseModel):
+    session_id: str
+    external_session_id: str
+    agent_id: str
+    created: bool
+
+
+class ExternalMessageEvent(BaseModel):
+    type: Literal["message"]
+    event_id: str = Field(min_length=1, max_length=200)
+    role: Literal["user", "assistant", "system", "tool"]
+    content: str = Field(max_length=2_000_000)
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExternalToolCallEvent(BaseModel):
+    type: Literal["tool_call"]
+    event_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    status: Literal["ok", "error"]
+    duration_ms: int | None = Field(default=None, ge=0)
+    error_code: str | None = Field(default=None, max_length=100)
+    created_at: datetime | None = None
+
+
+class ExternalUsageEvent(BaseModel):
+    type: Literal["usage"]
+    event_id: str = Field(min_length=1, max_length=200)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    created_at: datetime | None = None
+
+
+class ExternalEventsBatch(BaseModel):
+    """Events are idempotent individually, not as a batch.
+
+    A retry always resends the whole batch, so a batch-level key would reject
+    the retry wholesale the moment one event was already stored.
+    """
+
+    events: list[ExternalMessageEvent | ExternalToolCallEvent | ExternalUsageEvent] = Field(
+        default_factory=list, max_length=200
+    )
+
+
+class ExternalEventsBatchResult(BaseModel):
+    accepted: int
+    duplicates: int
+
+
 class AgentRunCreate(BaseModel):
     input: str = Field(min_length=1)
     session_id: str | None = None
