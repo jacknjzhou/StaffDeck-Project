@@ -9,6 +9,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.db import get_session
 from app.db.models import APIAuditLog, User
 from app.db.seed import seed_demo_data
+from app.digital_employees.tool_namespace import namespaced_tool_name
 from app.public_api.app import create_public_api_app
 from app.security.auth import create_access_token
 
@@ -148,7 +149,7 @@ def test_tools_list_is_scoped_to_the_employee_in_meta(monkeypatch):
     assert response.status_code == 200, response.text
     tools = response.json()["result"]["tools"]
     names = [tool["name"] for tool in tools]
-    assert names and all(name.startswith("staffdeck:") for name in names)
+    assert names and all(name.startswith("staffdeck_") for name in names)
     blob = json.dumps(response.json(), ensure_ascii=False).lower()
     assert "headers_json" not in blob and "auth_json" not in blob
 
@@ -176,7 +177,7 @@ def test_tools_call_returns_a_call_tool_result(monkeypatch):
             "id": 3,
             "method": "tools/call",
             "params": {
-                "name": "staffdeck:expense.quota_query",
+                "name": namespaced_tool_name("expense.quota_query"),
                 "arguments": {},
                 "_meta": {"agentId": FINANCE_AGENT},
             },
@@ -198,7 +199,7 @@ def test_tools_call_without_an_employee_is_refused(monkeypatch):
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "staffdeck:expense.submit", "arguments": {}},
+            "params": {"name": namespaced_tool_name("expense.submit"), "arguments": {}},
         },
     )
     assert response.status_code == 200
@@ -276,7 +277,7 @@ def test_agent_path_scopes_tools_list_without_any_meta(monkeypatch):
     )
     assert response.status_code == 200, response.text
     names = [tool["name"] for tool in response.json()["result"]["tools"]]
-    assert names and all(name.startswith("staffdeck:") for name in names)
+    assert names and all(name.startswith("staffdeck_") for name in names)
 
 
 def test_agent_path_scopes_tools_call_without_any_meta(monkeypatch):
@@ -289,7 +290,7 @@ def test_agent_path_scopes_tools_call_without_any_meta(monkeypatch):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "staffdeck:expense.quota_query", "arguments": {}},
+            "params": {"name": namespaced_tool_name("expense.quota_query"), "arguments": {}},
         },
     )
     assert response.status_code == 200
@@ -307,7 +308,7 @@ def test_agent_path_wins_over_a_conflicting_meta(monkeypatch):
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "staffdeck:expense.quota_query",
+                "name": namespaced_tool_name("expense.quota_query"),
                 "arguments": {},
                 "_meta": {"agentId": "agent_preset_sales_001"},
             },

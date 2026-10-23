@@ -7,10 +7,13 @@ from sqlmodel import Session, select
 
 from app.agents.branching import visible_knowledge_base_version_ids
 from app.db.models import AgentProfile, KnowledgeBaseVersion
-from app.digital_employees.payload import TOOL_PREFIX
 from app.knowledge.schema import KnowledgeSearchRequest
 from app.knowledge.service import KnowledgeService
-from app.mcp_server.catalog import KNOWLEDGE_SEARCH_TOOL, build_tool_catalog
+from app.mcp_server.catalog import (
+    KNOWLEDGE_SEARCH_TOOL,
+    build_tool_catalog,
+    tool_name_map,
+)
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import ToolCall
 
@@ -114,7 +117,9 @@ def call_tool(
     if name == KNOWLEDGE_SEARCH_TOOL:
         return _knowledge_search(db, tenant_id, agent_id, arguments)
 
-    bare = name.removeprefix(TOOL_PREFIX)
+    # The raw slug cannot always be recovered from the namespaced name
+    # (normalisation is lossy), so the catalog map is the source of truth.
+    bare = tool_name_map(db, tenant_id, agent_id)[name]
     result = ToolExecutor(db).execute(
         tenant_id=tenant_id,
         tool_call=ToolCall(name=bare, arguments=arguments),

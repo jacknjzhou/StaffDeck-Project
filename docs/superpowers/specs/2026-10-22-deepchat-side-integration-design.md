@@ -77,7 +77,7 @@ export const digitalEmployeeSchema = z.object({
 |---|---|---|
 | 配置分发 | `GET /api/v1/digital-employees`、`/{id}`、`/{id}:export-skill` | StaffDeck M2 |
 | 知识同步 | `GET /api/v1/digital-employees/{id}/knowledge-packages`、`/knowledge-bases/{kb}:export-manifest`、`/documents/{doc}:download` | StaffDeck M3 |
-| MCP 工具网关 | `/api/v1/mcp`（streamable HTTP，工具命名空间 `staffdeck:{slug}`） | StaffDeck M4 |
+| MCP 工具网关 | `/api/v1/mcp`（streamable HTTP，工具命名空间 `staffdeck_{slug}`） | StaffDeck M4 |
 | 远端执行 | `POST /agents/{id}/sessions` + `POST /agents/{id}/runs:stream`（SSE，Last-Event-ID 续传） | 已有 |
 | 对话回流 | `POST /external-sessions`、`POST /external-sessions/{id}/events:batch` | StaffDeck M6 |
 | 鉴权 | Bearer `sd_live_` 共享密钥；scopes 见 StaffDeck 方案 §8 | 已有 |
@@ -128,9 +128,13 @@ export const digitalEmployeeSchema = z.object({
 
 ### 5.5 MCP 白名单接入远端工具
 
-- 员工 `tools[]` 中 `staffdeck:{slug}` 命名空间的工具 → 注册为 streamable HTTP MCP server（指向 `/api/v1/mcp`），由 deepchat 现有 MCP 客户端连接；
+- 员工 `tools[]` 中 `staffdeck_{slug}` 命名空间的工具 → 注册为 streamable HTTP MCP server（指向 `/api/v1/mcp`），由 deepchat 现有 MCP 客户端连接；
 - 会话级工具白名单机制不变（`disabledAgentTools` 取补集）；
 - 公共 MCP 工具（分发 payload 附连接信息、无凭证的）→ deepchat 本地直连，与远端工具在同一白名单体系中共存。
+
+> **命名修订（2026-10-23，D4 开工前核实）**：原约定的 `staffdeck:{slug}` 在 deepchat 侧**一个工具都注册不上**。`main/mcp/toolManager.ts:544` 用 `/^[a-zA-Z0-9_-]+$/` 校验最终工具名，不匹配就 `continue` 丢弃，且只打一行 `console.error`——不报错、不中断，表现为「MCP server 连上了但 tools 为空」。冒号必然触发，slug 里的点（`expense.submit`）同样触发；OpenAI 兼容 API 的 `function.name` 也有同构限制（且上限 64 字符）。
+>
+> 因此服务端改为 `staffdeck_` 前缀 + 非法字符归一 + 摘要后缀，规则见 StaffDeck 侧 spec 的同名修订说明。对 deepchat 的影响：**白名单仍是字符串精确匹配，无需改动**——`employee.tools[]` 与 MCP 工具名由服务端同一函数产出，逐字相等。但 D4 接线时要守住一条：不得在客户端二次加工工具名，任何 sanitize 都会让两侧再次错位。
 
 **接入约束（M4 已交付，D4 按此实现）**：
 

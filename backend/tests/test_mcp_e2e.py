@@ -11,6 +11,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.db import get_session
 from app.db.models import User
 from app.db.seed import seed_demo_data
+from app.digital_employees.tool_namespace import namespaced_tool_name
 from app.public_api.app import create_public_api_app
 from app.security.auth import create_access_token
 
@@ -91,11 +92,11 @@ def test_full_handshake_then_tool_call():
     payload = client.get("/digital-employees", headers=auth).json()
     finance = next(item for item in payload["employees"] if item["id"] == FINANCE_AGENT)
     assert {item["name"] for item in tools} <= set(finance["tools"]) | {
-        "staffdeck:knowledge_search"
+        namespaced_tool_name("knowledge_search")
     }
 
     first_tool = next(
-        item["name"] for item in tools if item["name"] != "staffdeck:knowledge_search"
+        item["name"] for item in tools if item["name"] != namespaced_tool_name("knowledge_search")
     )
     called = client.post(
         "/mcp",

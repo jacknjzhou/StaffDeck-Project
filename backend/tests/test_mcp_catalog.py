@@ -8,6 +8,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.db.models import User
 from app.db.seed import seed_demo_data
+from app.digital_employees.tool_namespace import namespaced_tool_name
 from app.mcp_server.catalog import (
     KNOWLEDGE_SEARCH_TOOL,
     build_tool_catalog,
@@ -37,7 +38,7 @@ def _tenant(db) -> str:
 def test_catalog_only_contains_namespaced_tools(session):
     catalog = build_tool_catalog(session, _tenant(session), FINANCE_AGENT)
     assert catalog, "the finance employee ships with tools in the seed data"
-    assert all(item["name"].startswith("staffdeck:") for item in catalog)
+    assert all(item["name"].startswith("staffdeck_") for item in catalog)
 
 
 def test_catalog_never_leaks_credentials(session):
@@ -51,16 +52,20 @@ def test_catalog_never_leaks_credentials(session):
 
 
 def test_catalog_names_round_trip_through_the_namespace(session):
-    catalog = build_tool_catalog(session, _tenant(session), FINANCE_AGENT)
+    tenant_id = _tenant(session)
+    catalog = build_tool_catalog(session, tenant_id, FINANCE_AGENT)
     names = [item["name"] for item in catalog]
-    assert "staffdeck:expense.submit" in names
-    bare = resolve_tool_name(catalog, "staffdeck:expense.submit")
-    assert bare == "expense.submit"
+    # Dots are illegal in a model function name, so the digest carries the original.
+    target = namespaced_tool_name("expense.submit")
+    assert target in names
+    assert resolve_tool_name(session, tenant_id, FINANCE_AGENT, target) == "expense.submit"
     with pytest.raises(RpcError) as bad_prefix:
-        resolve_tool_name(catalog, bare)
+        resolve_tool_name(session, tenant_id, FINANCE_AGENT, "expense.submit")
     assert bad_prefix.value.code == INVALID_PARAMS
     with pytest.raises(RpcError):
-        resolve_tool_name(catalog, "staffdeck:not_in_the_catalog")
+        resolve_tool_name(
+            session, tenant_id, FINANCE_AGENT, namespaced_tool_name("not_in_the_catalog")
+        )
 
 
 def test_catalog_is_scoped_to_the_employee(session):

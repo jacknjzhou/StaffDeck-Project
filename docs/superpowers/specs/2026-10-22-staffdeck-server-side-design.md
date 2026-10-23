@@ -101,7 +101,7 @@ GET /digital-employees/{id}:export-skill    → GeneralSkill 导出为 SKILL.md 
 | id / name / role / description / avatar / capabilities / greeting / systemPrompt | AgentProfile（+ metadata_json 中 roleName 等） |
 | sops[]{title,content} | Skill（SkillCard 标题 + 渲染为文本；仅 `execution_hint=local` 的 SOP 进入下行） |
 | skillIds | GeneralSkill（附 `:export-skill` 下载链接） |
-| tools | Tool + MCPServer 工具名（`staffdeck:{slug}` 命名空间 + 公共 MCP 工具名） |
+| tools | Tool + MCPServer 工具名（`staffdeck_{slug}` 命名空间 + 公共 MCP 工具名） |
 | knowledgeBaseIds | KnowledgeBase id（仅开启同步开关的 KB） |
 | enabled | AgentProfile.status |
 | updatedAt | 记录更新时间（内容变更时同步推进，保证 configHash 变化可感知） |
@@ -133,10 +133,20 @@ GET /digital-employees/{id}/knowledge-packages/{kb_id}/concepts/{concept_id}:dow
   1. **HTTP 工具代执行**：员工绑定的 Tool（method/url/headers/auth 配置全部留在服务端），执行走 HarnessInvocationRecord 幂等 + per-TaskFrame workspace/预算限制；
   2. **知识检索工具**：封装 `knowledge-bases/{id}:search`，返回带 citations 的结果；
   3. **远端续跑工具**（可选）：封装 runs 提交/查询，供 deepchat Agent 主动委派复杂任务。
-- 命名空间 `staffdeck:{tool_slug}`，与员工 `tools[]` 白名单一一对应；deepchat 会话级白名单机制不变。
+- 命名空间 `staffdeck_{tool_slug}`，与员工 `tools[]` 白名单一一对应；deepchat 会话级白名单机制不变。
 - 公共（无凭证）MCPServer 配置仍随分发 payload 下发连接信息，由 deepchat 本地直连。
 
-**实现说明（M4 落地时确认）**：本期只交付 ①②，③（远端续跑工具）**不做**——deepchat 已有 `runs:stream` 直连能力（通道④），再包一层 MCP 工具属于重复路径。工具名严格等于分发 payload 的 `tools[]` 字符串（`staffdeck:{Tool.name}`）。员工上下文按 `POST /mcp/agents/{id}` 路径 → `params._meta.agentId` → 单员工绑定凭据的顺序解析，路径优先——因为标准 MCP 客户端无法在 `tools/list` 里注入 `_meta`（deepchat 的 `MCPServerConfig` 只有静态 header）。越权访问返回 HTTP 403，不降级为 JSON-RPC 错误。知识检索为虚拟工具 `staffdeck:knowledge_search`，**仅在员工有已开启同步的知识库时才出现**。GET 返回 405（不提供服务器推送），只支持 POST 的请求/响应模式。
+**实现说明（M4 落地时确认）**：本期只交付 ①②，③（远端续跑工具）**不做**——deepchat 已有 `runs:stream` 直连能力（通道④），再包一层 MCP 工具属于重复路径。工具名严格等于分发 payload 的 `tools[]` 字符串。员工上下文按 `POST /mcp/agents/{id}` 路径 → `params._meta.agentId` → 单员工绑定凭据的顺序解析，路径优先——因为标准 MCP 客户端无法在 `tools/list` 里注入 `_meta`（deepchat 的 `MCPServerConfig` 只有静态 header）。越权访问返回 HTTP 403，不降级为 JSON-RPC 错误。知识检索为虚拟工具 `staffdeck_knowledge_search`，**仅在员工有已开启同步的知识库时才出现**。GET 返回 405（不提供服务器推送），只支持 POST 的请求/响应模式。
+
+> **命名修订（2026-10-23，D4 对接时实测）**：原约定的 `staffdeck:{slug}` **不可用**。deepchat 的 `main/mcp/toolManager.ts:544` 只接受 `/^[a-zA-Z0-9_-]+$/`，不匹配的工具被 `continue` 静默丢弃——带冒号的命名会让远端工具一个都注册不上，D2 下发的 `tools[]` 白名单也只能空转。现实约束有两层：① MCP 客户端侧的工具名字符集；② OpenAI 兼容 API 的 `function.name` 上限 64 字符且字符集同构。
+>
+> 修订后的规则（`app/digital_employees/tool_namespace.py`）：
+> - 前缀改为 `staffdeck_`；
+> - 已合法的短 slug 原样拼接（`expense_submit` → `staffdeck_expense_submit`），保持可读；
+> - 含非法字符的 slug 归一为 `_` 后**追加原 slug 的 8 位 sha256 摘要**（`expense.submit` → `staffdeck_expense_submit_2cf85157`）。归一是多对一的，不加摘要会让 `expense.submit` 与 `expense_submit` 撞名，而 deepchat 用一张平表按名字索引工具，撞名即静默丢一个；
+> - 超长截断同样走摘要形式，保证唯一。
+>
+> **反向解析必须查目录，不能做字符串裁剪**：摘要能命名原文却无法还原，`tool_name_map()` 是唯一可信来源。`resolve_tool_name` 与 `invoker.call_tool` 都已改为按 map 取原始 `Tool.name`。
 
 ### 6.4 通道④：远端执行（复用现有 API，零新增）
 

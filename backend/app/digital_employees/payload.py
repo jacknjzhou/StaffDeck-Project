@@ -33,6 +33,7 @@ from app.digital_employees.contract import (
     zod_len,
 )
 from app.digital_employees.sop_text import select_sop_documents
+from app.digital_employees.tool_namespace import namespaced_tool_name
 
 if TYPE_CHECKING:
     # Imported for typing only: app.public_api.__init__ eagerly imports the
@@ -41,7 +42,6 @@ if TYPE_CHECKING:
 
 MODES = {"local", "remote", "hybrid"}
 DEFAULT_MODE = "local"
-TOOL_PREFIX = "staffdeck:"
 SYNC_FLAG = "deepchat_sync_enabled"
 
 
@@ -239,7 +239,7 @@ def _system_prompt(
 def _tool_names(db: Session, principal: PublicPrincipal, agent: AgentProfile) -> list[str]:
     """Only namespaced names leave the server; tool URLs and credentials never do."""
     names = [
-        f"{TOOL_PREFIX}{row.name}"
+        namespaced_tool_name(row.name)
         for row in visible_tool_rows(db, principal.tenant_id, agent.id, include_inactive=False)
         if row.enabled
     ]

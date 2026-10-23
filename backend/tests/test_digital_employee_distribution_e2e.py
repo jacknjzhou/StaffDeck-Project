@@ -90,7 +90,7 @@ def test_tools_never_leak_credentials_into_the_payload():
     assert "sd_live_" not in blob
     for employee in payload["employees"]:
         for tool in employee["tools"]:
-            assert tool.startswith("staffdeck:")
+            assert tool.startswith("staffdeck_")
             assert "://" not in tool
 
 

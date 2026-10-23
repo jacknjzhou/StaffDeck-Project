@@ -107,7 +107,7 @@ GET /digital-employees/{id}:export-skill    → GeneralSkill 导出为 SKILL.md 
 | id / name / role / description / avatar / capabilities / greeting / systemPrompt | AgentProfile（+metadata_json 中 roleName 等） |
 | sops[]{title,content} | Skill（SkillCard 标题+渲染为文本；仅 `execution_hint=local` 的 SOP） |
 | skillIds | GeneralSkill（附 `:export-skill` 下载链接） |
-| tools | Tool + MCPServer 工具名（`staffdeck:{slug}` 命名空间 + 公共 MCP 工具名） |
+| tools | Tool + MCPServer 工具名（`staffdeck_{slug}` 命名空间 + 公共 MCP 工具名） |
 | knowledgeBaseIds | KnowledgeBase id |
 | enabled | AgentProfile.status |
 | updatedAt | 记录更新时间（内容变更时同步推进，保证 configHash 变化可感知） |
@@ -133,7 +133,7 @@ GET /knowledge-bases/{kb_id}/documents/{doc_id}:download
   1. **HTTP 工具代执行**：员工绑定的 Tool（method/url/headers/auth 配置全部留在服务端），执行走 HarnessInvocationRecord 幂等 + per-TaskFrame workspace/预算限制；
   2. **知识检索工具**：封装 `knowledge-bases/{id}:search`，返回带 citations 的结果；
   3. **远端续跑工具**（可选）：封装 runs 提交/查询，供 deepchat Agent 主动委派复杂任务。
-- 命名空间 `staffdeck:{tool_slug}`，与员工 `tools[]` 白名单一一对应；deepchat 会话级白名单机制不变。
+- 命名空间 `staffdeck_{tool_slug}`，与员工 `tools[]` 白名单一一对应；deepchat 会话级白名单机制不变。
 - 公共（无凭证）MCPServer 配置仍随分发 payload 下发连接信息，由 deepchat 本地直连。
 
 ### 6.4 通道④：远端执行（复用现有 API，零新增）
@@ -230,6 +230,6 @@ POST /external-sessions/{id}/events:batch      → 批量上报消息 / 工具�
 3. 「开始对话」按 executionMode 分流：local → 现有注入链路；remote/hybrid → 会话创建改调 sessions + runs:stream，SSE 渲染与 `awaiting_input` 续跑 UI；
 4. 知识同步任务（清单对比 → 下载 → 本地索引重建 → stale 标记）；
 5. 技能导入：`:export-skill` 包 → deepchat 技能目录（其 Skills 管理已有导入能力）；
-6. MCP 白名单接入 `staffdeck:*` 远端工具（streamable HTTP 客户端其已有）；
+6. MCP 白名单接入 `staffdeck_*` 远端工具（streamable HTTP 客户端其已有）；
 7. 回流上报客户端：本地队列 + 幂等重试；
 8. 部署配置：`STAFFDECK_BASE_URL`、`STAFFDECK_API_KEY`、`STAFFDECK_EXTERNAL_USER_ID` 等构建时/运行时注入（其对齐 `docs/managed` 构建期端点注入惯例）。

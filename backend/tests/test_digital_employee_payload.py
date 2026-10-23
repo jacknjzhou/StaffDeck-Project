@@ -105,8 +105,8 @@ def test_tools_are_namespaced_and_never_leak_credentials(seeded):
     )
     db.commit()
     payload = build_employee(principal, _agent(db, "财务"), db)
-    assert "staffdeck:crm.lookup" in payload["tools"]
-    assert all(item.startswith("staffdeck:") for item in payload["tools"])
+    assert "staffdeck_crm_lookup_f398d2a2" in payload["tools"]
+    assert all(item.startswith("staffdeck_") for item in payload["tools"])
     dumped = repr(payload)
     assert "super-secret" not in dumped
     assert "crm.example.com" not in dumped  # 连 URL 都不下发：凭证不出服务端
