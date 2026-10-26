@@ -75,7 +75,9 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "5173:80"
+      # 宿主端口可覆盖：本机 5173 被 deepchat 的 electron-vite dev 占用时，
+      # 用 STAFFDECK_HOST_PORT=15173 docker compose up -d 换端口起栈。
+      - "${STAFFDECK_HOST_PORT:-5173}:80"
     depends_on:
       - api
     restart: unless-stopped
