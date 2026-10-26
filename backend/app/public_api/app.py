@@ -59,7 +59,11 @@ def _audit_loop() -> None:
         target_engine = item.pop("_engine", engine)
         try:
             with Session(target_engine) as db:  # type: ignore[arg-type]
-                db.connection().exec_driver_sql("PRAGMA busy_timeout = 2000")
+                if target_engine.dialect.name == "sqlite":
+                    # SQLite-only busy guard. On PostgreSQL this statement is a
+                    # syntax error and used to drop every audit row with a
+                    # warning; pick it by dialect, not by habit.
+                    db.connection().exec_driver_sql("PRAGMA busy_timeout = 2000")
                 db.add(APIAuditLog(**item))  # type: ignore[arg-type]
                 db.commit()
         except Exception as error:  # noqa: BLE001
