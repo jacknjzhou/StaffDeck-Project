@@ -136,15 +136,25 @@ def _patch_binding_config_key(
     value: object,
 ) -> None:
     """Patch one API-owned config key against the latest JSON value."""
+    # SQLite JSON1 与 PostgreSQL jsonb 的等价写法按方言分支(config_json 列在 PG 上为 json 类型)。
+    is_sqlite = db.get_bind().dialect.name == "sqlite"
+    if is_sqlite:
+        set_expr = "json_set(COALESCE(config_json, '{}'), :path, json(:value))"
+    else:
+        # psycopg3 以 unknown 类型发送参数,路径需显式 ::text[](数组字面量才按数组解析)
+        set_expr = (
+            "jsonb_set(COALESCE(config_json, '{}'::json)::jsonb, "
+            "(:path)::text[], (:value)::jsonb)::json"
+        )
     result = db.exec(
         text(
-            "UPDATE channel_bindings "
-            "SET config_json = json_set(COALESCE(config_json, '{}'), :path, json(:value)), "
+            f"UPDATE channel_bindings "
+            f"SET config_json = {set_expr}, "
             "updated_at = :updated_at "
             "WHERE id = :binding_id AND tenant_id = :tenant_id"
         ),
         params={
-            "path": f"$.{key}",
+            "path": f"$.{key}" if is_sqlite else key.split("."),
             "value": json.dumps(value, ensure_ascii=False),
             "updated_at": utc_now(),
             "binding_id": binding_id,

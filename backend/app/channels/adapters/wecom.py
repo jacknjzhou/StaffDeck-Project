@@ -894,10 +894,20 @@ class WeComStreamManager:
                 if result.rowcount == 1:
                     if connected:
                         # 断开告警标记在重连成功时清除(允许下次再告警)
+                        # SQLite JSON1 与 PostgreSQL jsonb 的等价写法按方言分支
+                        if self._engine.dialect.name == "sqlite":
+                            clear_expr = (
+                                "json_remove(config_json, '$.disconnect_alerted_at')"
+                            )
+                        else:
+                            clear_expr = (
+                                "(config_json::jsonb "
+                                "#- ARRAY['disconnect_alerted_at'])::json"
+                            )
                         db.execute(
                             text(
                                 "UPDATE channel_bindings "
-                                "SET config_json = json_remove(config_json, '$.disconnect_alerted_at'), "
+                                f"SET config_json = {clear_expr}, "
                                 "updated_at = :updated_at "
                                 "WHERE id = :binding_id"
                             ),

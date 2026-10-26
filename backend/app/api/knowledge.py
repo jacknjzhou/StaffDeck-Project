@@ -914,24 +914,33 @@ def bucket_read_with_stats(row: KnowledgeBucket, chunk_count: int) -> KnowledgeB
     return item
 
 
+def _blob_cast(name: str, dialect_name: str) -> str:
+    # SQLite: read text columns as raw bytes so _safe_text can decode robustly.
+    # PostgreSQL has no BLOB type and TEXT columns are always valid text.
+    if dialect_name == "sqlite":
+        return f"CAST({name} AS BLOB) AS {name}"
+    return name
+
+
 def _safe_document_bucket_rows(
     db: Session, tenant_id: str, document_id: str
 ) -> list[Mapping[str, Any]]:
+    dialect = db.get_bind().dialect.name
     return list(
         db.execute(
             text(
-                """
+                f"""
                 SELECT
                     id,
                     tenant_id,
                     knowledge_base_id,
                     knowledge_base_version_id,
                     document_id,
-                    CAST(bucket_key AS BLOB) AS bucket_key,
-                    CAST(title AS BLOB) AS title,
-                    CAST(summary AS BLOB) AS summary,
+                    {_blob_cast("bucket_key", dialect)},
+                    {_blob_cast("title", dialect)},
+                    {_blob_cast("summary", dialect)},
                     token_estimate,
-                    CAST(metadata_json AS BLOB) AS metadata_json,
+                    {_blob_cast("metadata_json", dialect)},
                     created_at,
                     updated_at
                 FROM knowledge_buckets
@@ -947,10 +956,11 @@ def _safe_document_bucket_rows(
 
 
 def _safe_bucket_chunk_rows(db: Session, tenant_id: str, bucket_id: str) -> list[Mapping[str, Any]]:
+    dialect = db.get_bind().dialect.name
     return list(
         db.execute(
             text(
-                """
+                f"""
                 SELECT
                     id,
                     tenant_id,
@@ -959,10 +969,10 @@ def _safe_bucket_chunk_rows(db: Session, tenant_id: str, bucket_id: str) -> list
                     document_id,
                     bucket_id,
                     chunk_index,
-                    CAST(content AS BLOB) AS content,
-                    CAST(summary AS BLOB) AS summary,
-                    CAST(source_ref AS BLOB) AS source_ref,
-                    CAST(metadata_json AS BLOB) AS metadata_json,
+                    {_blob_cast("content", dialect)},
+                    {_blob_cast("summary", dialect)},
+                    {_blob_cast("source_ref", dialect)},
+                    {_blob_cast("metadata_json", dialect)},
                     created_at,
                     updated_at
                 FROM knowledge_chunks

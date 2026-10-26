@@ -216,21 +216,43 @@ def _patch_runtime_config(
     binding_values: dict[str, Any] | None = None,
 ) -> bool:
     """Atomically patch connector-owned JSON keys without replacing API configuration."""
-    config_expr = "COALESCE(config_json, '{}')"
+    # SQLite JSON1 与 PostgreSQL jsonb 的等价写法按方言分支(config_json 列在 PG 上为 json 类型)。
+    is_sqlite = db_engine.dialect.name == "sqlite"
+    if is_sqlite:
+        config_expr = "COALESCE(config_json, '{}')"
+    else:
+        config_expr = "COALESCE(config_json, '{}'::json)::jsonb"
     params: dict[str, Any] = {"binding_id": binding_id, "updated_at": utc_now()}
     for index, (key, value) in enumerate((set_values or {}).items()):
-        params[f"set_path_{index}"] = f"$.{key}"
         params[f"set_value_{index}"] = json.dumps(value, ensure_ascii=False)
-        config_expr = (
-            f"json_set({config_expr}, :set_path_{index}, json(:set_value_{index}))"
-        )
+        if is_sqlite:
+            params[f"set_path_{index}"] = f"$.{key}"
+            config_expr = (
+                f"json_set({config_expr}, :set_path_{index}, json(:set_value_{index}))"
+            )
+        else:
+            params[f"set_path_{index}"] = key.split(".")
+            config_expr = (
+                f"jsonb_set({config_expr}, (:set_path_{index})::text[], "
+                f"(:set_value_{index})::jsonb)"
+            )
     for index, key in enumerate(remove_keys):
-        params[f"remove_path_{index}"] = f"$.{key}"
-        config_expr = f"json_remove({config_expr}, :remove_path_{index})"
+        if is_sqlite:
+            params[f"remove_path_{index}"] = f"$.{key}"
+            config_expr = f"json_remove({config_expr}, :remove_path_{index})"
+        else:
+            params[f"remove_path_{index}"] = key.split(".")
+            config_expr = f"({config_expr} #- (:remove_path_{index})::text[])"
 
     assignments = ["updated_at = :updated_at"]
     if set_values or remove_keys:
-        assignments.insert(0, f"config_json = {config_expr}")
+        # PG 的 json 列赋值需显式从 jsonb 转回 json
+        assignments.insert(
+            0,
+            f"config_json = {config_expr}"
+            if is_sqlite
+            else f"config_json = ({config_expr})::json",
+        )
     allowed_binding_values = {"connected", "status"}
     for key, value in (binding_values or {}).items():
         if key not in allowed_binding_values:
@@ -245,11 +267,22 @@ def _patch_runtime_config(
         params["expected_revision"] = expected_revision
         predicates.append("config_revision = :expected_revision")
     for index, (key, value) in enumerate((expected_values or {}).items()):
-        params[f"expected_path_{index}"] = f"$.{key}"
-        params[f"expected_value_{index}"] = value
-        predicates.append(
-            f"json_extract(config_json, :expected_path_{index}) = :expected_value_{index}"
-        )
+        if is_sqlite:
+            params[f"expected_path_{index}"] = f"$.{key}"
+            params[f"expected_value_{index}"] = value
+            predicates.append(
+                f"json_extract(config_json, :expected_path_{index}) = :expected_value_{index}"
+            )
+        else:
+            params[f"expected_path_{index}"] = key.split(".")
+            params[f"expected_value_{index}"] = value
+            # jsonb_extract_path_text 是 VARIADIC 函数:数组参数必须带 VARIADIC 关键字,
+            # 否则 f(jsonb, text[]) 不存在;而 unknown 参数会被当成单个 text 元素。
+            predicates.append(
+                f"jsonb_extract_path_text(config_json::jsonb, "
+                f"VARIADIC (:expected_path_{index})::text[]) "
+                f"= (:expected_value_{index})::text"
+            )
 
     with Session(db_engine) as db:
         result = db.exec(
