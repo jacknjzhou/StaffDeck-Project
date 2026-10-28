@@ -175,6 +175,59 @@ def test_concept_download_supports_conditional_requests(monkeypatch):
     assert not second.content
 
 
+def test_concept_metadata_lists_graph_fields(monkeypatch):
+    client, engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    agent_id, kb_id = _agent_with_kb(engine)
+
+    listed = client.get(f"/digital-employees/{agent_id}/knowledge-packages", headers=auth)
+    package = _package_for(listed.json(), kb_id)
+    response = client.get(
+        f"/digital-employees/{agent_id}/knowledge-packages/{kb_id}/concepts", headers=auth
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["knowledgeBaseId"] == kb_id
+    assert body["version"] == package["version"]
+    assert body["conceptCount"] == package["conceptCount"] > 0
+    entries = {row["conceptId"]: row for row in body["concepts"]}
+    manifest = package["concepts"][0]
+    entry = entries[manifest["conceptId"]]
+    assert entry["type"] == manifest["type"]
+    assert entry["title"] == manifest["title"]
+    assert isinstance(entry["links"], list)
+    # Bodies stay behind :download; metadata must not leak content_md.
+    assert all("contentMd" not in row for row in body["concepts"])
+
+
+def test_concept_metadata_respects_opt_out(monkeypatch):
+    client, engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    agent_id, kb_id = _employee_with_kb(engine)
+    _opt_out(engine, agent_id, kb_id)
+
+    response = client.get(
+        f"/digital-employees/{agent_id}/knowledge-packages/{kb_id}/concepts", headers=auth
+    )
+    assert response.status_code == 404
+    assert response.json()["code"] == "KNOWLEDGE_PACKAGE_NOT_FOUND"
+
+
+def test_concept_metadata_unknown_package_is_404(monkeypatch):
+    client, engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    agent_id, _kb_id = _agent_with_kb(engine)
+
+    response = client.get(
+        f"/digital-employees/{agent_id}/knowledge-packages/kb_missing/concepts", headers=auth
+    )
+    assert response.status_code == 404
+    assert response.json()["code"] == "KNOWLEDGE_PACKAGE_NOT_FOUND"
+
+
 def test_explicit_opt_out_hides_the_package(monkeypatch):
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])

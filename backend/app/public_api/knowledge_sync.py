@@ -162,6 +162,58 @@ def list_employee_knowledge_bases(
     return {"knowledgeBases": knowledge_bases}
 
 
+@router.get(
+    "/{agent_id}/knowledge-packages/{knowledge_base_id}/concepts",
+    response_model=dict,
+)
+def list_concept_metadata(
+    agent_id: str,
+    knowledge_base_id: str,
+    principal: PublicPrincipal = Depends(require_scopes("agents:read")),
+    db: Session = Depends(get_session),
+) -> dict:
+    """Concept metadata for Deepchat's detail sheet and knowledge graph.
+
+    The console builds its graph client-side from ``links``; this endpoint
+    hands the same fields to public API consumers. Bodies stay behind
+    ``:download`` — no content_md here.
+    """
+    agent = _agent_or_404(db, principal, agent_id)
+    package = _package_or_404(db, principal, agent, knowledge_base_id)
+    version = visible_knowledge_base_versions(db, principal.tenant_id, agent.id)[
+        knowledge_base_id
+    ]
+    concepts = []
+    for row in concept_rows(db, principal.tenant_id, knowledge_base_id, version.id):
+        # The console graph drops citation-section links before drawing; doing
+        # the same here keeps client graphs free of reference-list noise.
+        citation_keys = {
+            (str(link.get("label", "")).strip(), str(link.get("target", "")).strip())
+            for link in row.citations_json or []
+        }
+        links = [
+            link
+            for link in row.links_json or []
+            if (str(link.get("label", "")).strip(), str(link.get("target", "")).strip())
+            not in citation_keys
+        ]
+        concepts.append(
+            {
+                "conceptId": row.concept_id,
+                "type": row.concept_type,
+                "title": row.title,
+                "description": row.description or "",
+                "links": links,
+            }
+        )
+    return {
+        "knowledgeBaseId": knowledge_base_id,
+        "version": package["version"],
+        "conceptCount": len(concepts),
+        "concepts": concepts,
+    }
+
+
 @router.get("/{agent_id}/knowledge-packages/{knowledge_base_id}:export-bundle")
 def export_knowledge_bundle(
     agent_id: str,

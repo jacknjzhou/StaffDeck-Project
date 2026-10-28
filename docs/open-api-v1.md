@@ -285,11 +285,13 @@ POST     /agents/{agent_id}/knowledge-bases/{knowledge_base_id}:sync-from-overal
 GET /digital-employees/{agent_id}/knowledge-bases
 GET /digital-employees/{agent_id}/knowledge-packages
 GET /digital-employees/{agent_id}/knowledge-packages/{knowledge_base_id}:export-bundle
+GET /digital-employees/{agent_id}/knowledge-packages/{knowledge_base_id}/concepts
 GET /digital-employees/{agent_id}/knowledge-packages/{knowledge_base_id}/concepts/{concept_id}
 ```
 
 - `knowledge-bases` 返回员工可见知识库目录（与企业管理台同一可见性与统计口径）：`knowledgeBases[]` 每条含 `knowledgeBaseId`、`name`、`description`、`version`、`documentCount`、`chunkCount`，不含概念正文。
 - `knowledge-packages` 返回带 `configVersion` 的同步清单，包级 `configHash` 随概念内容变化；`export-bundle` 与概念下载支持 `If-None-Match`/`ETag` 条件请求。
+- `concepts`（概念元数据）返回 `knowledgeBaseId`、`version`、`conceptCount` 与 `concepts[]`（每条含 `conceptId`、`type`、`title`、`description`、`links[]`），供客户端构建知识图谱；正文仍走概念下载端点，本端点不含 `content_md`。`links` 与企业管理台图谱同源（概念正文中的 markdown 链接）。
 - 同步开关为 opt-out：知识库版本 metadata 的 `deepchat_sync_enabled` 缺省视为同步，仅显式设为 `false` 时才从 `knowledge-packages` 清单和 MCP `knowledge_search` 工具中排除；`knowledge-bases` 目录不受该开关影响，与企业管理台所见一致。
 
 ### 通用技能、工具和 MCP
