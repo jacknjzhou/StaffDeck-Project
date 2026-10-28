@@ -14,8 +14,13 @@ from app.db.models import (
     APIJobEvent,
     APISOPDraft,
     AgentEvent,
+    AgentKnowledgeBranch,
     AgentProfile,
+    AgentResourceBinding,
     ChatSession,
+    KnowledgeBase,
+    KnowledgeBaseVersion,
+    KnowledgeConcept,
     Message,
     Skill,
     Tenant,
@@ -128,11 +133,13 @@ def _client(monkeypatch):
     return TestClient(app), engine, token
 
 
-def _tenant_key(client: TestClient, admin_token: str, scopes: list[str]) -> str:
+def _tenant_key(
+    client: TestClient, admin_token: str, scopes: list[str], name: str = "integration"
+) -> str:
     created = client.post(
         "/api-clients",
         headers={"Authorization": f"Bearer {admin_token}"},
-        json={"name": "integration", "scopes": ["*"]},
+        json={"name": name, "scopes": ["*"]},
     )
     assert created.status_code == 201, created.text
     credential = client.post(
@@ -161,6 +168,12 @@ def test_problem_details_and_openapi_contract(monkeypatch) -> None:
         "/agents/{agent_id}/sops/{sop_id}",
         "/sops/{sop_id}:publish",
         "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}/entries",
+        "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}",
+        "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}/concepts/{concept_id}",
+        "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}/okf:export",
+        "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}/okf:lint",
+        "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}:delete",
+        "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}:sync-from-overall",
         "/agents/{agent_id}/tools",
         "/agents/{agent_id}/scheduled-tasks",
         "/gallery/agents",
@@ -1086,3 +1099,290 @@ def test_internal_job_remains_durably_queued_when_executor_is_stopping(monkeypat
     assert persisted is not None
     assert persisted.status == "queued"
     assert persisted.credential_id == "internal"
+
+
+def _knowledge_write_key(client: TestClient, admin_token: str) -> dict[str, str]:
+    key = _tenant_key(
+        client, admin_token, ["knowledge:read", "knowledge:write"]
+    )
+    return {"Authorization": f"Bearer {key}"}
+
+
+def _create_kb(client: TestClient, auth: dict[str, str], name: str = "Policy") -> str:
+    created = client.post(
+        "/agents/agent_api/knowledge-bases",
+        headers=auth,
+        json={"name": name, "description": "Expense policy", "capability_scope": "general"},
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+def _seed_concept(
+    engine, kb_id: str, *, concept_id: str, content: str, title: str
+) -> None:
+    with Session(engine) as db:
+        branch = db.exec(
+            select(AgentKnowledgeBranch).where(
+                AgentKnowledgeBranch.tenant_id == "tenant_api",
+                AgentKnowledgeBranch.agent_id == "agent_api",
+                AgentKnowledgeBranch.knowledge_base_id == kb_id,
+            )
+        ).first()
+        assert branch is not None
+        version = db.exec(
+            select(KnowledgeBaseVersion).where(
+                KnowledgeBaseVersion.tenant_id == "tenant_api",
+                KnowledgeBaseVersion.knowledge_base_id == kb_id,
+                KnowledgeBaseVersion.version == branch.head_version,
+            )
+        ).first()
+        assert version is not None
+        db.add(
+            KnowledgeConcept(
+                tenant_id="tenant_api",
+                knowledge_base_id=kb_id,
+                knowledge_base_version_id=version.id,
+                concept_id=concept_id,
+                concept_type="concept",
+                title=title,
+                content_md=content,
+            )
+        )
+        db.commit()
+
+
+def test_public_knowledge_base_detail_and_concept_get(monkeypatch) -> None:
+    client, engine, admin_token = _client(monkeypatch)
+    auth = _knowledge_write_key(client, admin_token)
+    kb_id = _create_kb(client, auth)
+    _seed_concept(
+        engine,
+        kb_id,
+        concept_id="concepts/alpha",
+        content="v1 body",
+        title="Alpha",
+    )
+
+    detail = client.get(f"/agents/agent_api/knowledge-bases/{kb_id}", headers=auth)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["id"] == kb_id
+    assert detail.json()["name"] == "Policy"
+
+    single = client.get(
+        f"/agents/agent_api/knowledge-bases/{kb_id}/concepts/concepts/alpha",
+        headers=auth,
+    )
+    assert single.status_code == 200, single.text
+    body = single.json()
+    assert body["concept_id"] == "concepts/alpha"
+    assert body["content_md"] == "v1 body"
+    assert "tenant_id" not in body
+
+
+def test_public_knowledge_concept_upsert_writes_versioned_concept(monkeypatch) -> None:
+    client, engine, admin_token = _client(monkeypatch)
+    auth = _knowledge_write_key(client, admin_token)
+    kb_id = _create_kb(client, auth)
+
+    response = client.put(
+        f"/agents/agent_api/knowledge-bases/{kb_id}/concepts/concepts/beta",
+        headers=auth,
+        json={"content_md": "# Beta\nnew body", "document_id": None, "status": "active"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["concept_id"] == "concepts/beta"
+    assert body["title"] == "Beta"
+
+    with Session(engine) as db:
+        rows = db.exec(
+            select(KnowledgeConcept).where(
+                KnowledgeConcept.tenant_id == "tenant_api",
+                KnowledgeConcept.knowledge_base_id == kb_id,
+                KnowledgeConcept.concept_id == "concepts/beta",
+            )
+        ).all()
+    assert len(rows) == 1
+    # The OKF parser normalises content into a frontmatter document; the body survives.
+    assert rows[0].content_md.startswith("---")
+    assert "# Beta\nnew body" in rows[0].content_md
+
+
+def test_public_knowledge_okf_export_and_lint(monkeypatch) -> None:
+    client, _engine, admin_token = _client(monkeypatch)
+    auth = _knowledge_write_key(client, admin_token)
+    kb_id = _create_kb(client, auth)
+
+    export = client.get(
+        f"/agents/agent_api/knowledge-bases/{kb_id}/okf:export", headers=auth
+    )
+    assert export.status_code == 200, export.text
+    assert export.headers["content-type"] == "application/zip"
+    assert export.content[:2] == b"PK"
+
+    lint = client.post(
+        f"/agents/agent_api/knowledge-bases/{kb_id}/okf:lint", headers=auth
+    )
+    assert lint.status_code == 200, lint.text
+    body = lint.json()
+    assert body["status"] == "ok"
+    assert isinstance(body["issues"], list)
+
+
+def test_public_knowledge_delete_hides_agent_branch(monkeypatch) -> None:
+    client, engine, admin_token = _client(monkeypatch)
+    auth = _knowledge_write_key(client, admin_token)
+    kb_id = _create_kb(client, auth)
+
+    response = client.post(
+        f"/agents/agent_api/knowledge-bases/{kb_id}:delete", headers=auth
+    )
+    assert response.status_code == 200, response.text
+
+    with Session(engine) as db:
+        branch = db.exec(
+            select(AgentKnowledgeBranch).where(
+                AgentKnowledgeBranch.tenant_id == "tenant_api",
+                AgentKnowledgeBranch.agent_id == "agent_api",
+                AgentKnowledgeBranch.knowledge_base_id == kb_id,
+            )
+        ).first()
+        binding = db.exec(
+            select(AgentResourceBinding).where(
+                AgentResourceBinding.tenant_id == "tenant_api",
+                AgentResourceBinding.agent_id == "agent_api",
+                AgentResourceBinding.resource_type == "knowledge_base",
+                AgentResourceBinding.resource_id == kb_id,
+            )
+        ).first()
+        kb = db.get(KnowledgeBase, kb_id)
+    assert branch is not None and branch.status == "deleted"
+    assert binding is not None and binding.status == "deleted"
+    assert kb is not None, "employee-scoped delete must be a soft hide, not a row delete"
+
+    listed = client.get("/agents/agent_api/knowledge-bases", headers=auth)
+    assert listed.status_code == 200, listed.text
+    assert all(row["id"] != kb_id for row in listed.json()["data"])
+
+
+def test_public_knowledge_sync_from_overall(monkeypatch) -> None:
+    client, engine, admin_token = _client(monkeypatch)
+    auth = _knowledge_write_key(client, admin_token)
+    with Session(engine) as db:
+        db.add(
+            AgentProfile(
+                id="agent_overall",
+                tenant_id="tenant_api",
+                name="Overall",
+                status="active",
+                is_overall=True,
+                metadata_json={
+                    "owner_user_id": "user_api_admin",
+                    "owner_username": "api_admin",
+                },
+            )
+        )
+        db.add(
+            KnowledgeBase(
+                id="kb_trunk",
+                tenant_id="tenant_api",
+                name="Trunk Policy",
+                status="active",
+                capability_scope="general",
+            )
+        )
+        db.add(
+            KnowledgeBaseVersion(
+                id="kbver_trunk_1",
+                tenant_id="tenant_api",
+                knowledge_base_id="kb_trunk",
+                version="1.0.0",
+                name="Trunk Policy",
+                status="active",
+            )
+        )
+        db.add(
+            AgentResourceBinding(
+                tenant_id="tenant_api",
+                agent_id="agent_overall",
+                resource_type="knowledge_base",
+                resource_id="kb_trunk",
+                status="active",
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        "/agents/agent_api/knowledge-bases/kb_trunk:sync-from-overall", headers=auth
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "synced"
+    assert response.json()["head_version"] == "1.0.0"
+
+    with Session(engine) as db:
+        branch = db.exec(
+            select(AgentKnowledgeBranch).where(
+                AgentKnowledgeBranch.tenant_id == "tenant_api",
+                AgentKnowledgeBranch.agent_id == "agent_api",
+                AgentKnowledgeBranch.knowledge_base_id == "kb_trunk",
+            )
+        ).first()
+    assert branch is not None
+    assert branch.status == "active"
+    assert branch.sync_state == "synced"
+    assert branch.head_version == "1.0.0"
+
+
+def test_public_knowledge_write_scopes_enforced(monkeypatch) -> None:
+    client, _engine, admin_token = _client(monkeypatch)
+    kb_id = _create_kb(client, _knowledge_write_key(client, admin_token))
+    read_auth = {
+        "Authorization": f"Bearer {_tenant_key(client, admin_token, ['knowledge:read'], name='integration-ro')}"
+    }
+
+    assert client.get(
+        f"/agents/agent_api/knowledge-bases/{kb_id}", headers=read_auth
+    ).status_code == 200
+
+    for method, path, body in (
+        (
+            "put",
+            f"/agents/agent_api/knowledge-bases/{kb_id}/concepts/concepts/beta",
+            {"content_md": "x"},
+        ),
+        ("post", f"/agents/agent_api/knowledge-bases/{kb_id}:delete", None),
+        ("post", f"/agents/agent_api/knowledge-bases/{kb_id}:sync-from-overall", None),
+    ):
+        response = client.request(method, path, headers=read_auth, json=body)
+        assert response.status_code == 403, (method, path, response.text)
+        assert response.json()["code"] == "INSUFFICIENT_SCOPE"
+
+
+def test_public_knowledge_agent_key_boundary(monkeypatch) -> None:
+    client, _engine, admin_token = _client(monkeypatch)
+    api_client = client.post(
+        "/api-clients",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"name": "bound", "scopes": ["*"]},
+    )
+    assert api_client.status_code == 201, api_client.text
+    # Employee keys may only hold runtime scopes, so even a wildcard-scoped
+    # client cannot grant one knowledge management scopes.
+    credential = client.post(
+        f"/api-clients/{api_client.json()['id']}/credentials",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "name": "other employee",
+            "agent_id": "agent_other",
+            "scopes": sorted(AGENT_RUNTIME_SCOPES),
+        },
+    )
+    assert credential.status_code == 201, credential.text
+    bound_auth = {"Authorization": f"Bearer {credential.json()['api_key']}"}
+
+    response = client.get(
+        "/agents/agent_api/knowledge-bases/kb_unknown", headers=bound_auth
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "INSUFFICIENT_SCOPE"

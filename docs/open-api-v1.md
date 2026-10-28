@@ -253,15 +253,29 @@ POST     /sops/{sop_id}/versions/{version}:rollback
 
 ```text
 GET/POST /agents/{agent_id}/knowledge-bases
+GET      /agents/{agent_id}/knowledge-bases/{knowledge_base_id}
 PATCH    /agents/{agent_id}/knowledge-bases/{knowledge_base_id}
 POST     /agents/{agent_id}/knowledge-bases/{knowledge_base_id}:search
 POST     /agents/{agent_id}/knowledge-bases/{knowledge_base_id}/entries
 POST     /agents/{agent_id}/knowledge-bases/{knowledge_base_id}/documents
 GET      /agents/{agent_id}/knowledge-bases/{knowledge_base_id}/documents
+GET/PUT  /agents/{agent_id}/knowledge-bases/{knowledge_base_id}/concepts/{concept_id}
 GET      /agents/{agent_id}/knowledge-bases/{knowledge_base_id}/concepts
+GET      /agents/{agent_id}/knowledge-bases/{knowledge_base_id}/okf:export
+POST     /agents/{agent_id}/knowledge-bases/{knowledge_base_id}/okf:lint
+POST     /agents/{agent_id}/knowledge-bases/{knowledge_base_id}:delete
+POST     /agents/{agent_id}/knowledge-bases/{knowledge_base_id}:sync-from-overall
 ```
 
 知识检索返回 `citations`。文本批量写入和文件导入返回持久化 Job。
+
+补充说明：
+
+- `concept_id` 含斜杠（如 `concepts/alpha`），路径按原样传递；`PUT` 会对概念正文做 OKF 规范化（补 frontmatter）。
+- `okf:export` 返回 zip 附件，`okf:lint` 返回结构体检问题清单。
+- `:delete` 在员工域内是软删除（标记该员工的知识分支与绑定为 `deleted`），不级联删除总库数据。
+- `:sync-from-overall` 把员工分支重新对齐到总库当前版本。
+- 未开放 `promote-to-overall`（提升总库属租户治理动作）；`PUT /{knowledge_base_id}` 全量更新与已开放的 `PATCH` 语义相同，不重复提供。
 
 ### 通用技能、工具和 MCP
 

@@ -19,6 +19,7 @@ from app.knowledge.schema import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseUpdateRequest,
     KnowledgeBaseRollbackRequest,
+    KnowledgeConceptUpdateRequest,
     KnowledgeDocumentUpdateRequest,
     KnowledgeDocumentUploadRequest,
     KnowledgeSearchRequest,
@@ -289,6 +290,116 @@ def list_knowledge_concepts(
         knowledge_base_id, principal.tenant_id, agent_id, None, db
     )
     return {"data": [_dump(row) for row in rows]}
+
+
+@router.get("/agents/{agent_id}/knowledge-bases/{knowledge_base_id}", response_model=dict)
+def get_knowledge_base(
+    agent_id: str,
+    knowledge_base_id: str,
+    principal: PublicPrincipal = Depends(require_scopes("knowledge:read")),
+    db: Session = Depends(get_session),
+) -> dict:
+    enforce_agent_access(principal, agent_id)
+    return _dump(
+        internal_knowledge_bases.get_knowledge_base(
+            knowledge_base_id, principal.tenant_id, agent_id, db
+        )
+    )
+
+
+@router.get(
+    "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}/concepts/{concept_id:path}",
+    response_model=dict,
+)
+def get_knowledge_concept(
+    agent_id: str,
+    knowledge_base_id: str,
+    concept_id: str,
+    principal: PublicPrincipal = Depends(require_scopes("knowledge:read")),
+    db: Session = Depends(get_session),
+) -> dict:
+    enforce_agent_access(principal, agent_id)
+    return _dump(
+        internal_knowledge_bases.get_okf_concept(
+            knowledge_base_id, concept_id, principal.tenant_id, agent_id, db
+        )
+    )
+
+
+@router.put(
+    "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}/concepts/{concept_id:path}",
+    response_model=dict,
+)
+def upsert_knowledge_concept(
+    agent_id: str,
+    knowledge_base_id: str,
+    concept_id: str,
+    body: dict[str, Any],
+    principal: PublicPrincipal = Depends(require_scopes("knowledge:write")),
+    db: Session = Depends(get_session),
+) -> dict:
+    enforce_agent_access(principal, agent_id, write=True)
+    request = KnowledgeConceptUpdateRequest(tenant_id=principal.tenant_id, **body)
+    return _dump(
+        internal_knowledge_bases.upsert_okf_concept(
+            knowledge_base_id, concept_id, request, agent_id, db, principal.actor_user
+        )
+    )
+
+
+@router.get("/agents/{agent_id}/knowledge-bases/{knowledge_base_id}/okf:export")
+def export_knowledge_okf(
+    agent_id: str,
+    knowledge_base_id: str,
+    principal: PublicPrincipal = Depends(require_scopes("knowledge:read")),
+    db: Session = Depends(get_session),
+) -> Response:
+    enforce_agent_access(principal, agent_id)
+    return internal_knowledge_bases.export_okf(
+        knowledge_base_id, principal.tenant_id, agent_id, db
+    )
+
+
+@router.post("/agents/{agent_id}/knowledge-bases/{knowledge_base_id}/okf:lint", response_model=dict)
+def lint_knowledge_okf(
+    agent_id: str,
+    knowledge_base_id: str,
+    principal: PublicPrincipal = Depends(require_scopes("knowledge:read")),
+    db: Session = Depends(get_session),
+) -> dict:
+    enforce_agent_access(principal, agent_id)
+    return internal_knowledge_bases.lint_okf(
+        knowledge_base_id, principal.tenant_id, agent_id, db
+    )
+
+
+@router.post("/agents/{agent_id}/knowledge-bases/{knowledge_base_id}:delete", response_model=dict)
+def delete_knowledge_base(
+    agent_id: str,
+    knowledge_base_id: str,
+    principal: PublicPrincipal = Depends(require_scopes("knowledge:write")),
+    db: Session = Depends(get_session),
+) -> dict:
+    enforce_agent_access(principal, agent_id, write=True)
+    return internal_knowledge_bases.delete_knowledge_base(
+        knowledge_base_id, principal.tenant_id, agent_id, db, principal.actor_user
+    )
+
+
+@router.post(
+    "/agents/{agent_id}/knowledge-bases/{knowledge_base_id}:sync-from-overall",
+    response_model=dict,
+)
+def sync_knowledge_base_from_overall(
+    agent_id: str,
+    knowledge_base_id: str,
+    principal: PublicPrincipal = Depends(require_scopes("knowledge:write")),
+    db: Session = Depends(get_session),
+) -> dict:
+    enforce_agent_access(principal, agent_id, write=True)
+    return internal_knowledge_bases.sync_knowledge_base_from_overall(
+        knowledge_base_id, principal.tenant_id, agent_id, db, principal.actor_user
+    )
 
 
 @register_job_handler("knowledge.ingest")
