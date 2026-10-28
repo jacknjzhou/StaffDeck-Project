@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 MODES = {"local", "remote", "hybrid"}
 DEFAULT_MODE = "local"
+# Opt-out switch: a version is synced unless it explicitly sets this to False.
 SYNC_FLAG = "deepchat_sync_enabled"
 
 
@@ -249,14 +250,15 @@ def _tool_names(db: Session, principal: PublicPrincipal, agent: AgentProfile) ->
 def _knowledge_base_ids(
     db: Session, principal: PublicPrincipal, agent: AgentProfile
 ) -> list[str]:
-    """Sync is opt-in per knowledge base version; unflagged bases are not exportable."""
+    """Sync is opt-out per knowledge base version; only explicit False is excluded."""
     ids: list[str] = []
     for kb_id, version in visible_knowledge_base_versions(
         db, principal.tenant_id, agent.id
     ).items():
         metadata = dict(getattr(version, "metadata_json", None) or {})
-        if metadata.get(SYNC_FLAG) is True:
-            ids.append(kb_id)
+        if metadata.get(SYNC_FLAG) is False:
+            continue
+        ids.append(kb_id)
     return sorted(set(ids))
 
 

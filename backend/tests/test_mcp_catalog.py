@@ -70,24 +70,27 @@ def test_catalog_names_round_trip_through_the_namespace(session):
 
 def test_catalog_is_scoped_to_the_employee(session):
     tenant_id = _tenant(session)
-    # The sales preset exposes no tools, so its catalog must be empty.
-    assert build_tool_catalog(session, tenant_id, "agent_preset_sales_001") == []
+    # The sales preset binds no generic tools; knowledge search is the only
+    # tool it can carry.
+    names = {
+        item["name"] for item in build_tool_catalog(session, tenant_id, "agent_preset_sales_001")
+    }
+    assert names <= {KNOWLEDGE_SEARCH_TOOL}
 
 
-def test_knowledge_search_appears_only_with_a_synced_base(session):
+def test_knowledge_search_is_hidden_only_by_an_explicit_opt_out(session):
     from app.agents.branching import visible_knowledge_base_versions
 
     tenant_id = _tenant(session)
-    assert KNOWLEDGE_SEARCH_TOOL not in {
-        item["name"] for item in build_tool_catalog(session, tenant_id, FINANCE_AGENT)
-    }
-
     versions = visible_knowledge_base_versions(session, tenant_id, FINANCE_AGENT)
     assert versions, "the seed data must attach a knowledge base to the finance employee"
-    _, version = next(iter(versions.items()))
-    version.metadata_json = {**(version.metadata_json or {}), "deepchat_sync_enabled": True}
-    session.add(version)
+    names = {item["name"] for item in build_tool_catalog(session, tenant_id, FINANCE_AGENT)}
+    assert KNOWLEDGE_SEARCH_TOOL in names
+
+    for version in versions.values():
+        version.metadata_json = {**(version.metadata_json or {}), "deepchat_sync_enabled": False}
+        session.add(version)
     session.commit()
 
     names = {item["name"] for item in build_tool_catalog(session, tenant_id, FINANCE_AGENT)}
-    assert KNOWLEDGE_SEARCH_TOOL in names
+    assert KNOWLEDGE_SEARCH_TOOL not in names

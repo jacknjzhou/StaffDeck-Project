@@ -32,7 +32,7 @@ def _principal(db: Session) -> PublicPrincipal:
 
 
 def _enable_all_sync(db: Session, principal: PublicPrincipal) -> None:
-    """Opt every branch-resolved version in: the flag lives on the version row."""
+    """Explicitly opt every branch-resolved version in (harmless under opt-out)."""
     for branch in db.exec(select(AgentKnowledgeBranch)).all():
         versions = visible_knowledge_base_versions(db, principal.tenant_id, branch.agent_id)
         version = versions.get(branch.knowledge_base_id)
@@ -99,6 +99,16 @@ def test_config_version_changes_when_a_concept_changes():
 
         after = build_knowledge_package_list(principal, agent, session)
         assert before["configVersion"] != after["configVersion"]
-        assert before["packages"][0]["configHash"] != after["packages"][0]["configHash"]
+        before_package = next(
+            row
+            for row in before["packages"]
+            if row["knowledgeBaseId"] == branch.knowledge_base_id
+        )
+        after_package = next(
+            row
+            for row in after["packages"]
+            if row["knowledgeBaseId"] == branch.knowledge_base_id
+        )
+        assert before_package["configHash"] != after_package["configHash"]
     finally:
         session.close()

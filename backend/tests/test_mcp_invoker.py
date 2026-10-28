@@ -32,7 +32,7 @@ def _tenant(db) -> str:
 
 
 def _enable_knowledge_sync(db, tenant_id: str, agent_id: str) -> None:
-    """The search tool only exists once a base is opted into deepchat sync."""
+    """Explicitly opt the resolved version in (harmless under opt-out)."""
     from app.agents.branching import visible_knowledge_base_versions
 
     versions = visible_knowledge_base_versions(db, tenant_id, agent_id)
@@ -89,10 +89,20 @@ def test_knowledge_search_returns_citations(session):
     assert "chunks" in payload
 
 
-def test_knowledge_search_is_absent_without_a_synced_base(session):
+def test_knowledge_search_is_absent_when_every_base_is_opted_out(session):
+    from app.agents.branching import visible_knowledge_base_versions
+
+    tenant_id = _tenant(session)
+    versions = visible_knowledge_base_versions(session, tenant_id, FINANCE_AGENT)
+    assert versions, "the seed data must attach a knowledge base to the finance employee"
+    for version in versions.values():
+        version.metadata_json = {**(version.metadata_json or {}), "deepchat_sync_enabled": False}
+        session.add(version)
+    session.commit()
+
     result = call_tool(
         session,
-        _tenant(session),
+        tenant_id,
         FINANCE_AGENT,
         KNOWLEDGE_SEARCH_TOOL,
         {"query": "报销"},

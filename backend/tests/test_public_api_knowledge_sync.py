@@ -67,7 +67,11 @@ def _employee_with_kb(engine) -> tuple[str, str]:
 
 
 def _agent_with_kb(engine) -> tuple[str, str]:
-    """Same as above, but also flips the opt-in flag for the resolved version."""
+    """Same as above, but pins the version's sync flag to True.
+
+    Sync is opt-out now, so this changes nothing about listing; it merely
+    documents that an explicit True keeps the base listed.
+    """
     agent_id, kb_id = _employee_with_kb(engine)
     with Session(engine) as db:
         admin = db.exec(select(User).where(User.username == "admin")).first()
@@ -78,14 +82,28 @@ def _agent_with_kb(engine) -> tuple[str, str]:
     return agent_id, kb_id
 
 
-def test_packages_are_empty_before_the_opt_in(monkeypatch):
+def _opt_out(engine, agent_id: str, kb_id: str) -> None:
+    """Explicitly exclude one knowledge base from deepchat sync."""
+    with Session(engine) as db:
+        admin = db.exec(select(User).where(User.username == "admin")).first()
+        version = visible_knowledge_base_versions(db, admin.tenant_id, agent_id)[kb_id]
+        version.metadata_json = {**(version.metadata_json or {}), "deepchat_sync_enabled": False}
+        db.add(version)
+        db.commit()
+
+
+def _package_for(body: dict, kb_id: str) -> dict:
+    return next(row for row in body["packages"] if row["knowledgeBaseId"] == kb_id)
+
+
+def test_packages_are_listed_without_an_opt_in(monkeypatch):
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
     agent_id, _kb_id = _employee_with_kb(engine)
     response = client.get(f"/digital-employees/{agent_id}/knowledge-packages", headers=auth)
     assert response.status_code == 200, response.text
-    assert response.json()["packages"] == []
+    assert response.json()["packages"]
 
 
 def test_packages_list_and_export_round_trip(monkeypatch):
@@ -99,8 +117,7 @@ def test_packages_list_and_export_round_trip(monkeypatch):
     body = listed.json()
     assert body["configVersion"].startswith("kv1:")
     assert body["fetchedAt"]
-    assert len(body["packages"]) == 1
-    package = body["packages"][0]
+    package = _package_for(body, kb_id)
     assert package["knowledgeBaseId"] == kb_id
     assert package["conceptCount"] > 0
 
@@ -148,10 +165,8 @@ def test_concept_download_supports_conditional_requests(monkeypatch):
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
     agent_id, kb_id = _agent_with_kb(engine)
-    package = client.get(f"/digital-employees/{agent_id}/knowledge-packages", headers=auth).json()[
-        "packages"
-    ][0]
-    concept_id = package["concepts"][0]["conceptId"]
+    body = client.get(f"/digital-employees/{agent_id}/knowledge-packages", headers=auth).json()
+    concept_id = _package_for(body, kb_id)["concepts"][0]["conceptId"]
     url = f"/digital-employees/{agent_id}/knowledge-packages/{kb_id}/concepts/{concept_id}:download"
     first = client.get(url, headers=auth)
     etag = first.headers["ETag"]
@@ -160,16 +175,21 @@ def test_concept_download_supports_conditional_requests(monkeypatch):
     assert not second.content
 
 
-def test_unflagged_package_export_is_404(monkeypatch):
+def test_explicit_opt_out_hides_the_package(monkeypatch):
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
     agent_id, kb_id = _employee_with_kb(engine)
-    response = client.get(
+    _opt_out(engine, agent_id, kb_id)
+
+    listed = client.get(f"/digital-employees/{agent_id}/knowledge-packages", headers=auth)
+    assert listed.status_code == 200, listed.text
+    assert kb_id not in {row["knowledgeBaseId"] for row in listed.json()["packages"]}
+    exported = client.get(
         f"/digital-employees/{agent_id}/knowledge-packages/{kb_id}:export-bundle", headers=auth
     )
-    assert response.status_code == 404
-    assert response.json()["code"] == "KNOWLEDGE_PACKAGE_NOT_FOUND"
+    assert exported.status_code == 404
+    assert exported.json()["code"] == "KNOWLEDGE_PACKAGE_NOT_FOUND"
 
 
 def test_unknown_agent_is_404(monkeypatch):
@@ -179,6 +199,9 @@ def test_unknown_agent_is_404(monkeypatch):
     response = client.get("/digital-employees/agent_missing/knowledge-packages", headers=auth)
     assert response.status_code == 404
     assert response.json()["code"] == "AGENT_NOT_FOUND"
+    catalog = client.get("/digital-employees/agent_missing/knowledge-bases", headers=auth)
+    assert catalog.status_code == 404
+    assert catalog.json()["code"] == "AGENT_NOT_FOUND"
 
 
 def test_unknown_concept_is_404(monkeypatch):
@@ -200,10 +223,8 @@ def test_downloads_are_audited(monkeypatch):
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
     agent_id, kb_id = _agent_with_kb(engine)
-    package = client.get(f"/digital-employees/{agent_id}/knowledge-packages", headers=auth).json()[
-        "packages"
-    ][0]
-    concept_id = package["concepts"][0]["conceptId"]
+    body = client.get(f"/digital-employees/{agent_id}/knowledge-packages", headers=auth).json()
+    concept_id = _package_for(body, kb_id)["concepts"][0]["conceptId"]
     client.get(
         f"/digital-employees/{agent_id}/knowledge-packages/{kb_id}/concepts/{concept_id}:download",
         headers=auth,
@@ -239,6 +260,38 @@ def test_bundle_export_is_audited(monkeypatch):
     assert row.resource_id == kb_id
 
 
+def test_knowledge_base_catalog_lists_the_console_stats(monkeypatch):
+    client, engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    agent_id, kb_id = _employee_with_kb(engine)
+    response = client.get(f"/digital-employees/{agent_id}/knowledge-bases", headers=auth)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    entries = {row["knowledgeBaseId"]: row for row in body["knowledgeBases"]}
+    assert kb_id in entries
+    entry = entries[kb_id]
+    assert entry["name"]
+    assert entry["version"]
+    assert isinstance(entry["documentCount"], int) and entry["documentCount"] >= 0
+    assert isinstance(entry["chunkCount"], int) and entry["chunkCount"] >= 0
+    assert "description" in entry
+
+
+def test_catalog_ignores_the_sync_opt_out_flag(monkeypatch):
+    client, engine, token = _client(monkeypatch)
+    key = _key(client, token, ["agents:read"])
+    auth = {"Authorization": f"Bearer {key}"}
+    agent_id, kb_id = _employee_with_kb(engine)
+    _opt_out(engine, agent_id, kb_id)
+
+    catalog = client.get(f"/digital-employees/{agent_id}/knowledge-bases", headers=auth)
+    assert catalog.status_code == 200, catalog.text
+    assert kb_id in {row["knowledgeBaseId"] for row in catalog.json()["knowledgeBases"]}
+    packages = client.get(f"/digital-employees/{agent_id}/knowledge-packages", headers=auth)
+    assert kb_id not in {row["knowledgeBaseId"] for row in packages.json()["packages"]}
+
+
 def test_requires_agents_read_scope(monkeypatch):
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["runs:read"])
@@ -248,3 +301,9 @@ def test_requires_agents_read_scope(monkeypatch):
     )
     assert response.status_code == 403
     assert response.json()["code"] == "INSUFFICIENT_SCOPE"
+    catalog = client.get(
+        "/digital-employees/whatever/knowledge-bases",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert catalog.status_code == 403
+    assert catalog.json()["code"] == "INSUFFICIENT_SCOPE"

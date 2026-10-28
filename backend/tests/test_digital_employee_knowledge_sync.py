@@ -44,7 +44,7 @@ def _agent_with_kb(db: Session) -> AgentProfile:
 
 
 def _enable_sync(db: Session, tenant_id: str, agent_id: str) -> str:
-    """Flip the opt-in flag on whatever version this agent actually resolves to."""
+    """Explicitly mark one resolved version as opted in (harmless under opt-out)."""
     versions = visible_knowledge_base_versions(db, tenant_id, agent_id)
     kb_id, version = next(iter(versions.items()))
     version.metadata_json = {**(version.metadata_json or {}), "deepchat_sync_enabled": True}
@@ -53,10 +53,12 @@ def _enable_sync(db: Session, tenant_id: str, agent_id: str) -> str:
     return kb_id
 
 
-def test_no_packages_until_the_sync_flag_is_set(seeded):
+def test_packages_are_listed_without_the_sync_flag(seeded):
     db, principal = seeded
     agent = _agent_with_kb(db)
-    assert build_knowledge_packages(principal, agent, db) == []
+    packages = build_knowledge_packages(principal, agent, db)
+    assert packages
+    assert all(package["knowledgeBaseId"] for package in packages)
 
 
 def test_enabled_knowledge_base_is_listed_with_hashed_concepts(seeded):
@@ -65,9 +67,7 @@ def test_enabled_knowledge_base_is_listed_with_hashed_concepts(seeded):
     kb_id = _enable_sync(db, principal.tenant_id, agent.id)
 
     packages = build_knowledge_packages(principal, agent, db)
-    assert len(packages) == 1
-    package = packages[0]
-    assert package["knowledgeBaseId"] == kb_id
+    package = next(row for row in packages if row["knowledgeBaseId"] == kb_id)
     assert package["version"]
     assert package["bundleUrl"].endswith(f"{kb_id}:export-bundle")
     assert package["conceptCount"] == len(package["concepts"]) > 0
@@ -93,13 +93,18 @@ def test_list_wraps_packages_with_a_config_version(seeded):
     _enable_sync(db, principal.tenant_id, agent.id)
     payload = build_knowledge_package_list(principal, agent, db)
     assert payload["configVersion"].startswith("kv1:")
-    assert len(payload["packages"]) == 1
+    assert payload["packages"]
 
 
-def test_select_package_refuses_an_unflagged_base(seeded):
+def test_select_package_refuses_an_explicit_opt_out(seeded):
     db, principal = seeded
     agent = _agent_with_kb(db)
-    kb_id = next(iter(visible_knowledge_base_versions(db, principal.tenant_id, agent.id)))
+    kb_id, version = next(
+        iter(visible_knowledge_base_versions(db, principal.tenant_id, agent.id).items())
+    )
+    version.metadata_json = {**(version.metadata_json or {}), "deepchat_sync_enabled": False}
+    db.add(version)
+    db.commit()
     assert select_package(principal, agent, db, kb_id) is None
 
 
@@ -107,7 +112,8 @@ def test_select_concept_rejects_a_concept_from_another_base(seeded):
     db, principal = seeded
     agent = _agent_with_kb(db)
     kb_id = _enable_sync(db, principal.tenant_id, agent.id)
-    package = build_knowledge_packages(principal, agent, db)[0]
+    packages = build_knowledge_packages(principal, agent, db)
+    package = next(row for row in packages if row["knowledgeBaseId"] == kb_id)
     concept_id = package["concepts"][0]["conceptId"]
     assert select_concept(principal, agent, db, kb_id, concept_id) is not None
     assert select_concept(principal, agent, db, kb_id, "sources/does-not-exist") is None

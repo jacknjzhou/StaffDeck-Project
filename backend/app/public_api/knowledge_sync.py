@@ -4,11 +4,20 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import Response as RawResponse
-from sqlmodel import Session
+from sqlalchemy import func
+from sqlmodel import Session, select
 
 from app.agents.branching import visible_knowledge_base_versions
 from app.db import get_session
-from app.db.models import AgentProfile, APIAuditLog, KnowledgeBase, utc_now
+from app.db.models import (
+    AgentProfile,
+    APIAuditLog,
+    KnowledgeBase,
+    KnowledgeBucket,
+    KnowledgeChunk,
+    KnowledgeDocument,
+    utc_now,
+)
 from app.digital_employees.knowledge_sync import (
     build_knowledge_package_list,
     concept_rows,
@@ -74,6 +83,31 @@ def _audit(
     db.commit()
 
 
+def _version_stats(
+    db: Session, tenant_id: str, version_ids: list[str]
+) -> dict[str, dict[str, int]]:
+    """Per-version document/bucket/chunk counts, the console page's yardstick."""
+    stats: dict[str, dict[str, int]] = {}
+    if not version_ids:
+        return stats
+    for model, key in (
+        (KnowledgeDocument, "document_count"),
+        (KnowledgeBucket, "bucket_count"),
+        (KnowledgeChunk, "chunk_count"),
+    ):
+        rows = db.exec(
+            select(model.knowledge_base_id, func.count(model.id))
+            .where(
+                model.tenant_id == tenant_id,
+                model.knowledge_base_version_id.in_(version_ids),
+            )
+            .group_by(model.knowledge_base_id)
+        ).all()
+        for kb_id, count in rows:
+            stats.setdefault(kb_id, {})[key] = int(count or 0)
+    return stats
+
+
 @router.get("/{agent_id}/knowledge-packages", response_model=dict)
 def list_knowledge_packages(
     agent_id: str,
@@ -90,6 +124,42 @@ def list_knowledge_packages(
         return Response(status_code=304, headers={"ETag": etag})
     response.headers["ETag"] = etag
     return {**core, "fetchedAt": utc_now().isoformat() + "Z"}
+
+
+@router.get("/{agent_id}/knowledge-bases", response_model=dict)
+def list_employee_knowledge_bases(
+    agent_id: str,
+    principal: PublicPrincipal = Depends(require_scopes("agents:read")),
+    db: Session = Depends(get_session),
+) -> dict:
+    """Console-style catalog of every knowledge base an employee can use.
+
+    Deepchat's marketplace page mirrors the enterprise knowledge console, so
+    this listing is not gated by the sync opt-out flag and carries no concept
+    bodies — just the same document/chunk counts the console shows.
+    """
+    agent = _agent_or_404(db, principal, agent_id)
+    versions = visible_knowledge_base_versions(db, principal.tenant_id, agent.id)
+    stats = _version_stats(
+        db, principal.tenant_id, [version.id for version in versions.values()]
+    )
+    knowledge_bases = []
+    for kb_id, version in sorted(versions.items()):
+        kb = db.get(KnowledgeBase, kb_id)
+        if kb is None or kb.tenant_id != principal.tenant_id:
+            continue
+        counters = stats.get(kb_id, {})
+        knowledge_bases.append(
+            {
+                "knowledgeBaseId": kb_id,
+                "name": kb.name,
+                "description": kb.description or "",
+                "version": version.version,
+                "documentCount": counters.get("document_count", 0),
+                "chunkCount": counters.get("chunk_count", 0),
+            }
+        )
+    return {"knowledgeBases": knowledge_bases}
 
 
 @router.get("/{agent_id}/knowledge-packages/{knowledge_base_id}:export-bundle")

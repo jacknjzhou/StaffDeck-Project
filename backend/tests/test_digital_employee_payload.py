@@ -7,7 +7,6 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.agents.branching import visible_knowledge_base_versions
 from app.db.models import (
-    AgentKnowledgeBranch,
     AgentProfile,
     AgentResourceBinding,
     AgentSkillBranch,
@@ -133,27 +132,22 @@ def test_skill_ids_come_from_bound_general_skills_with_download_links(seeded):
         )
 
 
-def test_knowledge_sync_is_opt_in(seeded):
+def test_knowledge_sync_is_opt_out(seeded):
     db, principal = seeded
     finance = _agent(db, "财务")
-    assert build_employee(principal, finance, db)["knowledgeBaseIds"] == []
+    visible = sorted(visible_knowledge_base_versions(db, "tenant_demo", finance.id))
+    assert visible, "seed data must attach knowledge bases to the finance employee"
+    payload = build_employee(principal, finance, db)
+    assert payload["knowledgeBaseIds"] == visible
 
-    # 非整体员工读的是自己的知识库分支版本，开关必须落在版本行上
-    branch = db.exec(
-        select(AgentKnowledgeBranch).where(
-            AgentKnowledgeBranch.agent_id == finance.id,
-            AgentKnowledgeBranch.status == "active",
-        )
-    ).first()
-    version = visible_knowledge_base_versions(db, "tenant_demo", finance.id)[
-        branch.knowledge_base_id
-    ]
-    version.metadata_json = {**(version.metadata_json or {}), "deepchat_sync_enabled": True}
-    db.add(version)
+    # 开关在版本行上：只有显式 False 才排除，未标注的默认同步
+    for version in visible_knowledge_base_versions(db, "tenant_demo", finance.id).values():
+        version.metadata_json = {**(version.metadata_json or {}), "deepchat_sync_enabled": False}
+        db.add(version)
     db.commit()
 
     payload = build_employee(principal, finance, db)
-    assert payload["knowledgeBaseIds"] == [branch.knowledge_base_id]
+    assert payload["knowledgeBaseIds"] == []
     assert payload["knowledgePackagesUrl"].endswith(
         f"/digital-employees/{finance.id}/knowledge-packages"
     )

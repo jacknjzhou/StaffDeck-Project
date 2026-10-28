@@ -33,9 +33,10 @@ def describe_knowledge_search() -> dict[str, Any]:
 
 
 def _has_synced_knowledge(db: Session, tenant_id: str, agent_id: str) -> bool:
+    """Sync is opt-out: only a version explicitly flagged False is excluded."""
     versions = visible_knowledge_base_versions(db, tenant_id, agent_id)
     return any(
-        (version.metadata_json or {}).get(_KNOWLEDGE_SYNC_FLAG) is True
+        (version.metadata_json or {}).get(_KNOWLEDGE_SYNC_FLAG) is not False
         for version in versions.values()
     )
 

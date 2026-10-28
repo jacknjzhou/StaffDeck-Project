@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     # Open API app, so a runtime import here would close an import cycle.
     from app.public_api.auth import PublicPrincipal
 
-# Same key payload.py uses: one opt-in switch, never two.
+# Same key payload.py uses: one opt-out switch, never two.
 SYNC_FLAG = "deepchat_sync_enabled"
 
 
@@ -28,12 +28,12 @@ def content_hash(value: str) -> str:
 def build_knowledge_packages(
     principal: PublicPrincipal, agent: AgentProfile, db: Session
 ) -> list[dict[str, Any]]:
-    """Every opt-in knowledge base this employee can use, with per-concept hashes."""
+    """Every knowledge base this employee can use, unless explicitly opted out."""
     versions = visible_knowledge_base_versions(db, principal.tenant_id, agent.id)
     packages: list[dict[str, Any]] = []
     for kb_id, version in sorted(versions.items()):
         metadata = dict(getattr(version, "metadata_json", None) or {})
-        if metadata.get(SYNC_FLAG) is not True:
+        if metadata.get(SYNC_FLAG) is False:
             continue
         kb = db.get(KnowledgeBase, kb_id)
         if kb is None or kb.tenant_id != principal.tenant_id:
