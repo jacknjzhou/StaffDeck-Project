@@ -152,6 +152,7 @@ def provision_credential(token: str, *, name: str, scopes: list[str]) -> tuple[s
 
 
 def main() -> int:
+    """跑完整条容器级 D5 回流链路，返回 0 表示全部检查通过。"""
     print(f"target: {BASE}  tenant={TENANT}  agent={FINANCE_AGENT}")
 
     print("\n== 0. 部署形态先自检（这段失败就不用往下看了）==")

@@ -30,6 +30,12 @@ type Props = {
   disabled?: boolean;
 };
 
+/**
+ * 可搜索的下拉选择器：触发器展示当前选中项，弹层内含搜索框与候选列表。
+ *
+ * - 每次打开弹层都会清空搜索关键字，并把高亮项定位到当前选中项。
+ * - 支持 ↑/↓ 循环切换高亮、Enter 选中；选中后回调 onValueChange 并关闭弹层。
+ */
 export default function SearchableSelect({
   value,
   onValueChange,
@@ -65,11 +71,13 @@ export default function SearchableSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  /** 选中候选项：回传选项值并关闭弹层。 */
   function choose(option: SearchableSelectOption) {
     onValueChange(option.value);
     setOpen(false);
   }
 
+  /** 弹层内键盘导航：↑/↓ 循环移动高亮项，Enter 选中当前高亮项。 */
   function handleKeyDown(event: React.KeyboardEvent) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();

@@ -5,10 +5,11 @@ from typing import Any
 
 
 class JSONPatchError(ValueError):
-    pass
+    """JSON Patch 应用失败时抛出的异常；消息指明出错的指针、下标或操作位置。"""
 
 
 def _tokens(pointer: str) -> list[str]:
+    """把 JSON Pointer 拆成路径片段，并还原其中的 ~1 与 ~0 转义；根指针返回空列表。"""
     if pointer == "":
         return []
     if not pointer.startswith("/"):
@@ -17,6 +18,7 @@ def _tokens(pointer: str) -> list[str]:
 
 
 def _index(token: str, size: int, *, append: bool = False) -> int:
+    """把数组下标片段转成整数并做越界校验；append 为真时 "-" 表示末尾追加位。"""
     if append and token == "-":
         return size
     try:
@@ -29,6 +31,7 @@ def _index(token: str, size: int, *, append: bool = False) -> int:
 
 
 def _resolve(document: Any, pointer: str) -> Any:
+    """沿指针读取子文档；中间任一段缺失或下标非法时抛 JSONPatchError。"""
     current = document
     for token in _tokens(pointer):
         if isinstance(current, list):
@@ -41,6 +44,7 @@ def _resolve(document: Any, pointer: str) -> Any:
 
 
 def _parent(document: Any, pointer: str) -> tuple[Any, str]:
+    """返回指针所指向值的父容器与最后一段片段；根路径没有父级，直接报错。"""
     tokens = _tokens(pointer)
     if not tokens:
         raise JSONPatchError("The document root has no parent.")
@@ -56,6 +60,10 @@ def _parent(document: Any, pointer: str) -> tuple[Any, str]:
 
 
 def _add(document: Any, path: str, value: Any) -> Any:
+    """在 path 处写入 value 的深拷贝：数组按下标插入，字典覆盖或新增键。
+
+    空 path 表示整体替换文档，此时返回新值而非原容器；容器类型不支持时报错。
+    """
     if path == "":
         return deepcopy(value)
     parent, token = _parent(document, path)
@@ -69,6 +77,7 @@ def _add(document: Any, path: str, value: Any) -> Any:
 
 
 def _remove(document: Any, path: str) -> tuple[Any, Any]:
+    """删除 path 处的值并返回 (文档, 被删值)；删除根路径时文档位置返回 None。"""
     if path == "":
         old = deepcopy(document)
         return None, old
@@ -83,6 +92,11 @@ def _remove(document: Any, path: str) -> tuple[Any, Any]:
 
 
 def apply_json_patch(document: Any, operations: list[dict[str, Any]]) -> Any:
+    """按顺序应用 RFC 6902 风格的补丁操作，返回深拷贝后的新文档，入参保持不变。
+
+    replace 要求目标已存在，add 允许新增键或在下标 "-" 处追加；test 失败即中断。
+    未知 op、缺失 path/value/from 等格式问题统一抛 JSONPatchError。
+    """
     result = deepcopy(document)
     for position, operation in enumerate(operations):
         if not isinstance(operation, dict):

@@ -11,6 +11,7 @@ MIME_TYPE = "text/html;profile=mcp-app"
 
 
 def main() -> None:
+    """从 stdin 逐行读取 JSON-RPC 请求，按 method 分派并写出模拟 MCP App 响应。"""
     for line in sys.stdin:
         try:
             request = json.loads(line)
@@ -99,6 +100,7 @@ def main() -> None:
 
 
 def _respond(request_id: Any, result: Any) -> None:
+    """把结果序列化为单行 JSON-RPC 2.0 响应写入 stdout，并立即 flush 以便逐条消费。"""
     print(
         json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}, ensure_ascii=False),
         flush=True,

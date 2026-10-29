@@ -16,6 +16,7 @@ type KnowledgeCitationListProps = {
   onOpen: (citation: KnowledgeCitation) => void;
 };
 
+/** 知识引用列表：逐条渲染可点击的引用入口并回调 onOpen；引用为空时返回 null。 */
 export default function KnowledgeCitationList({
   citations,
   onOpen,

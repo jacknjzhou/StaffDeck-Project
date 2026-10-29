@@ -21,6 +21,7 @@ from app.evolution.schema import EvolutionAnalyzeRequest
 
 
 def _session() -> Session:
+    """在内存 SQLite 上建好全部表并返回会话，供各用例隔离数据。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -31,6 +32,7 @@ def _session() -> Session:
 
 
 def test_json_diff_is_a_stable_json_patch_style_list() -> None:
+    """验证 JSON 差异输出稳定的 patch 式列表，且指令改动被判为中风险。"""
     changes = _json_diff(
         {"nodes": [{"node_id": "collect", "instruction": "old"}], "enabled": True},
         {"nodes": [{"node_id": "collect", "instruction": "new"}], "enabled": True},
@@ -48,6 +50,7 @@ def test_json_diff_is_a_stable_json_patch_style_list() -> None:
 
 
 def test_approve_gallery_skill_creates_employee_private_copy_and_can_rollback() -> None:
+    """验证审批广场 Skill 会生成员工私有副本，且回滚时归档副本并停用绑定。"""
     with _session() as db:
         db.add(Tenant(id="tenant_test", name="Test"))
         owner = User(
@@ -146,6 +149,7 @@ def test_approve_gallery_skill_creates_employee_private_copy_and_can_rollback() 
 
 
 def test_candidate_does_not_modify_private_skill_before_approval() -> None:
+    """验证候选方案在审批前不会改动私有 Skill 的原始内容。"""
     with _session() as db:
         db.add(Tenant(id="tenant_test", name="Test"))
         skill = GeneralSkill(
@@ -184,6 +188,7 @@ def test_candidate_does_not_modify_private_skill_before_approval() -> None:
 
 
 def test_analyze_without_feedback_returns_localizable_error_code() -> None:
+    """验证无反馈可分析时返回 404 及可本地化的错误码，而非笼统报错。"""
     with _session() as db:
         db.add(Tenant(id="tenant_test", name="Test"))
         owner = User(

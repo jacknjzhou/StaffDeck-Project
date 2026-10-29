@@ -40,6 +40,7 @@ const team: TeamRead = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+/** 构造返回指定 JSON 体的成功响应桩。 */
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -49,12 +50,14 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+/** 每个用例结束后清理 DOM 并移除全局桩。 */
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe('TeamsPage', () => {
+  /** 验证团队列表展示成员数量与项目领导。 */
   it('renders the team management list with member count and project leader', async () => {
     const fetchMock = vi.fn(async () => jsonResponse([team]));
     vi.stubGlobal('fetch', fetchMock);
@@ -77,6 +80,7 @@ describe('TeamsPage', () => {
     );
   });
 
+  /** 验证可通过弹窗创建团队并提交名称与租户信息。 */
   it('creates a team through the dialog', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -109,6 +113,7 @@ describe('TeamsPage', () => {
     });
   });
 
+  /** 验证确认后删除团队并调用删除接口。 */
   it('deletes a team after confirmation', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -136,6 +141,7 @@ describe('TeamsPage', () => {
     });
   });
 
+  /** 验证从管理卡片发起团队会话并跳转到聊天页。 */
   it('starts the persistent team conversation from the management card', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -182,11 +188,13 @@ const threads: TeamThreadRead[] = [
   },
 ];
 
+/** 回显当前路由路径与查询串，用于断言导航结果。 */
 function LocationEcho() {
   const location = useLocation();
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
 }
 
+/** 渲染带路由的团队页，并把聊天相关路由替换为位置回显组件。 */
 function renderTeamsWithRoutes() {
   return render(
     <I18nProvider>
@@ -201,6 +209,7 @@ function renderTeamsWithRoutes() {
   );
 }
 
+/** 桩接团队线程接口，返回固定的团队与线程数据。 */
 function stubThreadsFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -212,6 +221,7 @@ function stubThreadsFetch() {
 }
 
 describe('TeamsPage team activity', () => {
+  /** 验证团队动态按团队与任务分组展示。 */
   it('renders the activity tree grouped by team and task', async () => {
     stubThreadsFetch();
     renderTeamsWithRoutes();
@@ -226,6 +236,7 @@ describe('TeamsPage team activity', () => {
     expect(within(activity).getByText(/1 任务 · 2 线程/)).toBeTruthy();
   });
 
+  /** 验证团队节点可折叠与展开。 */
   it('collapses and expands a team node', async () => {
     const user = userEvent.setup();
     stubThreadsFetch();
@@ -239,6 +250,7 @@ describe('TeamsPage team activity', () => {
     expect(within(activity).getByText('planning chat')).toBeTruthy();
   });
 
+  /** 验证线程带有 task_id 时跳转到任务详情。 */
   it('navigates to the task detail when the thread has a task_id', async () => {
     const user = userEvent.setup();
     stubThreadsFetch();
@@ -252,6 +264,7 @@ describe('TeamsPage team activity', () => {
     );
   });
 
+  /** 验证团队群聊线程在聊天应用中打开。 */
   it('opens team group conversations in the chat app', async () => {
     const user = userEvent.setup();
     stubThreadsFetch();
@@ -265,6 +278,7 @@ describe('TeamsPage team activity', () => {
 });
 
 describe('relativeTimeLabel', () => {
+  /** 验证无时区的后端时间戳按 UTC 计算相对时间。 */
   it('treats naive backend timestamps as UTC when computing relative time', async () => {
     const { relativeTimeLabel } = await import('./TeamsPage');
     vi.useFakeTimers();

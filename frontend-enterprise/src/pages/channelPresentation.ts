@@ -46,6 +46,13 @@ const BUILT_IN_CHANNELS: Record<string, ChannelPresentation> = {
   },
 };
 
+/**
+ * 获取渠道的展示文案：名称、标识与用户称谓、简介、断开确认语。
+ *
+ * @param channel 渠道标识，会做大小写与首尾空格归一化。
+ * @param configuredName 绑定上已配置的自定义名称，优先生效。
+ * @returns 内置渠道返回预设文案，未知渠道按名称生成兜底文案。
+ */
 export function getChannelPresentation(channel: string, configuredName?: string): ChannelPresentation {
   const key = channel.trim().toLowerCase();
   const preset = BUILT_IN_CHANNELS[key];

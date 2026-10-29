@@ -37,6 +37,7 @@ SESSION_LOG_EXPORT_SCHEMA = "staffdeck.conversation-log.v1"
 
 
 class SessionLogExportRequest(BaseModel):
+    """批量导出会话日志的请求体，session_ids 去重后最多 500 条。"""
     session_ids: list[str] = Field(min_length=1, max_length=500)
 
 
@@ -47,6 +48,10 @@ def list_sessions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[dict]:
+    """列出会话：非管理员默认只看自己的，agent 创建者可看该 agent 的全部会话。
+
+    按 updated_at 倒序返回，并在每项上补齐渠道与对话人展示字段。
+    """
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     conditions = [ChatSession.tenant_id == tenant_id]
@@ -69,6 +74,7 @@ def export_session_logs(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> Response:
+    """按会话 id 批量导出对话日志 JSON，权限逐条复用会话可见性规则。"""
     _ensure_request_tenant(tenant_id, current_user)
     session_ids = list(dict.fromkeys(request.session_ids))
     rows = [
@@ -95,6 +101,7 @@ def export_session_log(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> Response:
+    """导出单个会话的完整日志 JSON，文件名对 session_id 做安全化处理。"""
     _ensure_request_tenant(tenant_id, current_user)
     row = _get_visible_chat_session(db, tenant_id, session_id, current_user)
     return _json_download_response(
@@ -114,12 +121,14 @@ def get_session_detail(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """返回单会话详情：消息、反馈、轨迹、事件与工具调用。"""
     _ensure_request_tenant(tenant_id, current_user)
     row = _get_visible_chat_session(db, tenant_id, session_id, current_user)
     return _session_detail_payload(db, tenant_id, row)
 
 
 def _session_detail_payload(db: Session, tenant_id: str, row: ChatSession) -> dict:
+    """复用批量构建逻辑，取单个会话的详情载荷。"""
     return _session_details_payload(db, tenant_id, [row])[0]
 
 
@@ -128,6 +137,10 @@ def _session_details_payload(
     tenant_id: str,
     rows: list[ChatSession],
 ) -> list[dict]:
+    """批量组装会话详情：先按会话分组消息、事件、反馈与工具调用，再逐个构建。
+
+    空列表直接返回；消息按可见性规则裁剪，技能名取自租户技能表。
+    """
     if not rows:
         return []
     session_ids = [row.id for row in rows]
@@ -182,6 +195,7 @@ def _session_details_payload(
 
 
 def _group_by_session_id(rows: list) -> dict[str, list]:
+    """按 session_id 归组任意带该属性的行，保持原有顺序。"""
     grouped: dict[str, list] = {}
     for row in rows:
         grouped.setdefault(row.session_id, []).append(row)
@@ -197,6 +211,7 @@ def _build_session_detail_payload(
     invocation_rows: list[HarnessInvocationRecord],
     skill_names: dict[str, str],
 ) -> dict:
+    """拼装单会话详情：会话信息、消息、反馈、轨迹、事件与工具调用。"""
     feedback_by_message = {item.message_id: item for item in feedback_rows}
     traces = enrich_turn_traces_with_timings(
         _build_turn_traces(messages, events, skill_names),
@@ -250,6 +265,7 @@ def _build_session_detail_payload(
 
 
 def _json_download_response(payload: object, filename: str) -> Response:
+    """把载荷序列化为 UTF-8 JSON 附件响应，并写入下载文件名。"""
     content = json.dumps(
         jsonable_encoder(payload),
         ensure_ascii=False,
@@ -263,6 +279,7 @@ def _json_download_response(payload: object, filename: str) -> Response:
 
 
 def _safe_filename_part(value: str) -> str:
+    """把任意 id 规整为只含字母数字、中划线或下划线的文件名片段，空结果回退 session。"""
     safe = "".join(
         character if character.isalnum() or character in "-_" else "-" for character in value
     )
@@ -274,6 +291,7 @@ def _message_payload(
     feedback: MessageFeedback | None,
     db: Session,
 ) -> dict:
+    """构造消息载荷，按可见性裁剪内容并合并反馈字段。"""
     payload = message_read(
         message,
         feedback.rating if feedback else None,
@@ -294,6 +312,7 @@ def reset_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """重置会话执行状态：清空技能栈、槽位与上下文，并把状态恢复为 active。"""
     _ensure_request_tenant(tenant_id, current_user)
     row = _get_visible_chat_session(db, tenant_id, session_id, current_user)
     stage_harness_session_execution_reset(
@@ -325,6 +344,10 @@ def _can_view_all_agent_sessions(
     agent_id: str | None,
     current_user: User,
 ) -> bool:
+    """判断用户能否查看指定 agent 的全部会话。
+
+    管理员总是可以；agent 不存在或跨租户时抛 404，is_overall 员工仅管理员可见。
+    """
     if is_admin_user(current_user):
         return True
     if not agent_id:
@@ -344,6 +367,10 @@ def _get_visible_chat_session(
     session_id: str,
     current_user: User,
 ) -> ChatSession:
+    """按可见性规则取会话：本人、管理员或该 agent 的创建者可读。
+
+    会话不存在、跨租户或无权限时统一返回 404，避免泄露会话是否存在。
+    """
     ensure_tenant(db, tenant_id)
     row = db.get(ChatSession, session_id)
     if not row or row.tenant_id != tenant_id:
@@ -384,5 +411,6 @@ def _session_payloads(db: Session, rows: list[ChatSession]) -> list[dict]:
 
 
 def _ensure_request_tenant(tenant_id: str, current_user: User) -> None:
+    """校验请求租户与当前用户租户一致，不一致返回 403。"""
     if tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")

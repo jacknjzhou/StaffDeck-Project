@@ -3,6 +3,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useToolTest } from './useToolTest';
 
+/** 提升到模块顶层的接口 mock，供下面的 vi.mock 工厂复用。 */
 const mocks = vi.hoisted(() => ({ post: vi.fn(), get: vi.fn() }));
 vi.mock('../api/client', () => ({ TENANT_ID: 'tenant_demo', api: { postWithSignal: mocks.post, getWithSignal: mocks.get } }));
 vi.mock('../auth', () => ({ getEnterpriseAuthSession: () => ({ user: { id: 'admin' } }) }));
@@ -10,7 +11,9 @@ vi.mock('../auth', () => ({ getEnterpriseAuthSession: () => ({ user: { id: 'admi
 beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); sessionStorage.clear(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+/** 验证异步工具测试的提交、轮询、幂等与恢复行为。 */
 describe('async tool test tracking', () => {
+  /** 验证无 crypto.randomUUID 且存储不可用时仍可在 HTTP 源使用。 */
   it('works on HTTP origins without crypto.randomUUID and with unavailable storage', async () => {
     vi.stubGlobal('crypto', {});
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
@@ -20,6 +23,7 @@ describe('async tool test tracking', () => {
     expect(result.current.status).toBe('已返回');
     expect(mocks.post.mock.calls[0][1].client_request_id).toMatch(/^[a-z0-9-]+$/);
   });
+  /** 验证只提交一次，轮询直到完成并暴露执行结果。 */
   it('submits once, polls through completion and exposes provider result', async () => {
     mocks.post.mockResolvedValue({ success: true, data: { detached: true, task_id: 'task1' } });
     mocks.get.mockResolvedValueOnce({ id: 'task1', status: 'working', poll_attempts: 1 })
@@ -36,6 +40,7 @@ describe('async tool test tracking', () => {
     expect(mocks.get).toHaveBeenCalledTimes(2);
   });
 
+  /** 验证重试失败的状态查询时不会重新提交任务。 */
   it('retrying a failed status query never submits another task', async () => {
     mocks.post.mockResolvedValue({ success: true, data: { detached: true, task_id: 'task1' } });
     mocks.get.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ id: 'task1', status: 'completed' });
@@ -48,6 +53,7 @@ describe('async tool test tracking', () => {
     expect(mocks.post).toHaveBeenCalledTimes(1);
   });
 
+  /** 验证重新打开未完成任务时只发起 GET 请求。 */
   it('reopens an unfinished task using only GET', async () => {
     sessionStorage.setItem('staffdeck-tool-test:tenant_demo:admin:tool1', JSON.stringify({ taskId: 'task1' }));
     mocks.get.mockResolvedValue({ id: 'task1', status: 'working' });
@@ -62,6 +68,7 @@ describe('async tool test tracking', () => {
     expect(mocks.get).toHaveBeenCalledTimes(1);
   });
 
+  /** 验证提交结果未知时保留幂等键与原始参数。 */
   it('preserves idempotency key and original arguments when submission result is unknown', async () => {
     mocks.post.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ success: true });
     const { result } = renderHook(() => useToolTest('tool1', ''));
@@ -70,6 +77,7 @@ describe('async tool test tracking', () => {
     expect(mocks.post.mock.calls[1][1]).toEqual(mocks.post.mock.calls[0][1]);
   });
 
+  /** 验证 Provider 结果未知时不会放开重复提交。 */
   it('does not enable re-submission for an unknown Provider outcome', async () => {
     mocks.post.mockResolvedValue({ success: true, data: { detached: true, task_id: 'task1' } });
     mocks.get.mockResolvedValue({ id: 'task1', status: 'outcome_unknown' });
@@ -80,6 +88,7 @@ describe('async tool test tracking', () => {
     expect(mocks.post).toHaveBeenCalledTimes(1);
   });
 
+  /** 验证状态更新前的快速双击只会提交一次。 */
   it('blocks rapid double clicks before state updates', async () => {
     mocks.post.mockResolvedValue({ success: true });
     const { result } = renderHook(() => useToolTest('tool1', ''));

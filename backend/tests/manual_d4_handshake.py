@@ -27,6 +27,7 @@ FINANCE_AGENT = "agent_f2828efc2a2a476d"
 
 
 def _client() -> tuple[TestClient, dict[str, str]]:
+    """构造带演示数据与 API 凭证的 TestClient，返回客户端与鉴权头。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -39,6 +40,7 @@ def _client() -> tuple[TestClient, dict[str, str]]:
     app = create_public_api_app()
 
     def override():
+        """把测试引擎的会话绑定到应用的 get_session 依赖。"""
         with Session(engine) as db:
             yield db
 
@@ -57,6 +59,7 @@ def _client() -> tuple[TestClient, dict[str, str]]:
 
 
 def _rpc(client: TestClient, url: str, auth: dict[str, str], payload: dict) -> dict:
+    """发送一次 JSON-RPC 请求并打印状态码，失败时打印响应片段。"""
     response = client.post(url, headers=auth, json=payload)
     print(f"  {payload['method']:<24} -> HTTP {response.status_code}")
     if response.status_code != 200:
@@ -66,6 +69,7 @@ def _rpc(client: TestClient, url: str, auth: dict[str, str], payload: dict) -> d
 
 
 def check_mcp_handshake() -> None:
+    """按 deepchat 客户端形状校验 MCP 初始化、工具列表、调用与 GET 探测。"""
     print("\n== 1. MCP handshake ==")
     client, auth = _client()
     url = f"/mcp/agents/{FINANCE_AGENT}"
@@ -131,6 +135,7 @@ def check_mcp_handshake() -> None:
 
 
 def check_skill_export() -> None:
+    """校验财务数字员工技能导出接口返回的压缩包内容与下载地址。"""
     print("\n== 2. skill export ==")
     client, auth = _client()
 
@@ -165,6 +170,7 @@ def check_skill_export() -> None:
 
 
 def check_forbidden() -> None:
+    """校验错误密钥与越权员工访问返回预期的鉴权失败状态。"""
     print("\n== 3. auth failure shape ==")
     client, _ = _client()
     url = f"/mcp/agents/{FINANCE_AGENT}"

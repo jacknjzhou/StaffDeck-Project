@@ -21,6 +21,7 @@ from app.harness import command as command_module
 
 
 def test_command_registry_exposes_typed_exec_command() -> None:
+    """验证命令工具注册表只暴露 exec_command，且参数契约不含 cwd。"""
     registry = build_command_tool_registry()
 
     assert registry.names() == ("exec_command",)
@@ -37,6 +38,7 @@ def test_exec_command_fails_closed_without_bubblewrap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证宿主无 bubblewrap 等沙箱后端时执行失败关闭，返回 SANDBOX_UNAVAILABLE。"""
     monkeypatch.setattr(command_module.sys, "platform", "linux")
     monkeypatch.setattr(command_module.shutil, "which", lambda _name: None)
     monkeypatch.setattr(command_module, "available_backend", lambda: None)
@@ -66,6 +68,7 @@ def test_exec_command_rejects_background_processes(
     monkeypatch: pytest.MonkeyPatch,
     command: str,
 ) -> None:
+    """验证以 & 结尾的后台进程命令被 POSIX 校验器拒绝。"""
     # These cases exercise the POSIX validator. Keep them independent from
     # the host platform so Windows SRT readiness does not mask the assertion.
     monkeypatch.setattr(command_module.sys, "platform", "linux")
@@ -87,6 +90,7 @@ def test_exec_command_rejects_background_processes(
 def test_posix_validator_allows_foreground_redirection_and_quoted_ampersands(
     command: str,
 ) -> None:
+    """验证前台重定向与引号内 & 不被误判为后台进程。"""
     command_module._validate_command(command)
 
 
@@ -107,6 +111,7 @@ def test_posix_validator_allows_foreground_redirection_and_quoted_ampersands(
     ],
 )
 def test_posix_validator_allows_commands_without_a_static_blacklist(command: str) -> None:
+    """验证不维护静态命令黑名单，rm、curl、sudo 等命令均可通过校验。"""
     command_module._validate_command(command)
 
 
@@ -114,6 +119,7 @@ def test_exec_command_builds_fixed_isolated_argv_and_structured_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 bwrap 的隔离参数固定（只读根、绑定工作区、清空环境）并返回结构化结果。"""
     captured: dict[str, object] = {}
     workspace = (tmp_path / "workspace").resolve()
     monkeypatch.setattr(
@@ -131,6 +137,7 @@ def test_exec_command_builds_fixed_isolated_argv_and_structured_result(
         timeout_seconds: float,
         output_limit: int,
     ) -> command_module._BoundedProcessResult:
+        """记录传入的 argv 与限额，并返回固定的成功执行结果。"""
         captured.update(
             argv=list(argv),
             cwd=cwd,
@@ -194,6 +201,7 @@ def test_exec_command_allows_newline_separated_statements_inside_sandbox(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证多行脚本整体作为 -c 参数传入沙箱，不被拆分成多次执行。"""
     captured: dict[str, object] = {}
     monkeypatch.setattr(command_module, "available_backend", lambda: "bubblewrap")
     monkeypatch.setattr(
@@ -203,6 +211,7 @@ def test_exec_command_allows_newline_separated_statements_inside_sandbox(
     )
 
     def fake_run(argv, **_kwargs):
+        """记录 argv 并返回固定成功结果，避免真正启动进程。"""
         captured["argv"] = list(argv)
         return command_module._BoundedProcessResult(
             returncode=0,
@@ -227,6 +236,7 @@ def test_exec_command_allows_newline_separated_statements_inside_sandbox(
 
 
 def test_non_mount_sandbox_rewrites_model_visible_workspace_paths() -> None:
+    """验证 srt 等非挂载沙箱把 /workspace 前缀重写为相对路径，bubblewrap 保持不变。"""
     command = (
         "python /workspace/generate.py --input '/workspace/attachments/a.png'\n"
         "printf '%s' /workspace/output.png"
@@ -265,6 +275,7 @@ def test_windows_workspace_aliases_are_normalized_before_validation(
     command: str,
     expected: str,
 ) -> None:
+    """验证 Windows 下各种 workspace 路径别名被规范成相对路径后仍可校验。"""
     monkeypatch.setattr(command_module.sys, "platform", "win32")
 
     normalized = command_module._command_for_sandbox_workspace(command, "unsandboxed")
@@ -276,6 +287,7 @@ def test_windows_workspace_aliases_are_normalized_before_validation(
 def test_windows_other_absolute_paths_remain_unchanged_and_are_allowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证工作区之外的绝对路径不被重写，且 Windows 校验器仍然放行。"""
     monkeypatch.setattr(command_module.sys, "platform", "win32")
     command = r"Get-Content C:\Users\staffdeck\secret.txt"
 
@@ -289,17 +301,20 @@ def test_exec_command_accepts_workspace_alias_before_non_mount_rewrite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证执行前先把 /workspace 别名改写为相对路径，再交给 argv 构造。"""
     captured: dict[str, object] = {}
     monkeypatch.setattr(command_module.sys, "platform", "win32")
     monkeypatch.setattr(command_module, "available_backend", lambda: "unsandboxed")
 
     def fake_unsandboxed_argv(command: str) -> list[str]:
+        """记录改写后的命令文本，并返回最小 argv。"""
         captured["command"] = command
         return ["powershell.exe"]
 
     monkeypatch.setattr(command_module, "_unsandboxed_argv", fake_unsandboxed_argv)
 
     def fake_run(argv, **_kwargs):
+        """记录 argv 并返回固定成功结果，避免真正启动进程。"""
         captured["argv"] = list(argv)
         return command_module._BoundedProcessResult(
             returncode=0,
@@ -330,6 +345,7 @@ def test_exec_command_accepts_other_absolute_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证工作区外的 Windows 绝对路径仍可执行，不被校验器拦截。"""
     monkeypatch.setattr(command_module.sys, "platform", "win32")
     monkeypatch.setattr(command_module, "available_backend", lambda: "unsandboxed")
     monkeypatch.setattr(
@@ -358,6 +374,7 @@ def test_exec_command_accepts_other_absolute_paths(
 
 
 def test_exec_command_validates_every_line_of_multiline_script(tmp_path: Path) -> None:
+    """验证多行脚本逐行校验，任一行含后台进程即整体拒绝。"""
     result = _execute(
         tmp_path,
         {"command": "printf safe\nsleep 1 &"},
@@ -372,6 +389,7 @@ def test_exec_command_rejects_workspace_symlinks_before_start(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证工作区内存在指向外部的符号链接时，命令在启动前即被拒绝。"""
     workspace = tmp_path / "workspace"
     outside = tmp_path / "outside.txt"
     workspace.mkdir()
@@ -394,6 +412,7 @@ def test_exec_command_rejects_workspace_symlinks_before_start(
 
 
 def test_bubblewrap_network_policy_is_exact(tmp_path: Path) -> None:
+    """验证 bubblewrap 仅在 deny 模式隔离网络，all 模式不加网络命名空间。"""
     workspace = tmp_path.resolve()
     common = {
         "sandbox_executable": "/usr/bin/bwrap",
@@ -415,6 +434,7 @@ def test_bubblewrap_network_policy_is_exact(tmp_path: Path) -> None:
 def test_srt_all_network_requires_reviewed_runtime_patch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """验证未打运行时补丁时 srt 的 all 网络模式直接报策略不支持。"""
     monkeypatch.setattr(command_module, "_srt_supports_allow_all", lambda: False)
 
     with pytest.raises(HarnessExecutionError) as unsupported:
@@ -426,6 +446,7 @@ def test_srt_all_network_requires_reviewed_runtime_patch(
 def test_srt_network_settings_preserve_exact_modes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """验证 srt 在 all/allowlist/deny 三种模式下写出的网络配置各自精确对应。"""
     monkeypatch.setattr(command_module, "_srt_supports_allow_all", lambda: True)
 
     all_path = command_module._write_srt_settings(tmp_path, network_mode="all")
@@ -453,6 +474,7 @@ def test_srt_network_settings_preserve_exact_modes(
 def test_windows_srt_relies_on_dedicated_user_for_profile_isolation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """验证 Windows 下依赖专用用户隔离配置文件，因此 denyRead 不再重复屏蔽家目录敏感路径。"""
     monkeypatch.setattr(command_module.sys, "platform", "win32")
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
@@ -487,6 +509,7 @@ def test_windows_srt_relies_on_dedicated_user_for_profile_isolation(
     ],
 )
 def test_windows_validator_allows_workspace_power_shell_workflows(command: str) -> None:
+    """验证常规 PowerShell 读写与网络命令可通过 Windows 校验器。"""
     command_module._validate_windows_command(command)
 
 
@@ -499,6 +522,7 @@ def test_windows_validator_allows_workspace_power_shell_workflows(command: str) 
     ],
 )
 def test_windows_validator_allows_absolute_paths(command: str) -> None:
+    """验证本地盘符与 UNC 绝对路径均可通过 Windows 校验器。"""
     command_module._validate_windows_command(command)
 
 
@@ -512,6 +536,7 @@ def test_windows_validator_allows_absolute_paths(command: str) -> None:
     ],
 )
 def test_posix_validator_allows_absolute_and_home_paths(command: str) -> None:
+    """验证 POSIX 侧绝对路径与 ~ 家目录路径不被静态拦截。"""
     command_module._validate_command(command)
 
 
@@ -524,6 +549,7 @@ def test_posix_validator_allows_absolute_and_home_paths(command: str) -> None:
     ],
 )
 def test_posix_validator_allows_parent_directory_paths(command: str) -> None:
+    """验证 .. 上跳路径不被静态拦截，交由沙箱运行时约束。"""
     command_module._validate_command(command)
 
 
@@ -538,10 +564,12 @@ def test_posix_validator_allows_parent_directory_paths(command: str) -> None:
     ],
 )
 def test_windows_validator_allows_commands_without_a_static_blacklist(command: str) -> None:
+    """验证 Windows 侧同样不设静态命令黑名单，删除/启动进程等命令均放行。"""
     command_module._validate_windows_command(command)
 
 
 def test_windows_validator_still_rejects_implicit_host_profile_expansion() -> None:
+    """验证通过 $env:USERPROFILE 间接展开家目录敏感路径仍被拒绝。"""
     with pytest.raises(HarnessExecutionError) as denied:
         command_module._validate_windows_command("Get-Content $env:USERPROFILE\\.ssh\\id_rsa")
 
@@ -549,6 +577,7 @@ def test_windows_validator_still_rejects_implicit_host_profile_expansion() -> No
 
 
 def test_windows_validator_allows_parent_directory_paths() -> None:
+    """验证 Windows 下 .. 上跳路径不会被校验器拒绝。"""
     command_module._validate_windows_command(r"Get-Content ..\outside.txt")
 
 
@@ -562,6 +591,7 @@ def test_windows_validator_allows_parent_directory_paths() -> None:
 def test_windows_validator_explains_bash_and_python_runtime_mismatch(
     command: str,
 ) -> None:
+    """验证 bash heredoc、py 启动器等不兼容写法被拒绝，并给出 PowerShell 迁移提示。"""
     with pytest.raises(HarnessExecutionError) as denied:
         command_module._validate_windows_command(command)
 
@@ -570,6 +600,7 @@ def test_windows_validator_explains_bash_and_python_runtime_mismatch(
 
 
 def test_packaged_windows_shell_aliases_bundled_python(tmp_path: Path, monkeypatch) -> None:
+    """验证打包版 Windows shell 把 python3 别名为随包附带的解释器。"""
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "python.exe").write_bytes(b"bundled")
@@ -586,6 +617,7 @@ def test_packaged_windows_shell_aliases_bundled_python(tmp_path: Path, monkeypat
 def test_srt_protects_frozen_default_database_without_blocking_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """验证打包运行时屏蔽默认数据库及其附属文件，同时不阻断工作区读写。"""
     monkeypatch.setattr(command_module.sys, "platform", "linux")
     data_root = (tmp_path / "data").resolve()
     workspace = data_root / "harness_workspaces" / "task"
@@ -621,6 +653,7 @@ def test_srt_protects_frozen_default_database_without_blocking_workspace(
 def test_srt_process_uses_private_short_temporary_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """验证 srt 使用私有的短临时目录，且运行结束后该目录被清理。"""
     workspace = (tmp_path / "workspace").resolve()
     workspace.mkdir()
     settings_path = tmp_path / "srt-settings.json"
@@ -630,6 +663,7 @@ def test_srt_process_uses_private_short_temporary_directory(
     monkeypatch.setattr(command_module, "available_backend", lambda: "srt")
     monkeypatch.setattr(command_module, "ensure_backend_usable", lambda _backend: None)
     def fake_settings(*_args, **kwargs):
+        """记录传入的 srt 设置参数，并返回预先写好的配置文件。"""
         settings_kwargs.update(kwargs)
         return settings_path
 
@@ -637,6 +671,7 @@ def test_srt_process_uses_private_short_temporary_directory(
     monkeypatch.setattr(command_module, "_srt_argv", lambda **_kwargs: ["srt"])
 
     def fake_run(argv, **kwargs):
+        """记录 argv 与运行参数，并返回固定成功结果。"""
         captured.update(argv=list(argv), **kwargs)
         return command_module._BoundedProcessResult(
             returncode=0,
@@ -669,6 +704,7 @@ def test_srt_process_uses_private_short_temporary_directory(
 def test_srt_argv_uses_direct_command_mode_on_windows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """验证 Windows 下 srt 以 -c 直连模式传参，并通过 PowerShell 编码命令执行。"""
     node = tmp_path / "node.exe"
     cli = tmp_path / "cli.js"
     settings = tmp_path / "settings.json"
@@ -696,6 +732,7 @@ def test_srt_argv_uses_direct_command_mode_on_windows(
 def test_windows_broker_environment_keeps_system_paths_without_secrets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 Windows 托管进程环境保留系统路径与显式变量，但剔除 API Key 等机密。"""
     monkeypatch.setattr(command_module.sys, "platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\test\AppData\Local")
     monkeypatch.setenv("SystemRoot", r"C:\Windows")
@@ -716,6 +753,7 @@ def test_sandboxed_process_maps_structured_paths_and_cwd_for_bubblewrap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 bubblewrap 下 cwd、结构化 stdin 与白名单 env 路径都映射进 /workspace。"""
     workspace = (tmp_path / "task").resolve()
     skill_dir = workspace / "run" / "skill"
     skill_dir.mkdir(parents=True)
@@ -726,6 +764,7 @@ def test_sandboxed_process_maps_structured_paths_and_cwd_for_bubblewrap(
     monkeypatch.setattr(command_module, "_bubblewrap_executable", lambda: "/usr/bin/bwrap")
 
     def fake_run(argv, *, cwd, timeout_seconds, output_limit, stdin_bytes, env):
+        """记录 argv、cwd、stdin 与环境变量，并返回固定成功结果。"""
         captured.update(argv=list(argv), cwd=cwd, stdin=stdin_bytes, env=env)
         return command_module._BoundedProcessResult(
             returncode=0,
@@ -765,6 +804,7 @@ def test_sandboxed_process_maps_structured_paths_and_cwd_for_bubblewrap(
 
 
 def test_bounded_subprocess_caps_output_and_terminates_timeout(tmp_path: Path) -> None:
+    """验证子进程输出按上限截断，且超时后被终止并记录 timed_out。"""
     output = command_module._run_bounded_process(
         [sys.executable, "-c", "import sys; sys.stdout.write('x' * 4096)"],
         cwd=tmp_path,
@@ -791,6 +831,7 @@ def test_bounded_subprocess_caps_output_and_terminates_timeout(tmp_path: Path) -
 
 
 def test_bounded_subprocess_terminates_when_cancelled(tmp_path: Path) -> None:
+    """验证取消回调生效时立即终止子进程并抛出取消错误。"""
     started = command_module.time.monotonic()
 
     with pytest.raises(HarnessExecutionError) as cancelled:
@@ -810,6 +851,7 @@ def test_exec_command_output_is_capped_by_harness_result_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证请求的输出上限超过 harness 结果上限时，实际按上限的较小值截断。"""
     observed: dict[str, int] = {}
     monkeypatch.setattr(
         command_module,
@@ -825,6 +867,7 @@ def test_exec_command_output_is_capped_by_harness_result_limit(
         timeout_seconds: float,
         output_limit: int,
     ) -> command_module._BoundedProcessResult:
+        """记录实际传入的输出上限，并返回超时截断的结果。"""
         del cwd, timeout_seconds
         observed["output_limit"] = output_limit
         return command_module._BoundedProcessResult(
@@ -867,6 +910,7 @@ def _execute(
     *,
     limits: HarnessLimits | None = None,
 ):
+    """以给定模板工作区与限额执行一次 exec_command，供各用例复用装配逻辑。"""
     context = HarnessToolContext(
         run_id="run",
         task_frame_id="frame",
@@ -884,6 +928,7 @@ def _execute(
 
 
 def _option_values(argv: list[str], option: str) -> list[str]:
+    """取出 bwrap argv 中指定选项的取值，--bind 固定取两个参数。"""
     index = argv.index(option)
     if option == "--bind":
         return argv[index + 1 : index + 3]

@@ -4,6 +4,7 @@ from app.session.session_schema import StepAgentResult
 
 
 def test_dedupe_citations_preserves_first_four_and_relabels() -> None:
+    """验证引用去重保留前四条、忽略标题大小写与空白差异，并重新编号。"""
     citations = [
         {"title": " Alpha "},
         {"title": "alpha"},
@@ -22,6 +23,7 @@ def test_dedupe_citations_preserves_first_four_and_relabels() -> None:
 
 
 def test_skill_state_hides_unavailable_active_and_pending_skills() -> None:
+    """验证技能状态投影会隐藏不可见技能，只保留可见技能及其待办步骤。"""
     visible = Skill(
         tenant_id="tenant_test",
         skill_id="visible",
@@ -54,6 +56,7 @@ def test_skill_state_hides_unavailable_active_and_pending_skills() -> None:
 
 
 def test_reply_citation_and_title_projection_preserves_legacy_rules() -> None:
+    """验证会话标题兜底、越界引用标签归一化与尾部参考资料剥离保持旧行为。"""
     assert ConversationProjection.fallback_session_title("  请问 A？ ") == "请问 A"
     assert (
         ConversationProjection.normalize_reply_citation_labels("有效[1] 无效[9]", [{}, {}])
@@ -65,6 +68,7 @@ def test_reply_citation_and_title_projection_preserves_legacy_rules() -> None:
 
 
 def test_assistant_metadata_uses_injected_citation_deduper() -> None:
+    """验证助手元数据生成时确实调用了注入的引用去重器，并采用其返回值。"""
     calls: list[list[dict[str, object]]] = []
     metadata = ConversationProjection.assistant_message_metadata(
         StepAgentResult(
@@ -85,6 +89,7 @@ def test_assistant_metadata_uses_injected_citation_deduper() -> None:
 
 
 def test_assistant_metadata_uses_latest_knowledge_result_window() -> None:
+    """验证助手元数据只采用最近一次知识检索结果作为问题与引用来源。"""
     metadata = ConversationProjection.assistant_message_metadata(
         StepAgentResult(
             knowledge_results=[

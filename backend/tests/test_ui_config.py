@@ -14,6 +14,7 @@ from app.harness.sandbox import SandboxDiagnostics
 
 
 def test_runtime_settings_action_limit_matches_backend_contract() -> None:
+    """验证运行时配置的默认动作上限与后端契约一致，超出范围会被拒绝。"""
     request = UIConfigUpdateRequest(tenant_id="tenant_demo")
     row = UIConfig(tenant_id="tenant_demo")
 
@@ -28,6 +29,7 @@ def test_runtime_settings_action_limit_matches_backend_contract() -> None:
 
 
 def test_context_runtime_settings_validate_related_limits() -> None:
+    """验证上下文限额的联动校验：摘要预算不得超过总预算，角色列表不能为空。"""
     with pytest.raises(ValidationError, match="不能超过上下文预算"):
         UIConfigUpdateRequest(
             tenant_id="tenant_demo",
@@ -43,8 +45,11 @@ def test_context_runtime_settings_validate_related_limits() -> None:
 
 
 def test_agent_loop_reads_tenant_context_runtime_settings() -> None:
+    """验证 AgentLoop 读取租户级上下文设置并映射为内部配置对象。"""
     class FakeDatabase:
+        """用固定配置替代真实数据库，隔离租户级设置的读取。"""
         def get(self, _model: object, _tenant_id: str) -> UIConfig:
+            """返回固定的租户 UI 配置。"""
             return UIConfig(
                 tenant_id="tenant_demo",
                 context_token_budget=48_000,
@@ -71,8 +76,11 @@ def test_agent_loop_reads_tenant_context_runtime_settings() -> None:
 
 
 def test_agent_loop_honors_runtime_settings_action_limit() -> None:
+    """验证 AgentLoop 采用租户配置的动作上限而非内置默认值。"""
     class FakeDatabase:
+        """用固定的高动作上限配置替代真实数据库。"""
         def get(self, _model: object, _tenant_id: str) -> UIConfig:
+            """返回动作上限为 100 的租户配置。"""
             return UIConfig(tenant_id="tenant_demo", agent_loop_max_actions=100)
 
     loop = object.__new__(AgentLoop)
@@ -84,6 +92,7 @@ def test_agent_loop_honors_runtime_settings_action_limit() -> None:
 def test_ui_config_read_fails_closed_for_unknown_network_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证未知网络策略按拒绝处理，同时清洗并保留合法允许域名。"""
     monkeypatch.setattr(
         ui_config_module,
         "diagnostics",
@@ -112,6 +121,7 @@ def test_ui_config_read_fails_closed_for_unknown_network_policy(
 def test_windows_setup_prompt_is_based_on_backend_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 Windows 平台下按后端主机生成沙盒安装提示与命令。"""
     monkeypatch.setattr(ui_config_module.sys, "platform", "win32")
     monkeypatch.setattr(
         ui_config_module,
@@ -140,6 +150,7 @@ def test_windows_setup_prompt_is_based_on_backend_host(
 def test_sandbox_is_disabled_by_default_without_running_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证沙盒默认关闭，且关闭状态下不触发诊断探测。"""
     monkeypatch.setattr(
         ui_config_module,
         "diagnostics",
@@ -156,6 +167,7 @@ def test_sandbox_is_disabled_by_default_without_running_diagnostics(
 def test_sandbox_toggle_schedules_application_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证开启沙盒后标记需要重启应用才能生效。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -192,6 +204,7 @@ def test_sandbox_toggle_schedules_application_restart(
 def test_context_runtime_settings_persist_without_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证上下文设置可直接持久化生效，无需重启应用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

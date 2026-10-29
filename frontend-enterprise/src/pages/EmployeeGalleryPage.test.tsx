@@ -29,6 +29,7 @@ const team: TeamRead = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+/** 构造仅包含 ok/status 与 JSON 文本体的伪 Response 对象。 */
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -38,6 +39,7 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+/** 按 URL 分发员工画廊所需的 fetch 假数据，并返回该 mock 以便断言调用。 */
 function stubGalleryFetch(teams: TeamRead[]) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -52,11 +54,13 @@ function stubGalleryFetch(teams: TeamRead[]) {
   return fetchMock;
 }
 
+/** 渲染当前路由的 pathname 与 search，供断言跳转目标。 */
 function LocationEcho() {
   const location = useLocation();
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
 }
 
+/** 在内存路由与 I18n Provider 中渲染员工画廊页，并挂载跳转回显路由。 */
 function renderGallery(currentUser?: EnterpriseAuthUser) {
   return render(
     <I18nProvider>
@@ -77,6 +81,7 @@ afterEach(() => {
 });
 
 describe('EmployeeGalleryPage teams tab', () => {
+  /** 验证团队卡片展示成员数、项目领导与折叠的头像叠放。 */
   it('renders team chat cards with member count, project leader and avatar stack', async () => {
     const user = userEvent.setup();
     stubGalleryFetch([team]);
@@ -93,6 +98,7 @@ describe('EmployeeGalleryPage teams tab', () => {
     expect(within(section).getByText('+1')).toBeTruthy();
   });
 
+  /** 验证当前用户不是团队所有者时仍渲染租户内的团队。 */
   it('renders tenant teams even when the current user is not the team owner', async () => {
     const user = userEvent.setup();
     stubGalleryFetch([team]);
@@ -109,6 +115,7 @@ describe('EmployeeGalleryPage teams tab', () => {
     expect(within(section).getByText('增长团队')).toBeTruthy();
   });
 
+  /** 验证首次团队请求失败后，打开团队页签会重试并成功展示。 */
   it('retries a failed team request when the teams tab is opened', async () => {
     const user = userEvent.setup();
     let teamRequestCount = 0;
@@ -140,6 +147,7 @@ describe('EmployeeGalleryPage teams tab', () => {
     expect(teamRequestCount).toBe(2);
   });
 
+  /** 验证点击团队卡片会进入聊天应用中的持久团队群聊。 */
   it('opens the persistent team group in the chat app', async () => {
     const user = userEvent.setup();
     const fetchMock = stubGalleryFetch([team]);
@@ -154,6 +162,7 @@ describe('EmployeeGalleryPage teams tab', () => {
     expect(String(postCall?.[0])).toContain('/api/enterprise/teams/team-1/tl/session');
   });
 
+  /** 验证员工相关页签下不渲染团队区块。 */
   it('does not render the team section on employee tabs', async () => {
     const user = userEvent.setup();
     stubGalleryFetch([team]);
@@ -166,6 +175,7 @@ describe('EmployeeGalleryPage teams tab', () => {
     expect(screen.queryByRole('region', { name: '团队' })).toBeNull();
   });
 
+  /** 验证没有任何团队时展示团队空状态。 */
   it('shows the teams empty state when there are no teams', async () => {
     const user = userEvent.setup();
     stubGalleryFetch([]);

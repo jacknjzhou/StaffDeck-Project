@@ -21,9 +21,12 @@ const draft: ScheduledTaskDraftRead = {
   confidence: 1,
 };
 
+/** 每个用例结束后卸载已渲染的组件。 */
 afterEach(cleanup);
 
+/** ScheduledDraftCard 的确认与忽略交互。 */
 describe('ScheduledDraftCard actions', () => {
+  /** 验证卡片展示完整草稿内容，确认时回调收到该草稿。 */
   it('confirms the complete persisted draft', async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();
@@ -39,6 +42,7 @@ describe('ScheduledDraftCard actions', () => {
     expect(onConfirm).toHaveBeenCalledWith(draft);
   });
 
+  /** 验证点击忽略只触发忽略回调，不触发确认回调。 */
   it('dismisses without confirming', async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();

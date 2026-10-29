@@ -15,6 +15,7 @@ from app.distributed import lease as lease_mod
 
 
 def test_role_lease_conflict_raises(monkeypatch):
+    """验证同角色重复获取租约时抛出冲突错误，释放后可再次获取。"""
     fake = fakeredis.FakeStrictRedis()
     monkeypatch.setattr(lease_mod, "_build_client", lambda url: fake)
     # 本机默认 redis_url 为空会直接跳过，需注入一个已配置 Redis 的 Settings。
@@ -31,22 +32,27 @@ def test_role_lease_conflict_raises(monkeypatch):
 def test_no_redis_url_returns_none(monkeypatch):
     # acquire_role_lease 在函数体内 import get_settings，patch 源头即可生效；
     # kwargs 构造优先级高于环境变量，不受宿主机 STAFFDECK_REDIS_URL 干扰。
+    """验证未配置 redis_url 时获取角色租约直接返回 None。"""
     settings = Settings(redis_url="", database_url="postgresql+psycopg://x")
     monkeypatch.setattr("app.config.get_settings", lambda: settings)
     assert lease_mod.acquire_role_lease("api") is None
 
 
 class _FakeLease:
+    """租约替身对象，记录续期次数与释放状态。"""
     def __init__(self, capability: str) -> None:
+        """记录能力名并初始化释放标记与续期计数。"""
         self.capability = capability
         self.released = False
         self.renewed = 0
 
     def renew(self) -> bool:
+        """累加续期次数并返回成功，用于断言续期线程确实工作。"""
         self.renewed += 1
         return True
 
     def release(self) -> None:
+        """标记租约已释放，供 shutdown 断言。"""
         self.released = True
 
 
@@ -61,6 +67,7 @@ def _patch_settings(monkeypatch, **overrides):
 
 
 def test_pg_startup_uses_role_leases_without_file_lock(monkeypatch):
+    """验证 PG 模式启动只获取角色租约、不拿文件锁，关闭时统一释放。"""
     main_mod = _patch_settings(
         monkeypatch,
         database_url="postgresql+psycopg://x",
@@ -76,6 +83,7 @@ def test_pg_startup_uses_role_leases_without_file_lock(monkeypatch):
     )
 
     def fake_acquire(capability):
+        """记录租约获取顺序并返回可断言的替身租约。"""
         calls.append(f"lease:{capability}")
         lease = _FakeLease(capability)
         held.append(lease)
@@ -95,6 +103,7 @@ def test_pg_startup_uses_role_leases_without_file_lock(monkeypatch):
 
 
 def test_sqlite_startup_keeps_file_lock(monkeypatch):
+    """验证 SQLite 模式启动仍用文件锁，未配置 Redis 时不持有租约。"""
     main_mod = _patch_settings(monkeypatch, database_url="sqlite:///./wiring-test.db")
     calls: list[str] = []
     monkeypatch.setattr(
@@ -119,6 +128,7 @@ def test_sqlite_startup_keeps_file_lock(monkeypatch):
 
 
 def test_startup_failure_releases_leases_and_file_lock(monkeypatch):
+    """验证启动主体抛错时已持有的租约与文件锁都被释放。"""
     main_mod = _patch_settings(
         monkeypatch,
         database_url="sqlite:///./wiring-test.db",
@@ -129,11 +139,13 @@ def test_startup_failure_releases_leases_and_file_lock(monkeypatch):
     leases: list[_FakeLease] = []
 
     def fake_acquire(capability):
+        """返回替身租约并记录，便于断言异常路径已释放。"""
         lease = _FakeLease(capability)
         leases.append(lease)
         return lease
 
     def boom():
+        """模拟启动主体失败以触发异常清理路径。"""
         raise RuntimeError("boom")
 
     monkeypatch.setattr(main_mod, "acquire_runtime_instance_lock", lambda: None)
@@ -171,6 +183,7 @@ def test_held_leases_are_renewed_while_process_runs(monkeypatch):
     held: list[_FakeLease] = []
 
     def fake_acquire(capability):
+        """返回替身租约并记录，便于统计续期次数。"""
         lease = _FakeLease(capability)
         held.append(lease)
         return lease

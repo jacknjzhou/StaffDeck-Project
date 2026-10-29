@@ -21,6 +21,7 @@ from app.public_api.auth import PublicPrincipal
 
 @pytest.fixture()
 def seeded():
+    """构建内存 SQLite 库并写入演示种子数据，产出会话与全权限 PublicPrincipal。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -37,6 +38,7 @@ def seeded():
 
 
 def _agent(db: Session, name: str) -> AgentProfile:
+    """按名称取出非汇总员工，取不到时断言失败。"""
     row = db.exec(
         select(AgentProfile).where(
             AgentProfile.name == name,
@@ -48,12 +50,14 @@ def _agent(db: Session, name: str) -> AgentProfile:
 
 
 def _gallery_agents(db: Session) -> list[AgentProfile]:
+    """返回全部非汇总员工，即对外展示的员工画廊。"""
     return list(
         db.exec(select(AgentProfile).where(AgentProfile.is_overall == False)).all()
     )
 
 
 def test_seeded_employees_satisfy_the_contract(seeded):
+    """验证 10 名种子员工的载荷都能通过 deepchat_contract 校验，且不下发 tenant_id。"""
     db, principal = seeded
     payloads = [build_employee(principal, agent, db) for agent in _gallery_agents(db)]
     assert len(payloads) == 10
@@ -63,6 +67,7 @@ def test_seeded_employees_satisfy_the_contract(seeded):
 
 
 def test_payload_maps_profile_fields_and_capabilities(seeded):
+    """验证画像字段映射：角色、启用状态、本地执行模式与系统提示，未配置的 greeting/avatar 为 None，标签去重且保序。"""
     db, principal = seeded
     payload = build_employee(principal, _agent(db, "财务"), db)
     assert payload["name"] == "财务"
@@ -78,6 +83,7 @@ def test_payload_maps_profile_fields_and_capabilities(seeded):
 
 
 def test_tools_are_namespaced_and_never_leak_credentials(seeded):
+    """验证工具名统一加 staffdeck_ 前缀，且请求头、令牌与 URL 等凭证信息不会出现在载荷中。"""
     db, principal = seeded
     db.add(
         Tool(
@@ -112,6 +118,7 @@ def test_tools_are_namespaced_and_never_leak_credentials(seeded):
 
 
 def test_skill_ids_come_from_bound_general_skills_with_download_links(seeded):
+    """验证 skillIds 只含已发布的通用技能，且 skills 下载链接以 :export-skill 结尾。"""
     db, principal = seeded
     payload = build_employee(principal, _agent(db, "人事"), db)
     published = {
@@ -133,6 +140,7 @@ def test_skill_ids_come_from_bound_general_skills_with_download_links(seeded):
 
 
 def test_knowledge_sync_is_opt_out(seeded):
+    """验证知识库同步默认开启，只有版本 metadata 中 deepchat_sync_enabled 显式为 False 时才从 knowledgeBaseIds 排除。"""
     db, principal = seeded
     finance = _agent(db, "财务")
     visible = sorted(visible_knowledge_base_versions(db, "tenant_demo", finance.id))
@@ -154,6 +162,7 @@ def test_knowledge_sync_is_opt_out(seeded):
 
 
 def test_remote_mode_stops_shipping_sops_but_hybrid_routes_per_sop(seeded):
+    """验证 remote 模式不再下发 SOP 但仍下发技能包，hybrid 下只有显式 execution_hint=remote 的 SOP 被外派。"""
     db, principal = seeded
     finance = _agent(db, "财务")
     bindings = list(
@@ -191,6 +200,7 @@ def test_remote_mode_stops_shipping_sops_but_hybrid_routes_per_sop(seeded):
 
 
 def test_oversized_sop_is_clamped_with_a_warning(seeded):
+    """验证超长 SOP 会被截断并产生含“截断”的 warning，载荷仍能通过契约校验。"""
     db, principal = seeded
     finance = _agent(db, "财务")
     branch = db.exec(
@@ -214,6 +224,7 @@ def test_oversized_sop_is_clamped_with_a_warning(seeded):
 
 
 def test_config_hash_changes_only_when_content_changes(seeded):
+    """验证内容不变时 configHash 保持稳定，改动员工描述后 configHash 随之变化。"""
     db, principal = seeded
     finance = _agent(db, "财务")
     first = build_employee(principal, finance, db)
@@ -228,6 +239,7 @@ def test_config_hash_changes_only_when_content_changes(seeded):
 
 
 def test_list_payload_is_deterministic_and_versioned(seeded):
+    """验证列表按名称排序、输入顺序不影响结果，且 configVersion 带 v1: 前缀。"""
     db, principal = seeded
     agents = _gallery_agents(db)
     first = build_employee_list(principal, agents, db)

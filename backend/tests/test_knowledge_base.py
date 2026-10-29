@@ -60,6 +60,7 @@ from app.skills.skill_schema import SkillCard
 
 
 def test_skill_card_rejects_legacy_steps_and_accepts_graph() -> None:
+    """验证技能卡拒绝旧的 steps 字段，并接受节点图形式的技能定义。"""
     with pytest.raises(Exception):
         SkillCard(
             skill_id="skill_test",
@@ -108,6 +109,7 @@ def test_skill_card_rejects_legacy_steps_and_accepts_graph() -> None:
 
 
 def test_knowledge_ingest_creates_document_buckets_and_chunks_without_auto_discovery() -> None:
+    """验证知识摄取会生成文档卡、分桶与切片，且不自动产生发现建议。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -173,6 +175,7 @@ def test_knowledge_ingest_creates_document_buckets_and_chunks_without_auto_disco
 
 
 def test_related_chunk_expansion_returns_all_siblings_in_source_order() -> None:
+    """验证关联切片扩展会按原文顺序补全同组全部片段。"""
     chunks = [
         KnowledgeChunk(
             id=f"chunk_{index}",
@@ -195,6 +198,7 @@ def test_related_chunk_expansion_returns_all_siblings_in_source_order() -> None:
 
 
 def test_related_chunk_expansion_is_bounded_around_hit() -> None:
+    """验证关联切片扩展受数量与字符预算约束，并保持原文顺序。"""
     chunks = [
         KnowledgeChunk(
             id=f"chunk_{index}",
@@ -220,6 +224,7 @@ def test_related_chunk_expansion_is_bounded_around_hit() -> None:
 
 
 def test_related_groups_only_link_parts_from_one_oversized_paragraph() -> None:
+    """验证只有超长段落切分出的部分才互相归入同一关联组。"""
     groups = _chunk_text_related_groups(
         "# 流程标题\n\n第一条独立说明。\n\n第二条独立说明。\n\n" + ("连续正文。" * 300),
         300,
@@ -232,6 +237,7 @@ def test_related_groups_only_link_parts_from_one_oversized_paragraph() -> None:
 
 
 def test_diverse_chunk_hits_cover_selected_buckets_before_filling() -> None:
+    """验证多样化切片选取会先覆盖每个选中分桶，再补齐剩余名额。"""
     buckets = [
         KnowledgeBucket(
             id=f"bucket_{index}",
@@ -270,6 +276,7 @@ def test_diverse_chunk_hits_cover_selected_buckets_before_filling() -> None:
 
 
 def test_docx_headings_are_preserved_and_numbered_body_items_are_not_sections() -> None:
+    """验证 docx 标题层级被保留，正文中的编号条目不会被误判为章节。"""
     document = Document()
     document.add_heading("HR 模块", level=1)
     document.add_heading("入离职办理", level=2)
@@ -289,14 +296,19 @@ def test_docx_headings_are_preserved_and_numbered_body_items_are_not_sections() 
 
 
 def test_pdf_pages_receive_stable_section_labels(monkeypatch) -> None:
+    """验证 PDF 每页生成稳定的章节标签，空白页被跳过。"""
     class FakePage:
+        """模拟 pypdf 页面对象，只暴露测试需要的文本提取能力。"""
         def __init__(self, text: str):
+            """保存该页的文本内容。"""
             self.text = text
 
         def extract_text(self) -> str:
+            """返回构造时保存的页面文本。"""
             return self.text
 
     class FakeReader:
+        """模拟 pypdf 阅读器，用固定页面列表替代真实 PDF 解析。"""
         pages = [FakePage("First page policy"), FakePage(""), FakePage("Third page process")]
 
     monkeypatch.setattr("pypdf.PdfReader", lambda _stream: FakeReader())
@@ -311,6 +323,7 @@ def test_pdf_pages_receive_stable_section_labels(monkeypatch) -> None:
 
 
 def test_long_section_continuations_share_one_related_section() -> None:
+    """验证同一长章节被切分后的各部分共享同一个关联章节标识。"""
     paragraphs = [f"{index}. 流程内容" + ("说明" * 150) for index in range(1, 9)]
 
     sections = _build_section_nodes("# 办理流程\n\n" + "\n\n".join(paragraphs))
@@ -321,6 +334,7 @@ def test_long_section_continuations_share_one_related_section() -> None:
 
 
 def test_knowledge_ingest_cancel_queued_job_clears_embedded_content() -> None:
+    """验证取消排队中的摄取任务会清空内嵌内容并标记为已取消。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -346,6 +360,7 @@ def test_knowledge_ingest_cancel_queued_job_clears_embedded_content() -> None:
 
 
 def test_knowledge_ingest_cancel_running_job_cleans_partial_artifacts() -> None:
+    """验证取消运行中的摄取任务会清理半成品文档、分桶、切片、概念与建议。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -441,6 +456,7 @@ def test_knowledge_ingest_cancel_running_job_cleans_partial_artifacts() -> None:
 
 
 def test_knowledge_ingest_stale_cancel_request_finalizes_without_worker() -> None:
+    """验证没有 worker 处理时，过期取消请求可被直接终结为已取消。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -482,6 +498,7 @@ def test_knowledge_ingest_stale_cancel_request_finalizes_without_worker() -> Non
 
 
 def test_knowledge_search_without_model_uses_relevance_rank_order() -> None:
+    """验证未指定模型时检索按相关度排序，噪声分桶不会被选中。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -564,6 +581,7 @@ def test_knowledge_search_without_model_uses_relevance_rank_order() -> None:
 
 
 def test_model_driven_document_route_does_not_fall_back_to_lexical_matching(monkeypatch) -> None:
+    """验证模型路由无结果时不会退化成词面匹配。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -598,6 +616,7 @@ def test_model_driven_document_route_does_not_fall_back_to_lexical_matching(monk
 
 
 def test_model_route_failure_falls_back_to_lexical_matching(monkeypatch) -> None:
+    """验证模型路由失败时回退到词面匹配，仍能召回相关切片。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -656,6 +675,7 @@ def test_model_route_failure_falls_back_to_lexical_matching(monkeypatch) -> None
 
 
 def test_document_loading_does_not_hide_relevant_rows_after_first_40() -> None:
+    """验证文档加载不会截断候选集，靠后的相关文档仍能进入路由。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -701,6 +721,7 @@ def test_document_loading_does_not_hide_relevant_rows_after_first_40() -> None:
 
 
 def test_document_route_card_keeps_late_outline_entries() -> None:
+    """验证路由用文档卡保留完整大纲，靠后的章节条目不被丢弃。"""
     document = KnowledgeDocument(
         id="kdoc_hr",
         tenant_id="tenant_demo",
@@ -725,6 +746,7 @@ def test_document_route_card_keeps_late_outline_entries() -> None:
 
 
 def test_query_scoring_reduces_generic_question_noise() -> None:
+    """验证查询打分能降低通用疑问词带来的噪声。"""
     query = "怎么申请离职"
 
     assert _score_text(query, "员工申请离职后进入标准审批流程") > _score_text(
@@ -733,6 +755,7 @@ def test_query_scoring_reduces_generic_question_noise() -> None:
 
 
 def test_knowledge_search_records_persistent_substep_spans() -> None:
+    """验证检索过程会为各子步骤记录持久化 span 事件。"""
     events: list[tuple[str, dict]] = []
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -810,6 +833,7 @@ def test_knowledge_search_records_persistent_substep_spans() -> None:
 
 
 def test_legacy_knowledge_without_new_metadata_remains_searchable() -> None:
+    """验证缺少新元数据的旧知识仍可被检索到。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -861,6 +885,7 @@ def test_legacy_knowledge_without_new_metadata_remains_searchable() -> None:
 
 
 def test_okf_search_does_not_require_manually_curated_business_terms() -> None:
+    """验证 OKF 概念检索不依赖人工维护的业务词表。"""
     concept = KnowledgeConcept(
         tenant_id="tenant_demo",
         knowledge_base_id="kb_demo",
@@ -875,9 +900,11 @@ def test_okf_search_does_not_require_manually_curated_business_terms() -> None:
 
 
 def test_knowledge_search_api_uses_selected_model_config(monkeypatch) -> None:
+    """验证检索接口使用请求中指定的模型配置。"""
     captured: dict[str, str | None] = {}
 
     def fake_search(self, request, model_config=None):  # noqa: ANN001
+        """伪造检索服务，记录传入的模型配置并返回最小响应。"""
         captured["model_id"] = model_config.id if model_config else None
         return KnowledgeSearchResponse(route_trace=[{"phase": "ok"}])
 
@@ -925,6 +952,7 @@ def test_knowledge_search_api_uses_selected_model_config(monkeypatch) -> None:
 
 
 def test_knowledge_base_read_keeps_archived_rows_visible_despite_active_versions() -> None:
+    """验证知识库已归档时，读取接口仍返回归档状态而非活跃版本状态。"""
     row = KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库", status="archived")
     version = KnowledgeBaseVersion(
         tenant_id="tenant_demo",
@@ -947,6 +975,7 @@ def test_knowledge_base_read_keeps_archived_rows_visible_despite_active_versions
 
 
 def test_list_documents_without_agent_scope_returns_only_open_gallery_documents() -> None:
+    """验证未指定智能体范围时只返回开放广场已绑定的文档。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="开放广场", is_overall=True))
@@ -1004,6 +1033,7 @@ def test_list_documents_without_agent_scope_returns_only_open_gallery_documents(
 
 
 def test_update_document_syncs_document_card_and_okf_source_concept() -> None:
+    """验证更新文档标题会同步文档卡与来源概念，并清理旧概念。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1089,6 +1119,7 @@ def test_update_document_syncs_document_card_and_okf_source_concept() -> None:
 
 
 def test_update_document_content_rebuilds_all_derived_knowledge() -> None:
+    """验证更新正文会重建分桶、切片与概念等全部派生知识。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1185,6 +1216,7 @@ def test_update_document_content_rebuilds_all_derived_knowledge() -> None:
 
 
 def test_update_document_content_rejects_stale_editor_revision() -> None:
+    """验证编辑器提交过期版本内容时更新被拒绝并返回 409。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1215,6 +1247,7 @@ def test_update_document_content_rejects_stale_editor_revision() -> None:
 
 
 def test_update_chunk_refreshes_bucket_content_and_okf_topic() -> None:
+    """验证更新切片会刷新分桶内容与 OKF 主题概念。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1289,6 +1322,7 @@ def test_update_chunk_refreshes_bucket_content_and_okf_topic() -> None:
 
 
 def test_confirm_discovery_is_required_before_tool_or_skill_enters_runtime() -> None:
+    """验证工具需先确认知识发现才写入运行时，且不会误建技能。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1318,6 +1352,7 @@ def test_confirm_discovery_is_required_before_tool_or_skill_enters_runtime() -> 
 
 
 def test_confirm_discovery_rejects_tool_without_url() -> None:
+    """验证缺少 url 的工具建议被拒绝，并保持待处理状态。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1341,6 +1376,7 @@ def test_confirm_discovery_rejects_tool_without_url() -> None:
 
 
 def test_confirm_discovery_api_returns_422_for_invalid_skill() -> None:
+    """验证非法技能建议经 API 确认时返回 422 且不落库。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1371,6 +1407,7 @@ def test_confirm_discovery_api_returns_422_for_invalid_skill() -> None:
 
 
 def test_confirm_discovery_api_returns_409_for_non_pending_status() -> None:
+    """验证非待处理状态的建议经 API 确认时返回 409。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1401,6 +1438,7 @@ def test_confirm_discovery_api_returns_409_for_non_pending_status() -> None:
 
 
 def test_confirm_discovery_rejects_noncanonical_skill_graph() -> None:
+    """验证使用旧字段的非规范节点图技能建议被拒绝且不落库。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1441,6 +1479,7 @@ def test_confirm_discovery_rejects_noncanonical_skill_graph() -> None:
 
 
 def test_confirm_discovery_does_not_overwrite_existing_skill() -> None:
+    """验证知识发现不会覆盖已存在的同 ID 技能。"""
     card = SkillCard(
         skill_id="expense.travel_approval",
         name="知识发现技能",
@@ -1492,6 +1531,7 @@ def test_confirm_discovery_does_not_overwrite_existing_skill() -> None:
 
 @pytest.mark.parametrize("status", ["confirmed", "rejected", "invalid"])
 def test_confirm_discovery_only_allows_pending_status(status: str) -> None:
+    """验证只有待处理状态的建议允许被确认。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1514,6 +1554,7 @@ def test_confirm_discovery_only_allows_pending_status(status: str) -> None:
 
 
 def test_confirm_discovery_rolls_back_resource_when_status_commit_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证状态提交失败时会回滚已创建的工具资源。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(KnowledgeBase(id="kb_demo", tenant_id="tenant_demo", name="默认知识库"))
@@ -1541,6 +1582,7 @@ def test_confirm_discovery_rolls_back_resource_when_status_commit_fails(monkeypa
 
 
 def test_discovered_skill_rejects_unknown_fields_instead_of_dropping_them() -> None:
+    """验证发现技能拒绝未知字段，而不是静默丢弃。"""
     payload = {
         "skill_id": "expense.travel_approval",
         "name": "差旅报销审批",
@@ -1563,6 +1605,7 @@ def test_discovered_skill_rejects_unknown_fields_instead_of_dropping_them() -> N
 
 
 def test_discovered_skill_requires_connected_start_to_terminal_graph() -> None:
+    """验证发现技能要求从开始节点可达全部节点，并能到达结束节点。"""
     payload = {
         "skill_id": "expense.travel_approval",
         "name": "差旅报销审批",
@@ -1601,6 +1644,7 @@ def test_discovered_skill_requires_connected_start_to_terminal_graph() -> None:
 
 
 def test_discovery_only_marks_valid_skill_as_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证知识发现只把校验通过的技能标为待处理，非法输出标为无效。"""
     valid_skill = {
         "skill_id": "expense.travel_approval",
         "name": "差旅报销审批",
@@ -1706,10 +1750,12 @@ def test_discovery_only_marks_valid_skill_as_pending(monkeypatch: pytest.MonkeyP
 
 
 def _b64(text: str) -> str:
+    """把文本编码为 base64 字符串，供摄取接口的内容字段使用。"""
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 def _test_session():
+    """创建内存 SQLite 会话，保证每个用例使用独立数据库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

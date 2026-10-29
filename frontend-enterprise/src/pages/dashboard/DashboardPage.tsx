@@ -50,6 +50,13 @@ import { isTeamScope, readEmployeeScope } from '../../lib/agent-scope-storage';
 
 const ENTERPRISE_AGENT_STORAGE_KEY = 'ultrarag_enterprise_agent_scope';
 
+/**
+ * 数字员工工作台页面：展示员工档案、资源指标与各分区标签页。
+ *
+ * - 挂载或切换员工时并发拉取代理、技能、知识库、模型、工具、会话、反馈与定时任务。
+ * - 当前选中的员工不在可见列表内时，自动回退到默认员工并同步全局作用域。
+ * - 管理员未选择员工时展示开放广场概览。
+ */
 export default function DashboardPage({
   currentUser,
   isAdmin = false,
@@ -78,6 +85,7 @@ export default function DashboardPage({
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    /** 响应全局员工作用域变更事件，忽略团队作用域并回落到本地存储的员工 ID。 */
     const onScopeChange = (event: Event) => {
       const next = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
       setAgentId(next && !isTeamScope(next) ? next : readEmployeeScope());
@@ -150,6 +158,7 @@ export default function DashboardPage({
 
   useEffect(() => {
     let cancelled = false;
+    /** 拉取选中员工的工作记录事件；广场代理或请求失败时清空列表。 */
     async function loadWorkRecord() {
       if (!selectedAgent || selectedAgent.is_overall) {
         setActivityEvents([]);
@@ -409,6 +418,7 @@ export default function DashboardPage({
   );
 }
 
+/** 渲染开放广场概览中的统计卡片（标题、数值与图标）。 */
 function DashboardStat({ title, value, icon }: { title: string; value: number; icon: ReactNode }) {
   return (
     <div className="org-dashboard-card">
@@ -421,6 +431,7 @@ function DashboardStat({ title, value, icon }: { title: string; value: number; i
   );
 }
 
+/** 判断知识库是否为可忽略的空默认知识库，用于在统计中过滤占位数据。 */
 function isEmptyDefaultKnowledgeBase(item: KnowledgeBaseRead): boolean {
   const hasRuntimeKnowledge = item.document_count > 0 || item.bucket_count > 0 || item.chunk_count > 0;
   if (!hasRuntimeKnowledge && item.metadata?.created_from_document_upload && !item.metadata?.source_document_id) {
@@ -434,6 +445,7 @@ function isEmptyDefaultKnowledgeBase(item: KnowledgeBaseRead): boolean {
   );
 }
 
+/** 渲染广场头部的指标块，展示标签与对应数值。 */
 function MetricTile({ label, value }: { label: string; value: number }) {
   return (
     <div className="employee-metric-tile">
@@ -457,6 +469,7 @@ const PROFILE_TABS: {
   { key: 'logs', label: '对话日志', Icon: IconProfileCalendar, route: EnterpriseRoute.Feedback },
 ];
 
+/** 渲染员工档案分区标签页，切换时跳转到对应路由。 */
 function EmployeeProfileTabs({ activeKey = 'work' }: { activeKey?: ProfileTabKey }) {
   const navigate = useNavigate();
   return (
@@ -487,6 +500,7 @@ function EmployeeProfileTabs({ activeKey = 'work' }: { activeKey?: ProfileTabKey
   );
 }
 
+/** 渲染员工头部的资源指标项，展示数值与标签。 */
 function HeroMetric({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex flex-1 items-end gap-1 rounded-[10px] bg-[#f6f6f6] px-5 py-2">
@@ -496,6 +510,7 @@ function HeroMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
+/** 压缩空白并截断超长摘要，超出长度时追加省略号。 */
 function compactSummary(value: string, maxLength: number): string {
   const compact = value.replace(/\s+/g, ' ').trim();
   return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;

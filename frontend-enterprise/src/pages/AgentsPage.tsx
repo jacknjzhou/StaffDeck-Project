@@ -29,6 +29,12 @@ import type { AgentProfileRead } from '../types';
 
 const ENTERPRISE_AGENT_STORAGE_KEY = 'ultrarag_enterprise_agent_scope';
 
+/**
+ * 数字员工管理页：汇总在线 / 下线 / 待审批数量，支持搜索、分类筛选、选中、编辑与删除员工。
+ *
+ * 挂载时拉取可管理的员工列表，并监听 agent-scope-change 事件同步当前选中员工。
+ * 卡片操作分别打开头像、档案、API 密钥与删除确认弹窗。
+ */
 export default function AgentsPage({
   currentUser,
   isAdmin = false,
@@ -55,6 +61,7 @@ export default function AgentsPage({
   );
   const navigate = useNavigate();
 
+  /** 拉取当前租户的员工列表并写入 agents；请求期间维护 loading，失败时弹出错误提示。 */
   async function load() {
     setLoading(true);
     try {
@@ -72,6 +79,7 @@ export default function AgentsPage({
   }, []);
 
   useEffect(() => {
+    /** 响应作用域变更事件：团队作用域回退为本地记录的员工 id，其余同步事件带来的选中项。 */
     const handler = (event: Event) => {
       const next = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
       setSelectedAgentId(next && !isTeamScope(next) ? next : readEmployeeScope() || null);
@@ -111,6 +119,12 @@ export default function AgentsPage({
     ].some((value) => value.toLowerCase().includes(keyword));
   });
 
+  /**
+   * 选中员工并进入工作台：若该员工当前不可直接选用，先调用后端接口切换作用域。
+   *
+   * 随后持久化选中 id、广播作用域变更事件并跳转到 /enterprise/dashboard。
+   * 进行中以 selectingAgentId 去重，失败时提示错误并复位状态。
+   */
   async function selectEmployee(row: AgentProfileRead) {
     if (selectingAgentId) return;
     setSelectingAgentId(row.id);
@@ -134,10 +148,16 @@ export default function AgentsPage({
     }
   }
 
+  /** 跳转到该员工的草稿会话，不在此处创建会话。 */
   function startEmployeeChat(row: AgentProfileRead) {
     navigate(`/workspace/chat/draft/${row.id}`);
   }
 
+  /**
+   * 上线 / 下线员工：PUT 更新 status 后重新拉取列表，并广播作用域刷新事件。
+   *
+   * 只提交 status 与原有 metadata，不改动其它字段；失败时提示错误。
+   */
   async function updateStatus(row: AgentProfileRead, status: 'active' | 'archived') {
     try {
       await api.put<AgentProfileRead>(`/api/enterprise/agents/${row.id}`, {
@@ -153,6 +173,12 @@ export default function AgentsPage({
     }
   }
 
+  /**
+   * 发布 / 下架数字员工广场：只改 metadata 中与广场相关的字段。
+   *
+   * 发布时写入发布时间与操作人，下架时把两者置空（序列化时被丢弃）；
+   * 成功后重新拉取列表并广播作用域刷新事件。
+   */
   async function updateGalleryState(row: AgentProfileRead, published: boolean) {
     try {
       const metadata = {
@@ -173,6 +199,12 @@ export default function AgentsPage({
     }
   }
 
+  /**
+   * 确认删除员工：DELETE 成功后刷新列表并广播作用域刷新事件。
+   *
+   * 若删除的正是本地当前选中的员工，会自动切换到其它在册员工（优先在线）并广播变更；
+   * 删除期间以 deleting 标记对话框 loading，失败时保留对话框并提示错误。
+   */
   async function confirmDelete() {
     const row = deleteTarget;
     if (!row) return;
@@ -201,6 +233,7 @@ export default function AgentsPage({
     }
   }
 
+  /** 用保存后的员工数据替换列表中同 id 项，供头像 / 档案编辑回调使用，避免整表重拉。 */
   function updateAgentInList(row: AgentProfileRead) {
     setAgents((current) => current.map((item) => (item.id === row.id ? row : item)));
   }
@@ -339,6 +372,7 @@ export default function AgentsPage({
   );
 }
 
+/** 员工列表的空态占位：渲染搜索图标与「没有匹配的数字员工」提示文案。 */
 function AgentsEmptyState() {
   return (
     <div className="flex h-[262px] w-full items-center justify-center rounded-[20px] border border-dashed border-[#e4e9f2] bg-[#fbfcfe] px-[24px] text-center">

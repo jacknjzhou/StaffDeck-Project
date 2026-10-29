@@ -40,7 +40,9 @@ JOB_LEASE_SECONDS = 15 * 60
 
 
 def register_job_handler(kind: str) -> Callable[[JobHandler], JobHandler]:
+    """注册某类作业的处理器，返回可直接用作装饰器的注册函数。"""
     def decorator(handler: JobHandler) -> JobHandler:
+        """把处理器登记到 kind 名下并原样返回，便于链式装饰。"""
         _handlers[kind] = handler
         return handler
 
@@ -48,6 +50,7 @@ def register_job_handler(kind: str) -> Callable[[JobHandler], JobHandler]:
 
 
 def job_read(row: APIJob) -> JobRead:
+    """把作业行转换成对外返回的 JobRead 模型。"""
     return JobRead(
         id=row.id,
         kind=row.kind,
@@ -73,6 +76,7 @@ def create_job(
     request_payload: dict[str, Any],
     agent_id: str | None = None,
 ) -> APIJob:
+    """创建公开 API 作业并立即入队，仅允许携带凭据的调用方使用。"""
     if not principal.credential_id:
         raise PublicAPIError(403, "API_KEY_REQUIRED", "Jobs require an API credential.")
     row = APIJob(
@@ -99,11 +103,10 @@ def create_internal_job(
     request_payload: dict[str, Any],
     agent_id: str | None = None,
 ) -> APIJob:
-    """Persist an application-owned job before offering it to the executor.
+    """在交给执行器之前，先持久化应用内部作业。
 
-    Internal callers deliberately use the same durable job/receipt machinery as
-    the public API. If the executor is stopping, the queued row remains
-    recoverable on the next startup instead of disappearing with the process.
+    内部调用方复用与公开 API 相同的持久化作业与回执机制；若执行器正在停止，
+    已入队的行仍会在下次启动时恢复，而不会随进程一起消失。
     """
 
     row = APIJob(
@@ -135,6 +138,11 @@ def emit_job_event(
     *,
     public: bool = True,
 ) -> APIJobEvent:
+    """追加一条作业事件（sequence 递增）并登记待投递的 Webhook。
+
+    事件行落库后把投递 ID 暂存在会话信息里，由 _commit_and_dispatch 提交后
+    统一分发；public=False 的事件只供内部消费，不暴露给公开 SSE。
+    """
     latest = db.exec(
         select(APIJobEvent)
         .where(APIJobEvent.job_id == job.id)
@@ -170,6 +178,7 @@ def emit_job_event(
 
 
 def _commit_and_dispatch(db: Session) -> None:
+    """提交当前事务，并把暂存的 Webhook 投递任务交给分发器。"""
     delivery_ids = list(db.info.pop("public_api_webhook_deliveries", []))
     db.commit()
     enqueue_webhook_deliveries(delivery_ids)
@@ -184,6 +193,10 @@ def update_job(
     event_type: str | None = None,
     event_data: dict[str, Any] | None = None,
 ) -> None:
+    """更新作业阶段与进度，可选同时发事件并提交。
+
+    progress 会被夹取到 0~1；传入 event_type 时先写事件再一起提交分发。
+    """
     if stage is not None:
         job.stage = stage
     if progress is not None:
@@ -196,6 +209,10 @@ def update_job(
 
 
 def _run_turn_id(db: Session, job: APIJob) -> str:
+    """从最近会话事件中反查该次运行对应的 turn/消息 ID。
+
+    找不到匹配 client_turn_id 的事件时退回作业 ID，保证事件标识稳定。
+    """
     rows = db.exec(
         select(AgentEvent)
         .where(
@@ -220,6 +237,11 @@ def _finalize_run_session(
     terminal_status: str,
     error: dict[str, Any] | None = None,
 ) -> None:
+    """run 类作业进入终态后收尾对应会话。
+
+    把仍处于 running/executing 的会话置回 active；非成功终态还需补发一次
+    stream_cancelled 或 stream_interrupted 事件，已发过则跳过。
+    """
     if job.kind != "run" or not job.session_id:
         return
     chat_session = db.get(ChatSession, job.session_id)
@@ -268,6 +290,7 @@ def _finalize_run_session(
 
 
 def _reconcile_terminal_run_sessions(db: Session) -> None:
+    """补齐历史终态 run 作业遗漏的会话状态收尾。"""
     active_session_ids = {
         session_id
         for session_id in db.exec(
@@ -306,7 +329,7 @@ def _reconcile_terminal_run_sessions(db: Session) -> None:
 
 
 def _claim_job(db: Session, job_id: str, owner: str) -> APIJob | None:
-    """Claim one durable execution generation; duplicate workers lose the CAS."""
+    """以 CAS 方式认领一次作业执行代次；并发的重复 worker 会竞争失败。"""
 
     now = utc_now()
     result = db.exec(
@@ -348,7 +371,11 @@ def _terminalize_job(
     error_json: dict[str, Any] | None = None,
     retryable: bool = False,
 ) -> APIJob | None:
-    """Publish a terminal job state only from the currently claimed worker."""
+    """仅由当前持有认领的 worker 发布作业终态。
+
+    owner 与 execution_generation 不匹配时不写入并回滚，避免已过期的 worker
+    覆盖新一代执行的状态。
+    """
 
     now = utc_now()
     values: dict[str, Any] = {
@@ -389,6 +416,7 @@ def _emit_terminal_job_event(
     status: str,
     error: dict[str, Any] | None = None,
 ) -> None:
+    """在终态写入后收尾运行会话，并发出 {kind}.{status} 事件。"""
     _finalize_run_session(db, job, terminal_status=status, error=error)
     event_data = dict(error or {"job_id": job.id})
     emit_job_event(db, job, f"{job.kind}.{status}", event_data)
@@ -396,6 +424,11 @@ def _emit_terminal_job_event(
 
 
 def run_job(job_id: str) -> None:
+    """作业执行入口：认领作业、调用处理器并把结果或错误落成终态。
+
+    处理器执行前后各检查一次取消请求；任何异常都转成 failed 终态，
+    处理器缺失记为不可重试。
+    """
     with Session(engine) as db:
         owner = new_id("apijoblease")
         job = _claim_job(db, job_id, owner)
@@ -458,16 +491,18 @@ def run_job(job_id: str) -> None:
 
 
 class JobCancelled(Exception):
-    pass
+    """作业执行期间检测到取消请求时抛出的控制流异常。"""
 
 
 def ensure_not_cancelled(db: Session, job: APIJob) -> None:
+    """刷新作业状态，若已请求取消则抛出 JobCancelled。"""
     db.refresh(job)
     if job.cancel_requested:
         raise JobCancelled()
 
 
 def _owned_job(db: Session, principal: PublicPrincipal, job_id: str) -> APIJob:
+    """按租户（及绑定员工）校验作业归属，不可见时统一抛 404。"""
     row = db.get(APIJob, job_id)
     if not row or row.tenant_id != principal.tenant_id:
         raise PublicAPIError(404, "JOB_NOT_FOUND", "Job not found.")
@@ -477,6 +512,11 @@ def _owned_job(db: Session, principal: PublicPrincipal, job_id: str) -> APIJob:
 
 
 def _require_job_scope(principal: PublicPrincipal, row: APIJob, action: str) -> None:
+    """校验调用方具备该作业动作的 scope。
+
+    同时接受 jobs:<action> 与按作业命名空间推导的等价 scope（sop→sops 等），
+    run 类作业额外允许 runs:<action>。
+    """
     namespace = row.kind.split(".", 1)[0]
     public_namespace = {"sop": "sops", "knowledge": "knowledge"}.get(namespace, namespace)
     candidates = [f"jobs:{action}", f"{public_namespace}:{action}"]
@@ -492,6 +532,7 @@ def get_job(
     principal: PublicPrincipal = Depends(get_public_principal),
     db: Session = Depends(get_session),
 ) -> JobRead:
+    """读取单个作业的当前状态。"""
     row = _owned_job(db, principal, job_id)
     _require_job_scope(principal, row, "read")
     return job_read(row)
@@ -503,6 +544,7 @@ def get_job_result(
     principal: PublicPrincipal = Depends(get_public_principal),
     db: Session = Depends(get_session),
 ) -> dict:
+    """读取已结束作业的结果与错误，未结束时返回 409。"""
     row = _owned_job(db, principal, job_id)
     _require_job_scope(principal, row, "read")
     if row.status not in {"succeeded", "failed", "cancelled"}:
@@ -520,6 +562,7 @@ def cancel_job(
     principal: PublicPrincipal = Depends(get_public_principal),
     db: Session = Depends(get_session),
 ) -> JobRead:
+    """请求取消作业；已处于终态时直接返回当前状态。"""
     row = _owned_job(db, principal, job_id)
     _require_job_scope(principal, row, "cancel")
     if row.status in {"succeeded", "failed", "cancelled"}:
@@ -542,12 +585,14 @@ def stream_job_events(
     principal: PublicPrincipal = Depends(get_public_principal),
     db: Session = Depends(get_session),
 ) -> StreamingResponse:
+    """以 SSE 推送作业事件，支持 Last-Event-ID 断点续传。"""
     row = _owned_job(db, principal, job_id)
     _require_job_scope(principal, row, "read")
     if last_event_id and last_event_id.isdigit():
         after = max(after, int(last_event_id))
 
     def events() -> Iterator[str]:
+        """在独立会话中轮询新事件，定期发心跳，作业终态且无新事件时结束。"""
         cursor = max(0, after)
         idle_ticks = 0
         while True:
@@ -587,6 +632,10 @@ def stream_job_events(
 
 
 def recover_public_jobs() -> None:
+    """启动恢复：把中断的 running 作业置为失败，并重新投递 queued 作业。
+
+    递增执行代次以屏蔽迟到的旧 worker，同时补做 run 会话收尾与事件发布。
+    """
     with Session(engine) as db:
         running = db.exec(select(APIJob).where(APIJob.status == "running")).all()
         for job in running:
@@ -636,6 +685,7 @@ def recover_public_jobs() -> None:
 
 
 def cleanup_public_api_records() -> None:
+    """按 public_api_retention_days 清理过期作业、事件、幂等回执与投递记录。"""
     cutoff = utc_now() - timedelta(days=get_settings().public_api_retention_days)
     with Session(engine) as db:
         old_events = db.exec(

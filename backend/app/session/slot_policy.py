@@ -15,7 +15,7 @@ ROUTER_GENERATED_MESSAGE_SLOT_KEYS = {
 
 
 def strip_router_generated_message_slots(slots: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Router must not persist rewritten user text as skill slot values."""
+    """剔除路由层生成的用户消息类槽位，避免把改写后的文本当成技能槽位持久化。"""
     if not isinstance(slots, Mapping):
         return {}
     return {

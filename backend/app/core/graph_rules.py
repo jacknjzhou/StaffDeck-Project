@@ -5,10 +5,11 @@ from typing import Any
 
 
 class GraphRules:
-    """Pure Skill graph rules shared by Harness v2 execution and session projection."""
+    """Harness v2 执行与会话投影共用的纯 Skill 图规则集合。"""
 
     @staticmethod
     def node_as_step(node: dict[str, Any]) -> dict[str, Any]:
+        """把 SOP 原始 node 投影成 step 结构，缺失字段补空默认值，保证执行与投影字段一致。"""
         return {
             "step_id": node.get("node_id"),
             "node_id": node.get("node_id"),
@@ -30,14 +31,17 @@ class GraphRules:
 
     @staticmethod
     def nodes(content: dict[str, Any]) -> list[dict[str, Any]]:
+        """取出 content 中的节点列表，并丢弃非字典的脏数据。"""
         return [node for node in content.get("nodes", []) if isinstance(node, dict)]
 
     @classmethod
     def steps(cls, content: dict[str, Any]) -> list[dict[str, Any]]:
+        """按拓扑顺序把 content 的节点转换为 step 列表。"""
         return cls.steps_from_nodes(cls.ordered_nodes(content))
 
     @classmethod
     def steps_from_nodes(cls, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """按给定节点顺序批量转换为 step 列表，不再调整顺序。"""
         return [cls.node_as_step(node) for node in nodes]
 
     @classmethod
@@ -48,6 +52,11 @@ class GraphRules:
         nodes: list[dict[str, Any]] | None = None,
         outgoing: dict[str, list[dict[str, Any]]] | None = None,
     ) -> list[dict[str, Any]]:
+        """从 start_node_id 深度优先遍历，得到节点拓扑顺序。
+
+        起点缺失或不在节点表中时退化为首个节点；不可达节点按原始数组顺序追加到末尾。
+        nodes / outgoing 传入时复用调用方已解析的结果，避免重复计算。
+        """
         nodes = cls.nodes(content) if nodes is None else nodes
         if not nodes:
             return []
@@ -62,6 +71,7 @@ class GraphRules:
         visited: set[str] = set()
 
         def visit(node_id: str) -> None:
+            """深度优先访问节点：跳过已访问与未知节点，按出边顺序收集。"""
             if not node_id or node_id in visited:
                 return
             node = nodes_by_id.get(node_id)
@@ -81,6 +91,10 @@ class GraphRules:
 
     @staticmethod
     def outgoing_edges(content: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        """按源节点分组出边，组内按 priority 升序排列。
+
+        source_node_id 或 next_node_id 缺失的边直接丢弃。
+        """
         edges = [edge for edge in content.get("edges", []) if isinstance(edge, dict)]
         grouped: dict[str, list[dict[str, Any]]] = {}
         for edge in edges:
@@ -97,6 +111,7 @@ class GraphRules:
     def next_steps(
         cls, content: dict[str, Any], active_step_id: str | None
     ) -> list[dict[str, Any]]:
+        """返回 active_step_id 的全部后继 step，保持出边的优先级顺序。"""
         if not active_step_id:
             return []
         return cls.next_steps_from_parts(
@@ -109,6 +124,7 @@ class GraphRules:
         nodes: list[dict[str, Any]],
         outgoing: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        """基于已解析的节点与出边返回后继 step，目标节点不存在时跳过。"""
         nodes_by_id = {str(node.get("node_id") or ""): cls.node_as_step(node) for node in nodes}
         return [
             nodes_by_id[target_id]
@@ -120,6 +136,10 @@ class GraphRules:
     def default_next_step(
         cls, content: dict[str, Any], active_step_id: str | None
     ) -> dict[str, Any] | None:
+        """推测 active_step_id 的默认后继 step。
+
+        仅单条出边或恰好一条无条件边（condition 为空/default/else）时返回该节点，存在歧义则返回 None。
+        """
         if not active_step_id:
             return None
         return cls.default_next_step_from_parts(
@@ -132,6 +152,7 @@ class GraphRules:
         nodes: list[dict[str, Any]],
         outgoing: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
+        """从出边中挑出唯一的默认后继 step，多条条件边并存导致无法唯一确定时返回 None。"""
         nodes_by_id = {str(node.get("node_id") or ""): cls.node_as_step(node) for node in nodes}
         if not outgoing:
             return None
@@ -150,6 +171,7 @@ class GraphRules:
     def current_step(
         cls, content: dict[str, Any], active_step_id: str | None
     ) -> dict[str, Any] | None:
+        """按 active_step_id 在 content 中定位当前 step，未命中返回 None。"""
         if not active_step_id:
             return None
         return cls.current_step_from_steps(cls.steps(content), active_step_id)
@@ -158,6 +180,7 @@ class GraphRules:
     def current_step_from_steps(
         steps: list[dict[str, Any]], active_step_id: str
     ) -> dict[str, Any] | None:
+        """在 step 列表中匹配 step_id、node_id 或 id 任一命中的 step。"""
         for step in steps:
             step_ids = {
                 str(step.get("step_id") or ""),
@@ -170,12 +193,14 @@ class GraphRules:
 
     @classmethod
     def has_step(cls, content: dict[str, Any], step_id: str | None) -> bool:
+        """判断 content 中是否存在指定 node_id 的节点。"""
         if not step_id:
             return False
         return any(node.get("node_id") == step_id for node in cls.nodes(content))
 
     @staticmethod
     def normalize_pending_steps(value: object) -> list[str]:
+        """把待办 step 取值规整为去空白、去重的 id 列表；非列表输入返回空列表。"""
         if not isinstance(value, list):
             return []
         pending: list[str] = []
@@ -192,6 +217,10 @@ class GraphRules:
         source_step_id: str | None,
         selected_step_id: str,
     ) -> list[str]:
+        """返回与所选分支条件相同的同级 step id，用于条件分支互斥。
+
+        source_step_id 为空时返回空列表。
+        """
         if not source_step_id:
             return []
         outgoing = cls.outgoing_edges(content).get(source_step_id) or []
@@ -203,6 +232,10 @@ class GraphRules:
         selected_step_id: str,
         edge_condition: Callable[[dict[str, Any]], str],
     ) -> list[str]:
+        """在同源出边中找出与选中目标条件相同的其它目标 step id。
+
+        selected_step_id 自身被排除，便于调用方把同级分支一并标记为已分派。
+        """
         selected_conditions = {
             edge_condition(edge)
             for edge in outgoing
@@ -218,10 +251,12 @@ class GraphRules:
 
     @staticmethod
     def edge_condition(edge: dict[str, Any]) -> str:
+        """读取边的 condition，规整为去空白的小写字符串。"""
         return str(edge.get("condition") or "").strip().lower()
 
     @classmethod
     def step_actions(cls, step: dict[str, Any]) -> list[str]:
+        """提取 step 中经 normalize_action 规整后的非空动作列表。"""
         return [
             action
             for action in (cls.normalize_action(item) for item in step.get("allowed_actions", []))
@@ -230,6 +265,7 @@ class GraphRules:
 
     @staticmethod
     def normalize_action(action: object) -> str:
+        """规整动作字面量：去空白与包裹引号，call_tool: 只保留工具名部分。"""
         text = str(action or "").strip().strip("`'\"").strip()
         if not text:
             return ""
@@ -240,15 +276,18 @@ class GraphRules:
 
     @classmethod
     def actions_allow_final_reply(cls, actions: list[str]) -> bool:
+        """判断动作集合是否包含 answer_user，即允许直接回复用户。"""
         return "answer_user" in [cls.normalize_action(action) for action in actions]
 
     @staticmethod
     def slot_has_value(slots: dict[str, Any], field: str) -> bool:
+        """判断 slots 中该字段是否已有非 None 且非空字符串的取值。"""
         value = slots.get(field)
         return value is not None and value != ""
 
     @classmethod
     def slot_satisfied(cls, slots: dict[str, Any], field: str) -> bool:
+        """判断槽位是否已满足：空字段名视为天然满足，否则要求 slot 有值。"""
         normalized = field.strip()
         return not normalized or cls.slot_has_value(slots, normalized)
 
@@ -259,6 +298,11 @@ class GraphRules:
         active_step_id: str | None,
         slots: dict[str, Any],
     ) -> bool:
+        """判断当前是否处于可结束的终态位置。
+
+        要求 active_step_id 属于 terminal_node_ids，且当前 step 的 expected_user_info 与
+        content 的 required_info 均已填槽、动作只剩终态动作或工具调用。
+        """
         if not active_step_id:
             return False
         terminal_node_ids = {str(node_id) for node_id in content.get("terminal_node_ids", [])}
@@ -283,6 +327,11 @@ class GraphRules:
         slot_satisfied: Callable[[dict[str, Any], str], bool],
         step_actions: Callable[[dict[str, Any]], list[str]],
     ) -> bool:
+        """按槽位与动作判定当前 step 是否允许结束会话。
+
+        expected_user_info / required_info 任一未填槽、或存在非终态动作时返回 False；
+        step 未声明动作视为可直接结束。
+        """
         if not current_step:
             return False
         expected = [str(field) for field in current_step.get("expected_user_info", [])]
@@ -307,6 +356,7 @@ class GraphRules:
 
     @classmethod
     def is_handoff_node(cls, node: dict[str, Any]) -> bool:
+        """判断节点是否为 handoff 类型，或动作中包含 handoff_human。"""
         node_type = str(node.get("type") or "").strip()
         if node_type == "handoff":
             return True
@@ -336,6 +386,10 @@ class GraphRules:
         outgoing = cls.outgoing_edges(content)
 
         def _bfs(start: str | None, unconditional_only: bool) -> list[str]:
+            """从 start 出发 BFS 收集可达的 handoff 节点 id。
+
+            unconditional_only 为真时只沿无条件边搜索；命中 handoff 后不再展开其后继。
+            """
             if not start or start not in nodes_by_id:
                 return []
             visited: set[str] = set()
@@ -364,6 +418,7 @@ class GraphRules:
             return handoff_ids
 
         def _unique_bfs(start: str | None, unconditional_only: bool) -> tuple[str | None, bool]:
+            """仅在 handoff 命中唯一时返回节点 id，第二个返回值标记是否存在歧义。"""
             matches = _bfs(start, unconditional_only)
             return (matches[0], False) if len(matches) == 1 else (None, len(matches) > 1)
 

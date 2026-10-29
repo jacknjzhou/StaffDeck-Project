@@ -12,6 +12,13 @@ const PRIMARY_BUTTON_CLASS =
 const OUTLINE_BUTTON_CLASS =
   'h-8 gap-1 rounded-[10px] border-[#e3e7f1] px-5 text-[12px] font-normal text-[#464c5e] hover:bg-[#f6f6f6] hover:text-[#18181a]';
 
+/**
+ * 钉钉渠道凭证配置面板。
+ *
+ * - 已配置 Client ID 时默认展示只读摘要与连接状态，可点击「轮换 Secret」重新进入编辑。
+ * - 未配置凭证时直接展示表单，此时 Client ID 可编辑。
+ * - 保存成功后清空 Secret 输入并通过 `onChanged` 把最新绑定回传父级。
+ */
 export default function DingTalkSetup({
   binding,
   onChanged,
@@ -25,6 +32,13 @@ export default function DingTalkSetup({
   const [clientSecret, setClientSecret] = useState('');
   const [saving, setSaving] = useState(false);
 
+  /**
+   * 提交钉钉应用凭证并通知父级更新绑定。
+   *
+   * - 校验 Client ID / Client Secret 非空，缺失时提示并不发请求。
+   * - 成功后清空 Secret、退出编辑态并调用 `onChanged`；失败时提示错误信息。
+   * - 请求期间 `saving` 为 true，用于禁用保存按钮避免重复提交。
+   */
   async function save() {
     if (!clientId.trim() || !clientSecret.trim()) {
       notify.error('请填写完整凭证');

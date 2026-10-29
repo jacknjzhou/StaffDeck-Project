@@ -54,6 +54,13 @@ const INITIAL_FORM: ModelSetupForm = {
   maxOutputTokens: '8192',
 };
 
+/**
+ * 模型配置引导弹窗：在无可用模型时引导用户完成配置并通过连通性测试。
+ *
+ * - 每次打开都会重置表单，并拉取当前租户支持的 API 协议列表；
+ * - 保存时携带 verify_before_save，后端校验通过后才回调 onConfigured；
+ * - 无模型管理权限时只展示提示，不渲染配置表单与保存按钮。
+ */
 export default function ModelSetupDialog({
   open,
   tenantId,
@@ -79,11 +86,19 @@ export default function ModelSetupDialog({
       .then((result) => setAvailableProtocols(result.protocols));
   }, [open, tenantId]);
 
+  /** 更新表单单个字段，并清空上一次的测试结果提示。 */
   const updateForm = <K extends keyof ModelSetupForm>(key: K, value: ModelSetupForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
     setTestResult(null);
   };
 
+  /**
+   * 校验表单、保存模型配置并执行连通性测试。
+   *
+   * - 名称与 Model 必填，Temperature/Max Tokens 必须是数字，否则只提示不提交；
+   * - 已保存过则 PUT 更新，否则 POST 新建，两者都带 verify_before_save=true；
+   * - 结果写入 testResult，成功后通过 onConfigured 通知父组件刷新可用模型。
+   */
   async function saveAndTest() {
     const name = form.name.trim();
     const model = form.model.trim();
@@ -269,6 +284,7 @@ export default function ModelSetupDialog({
   );
 }
 
+/** 表单字段包装组件：上方渲染标签文本，下方渲染传入的表单控件。 */
 function LabeledField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex min-w-0 flex-col gap-[6px]">

@@ -108,6 +108,7 @@ from app.tools.tool_schema import ToolResult
 
 
 def test_first_harness_turn_derives_a_recoverable_session_id() -> None:
+    """验证首轮请求能推导出稳定会话 ID：重试结果一致、不同用户不同，且不暴露 client_turn_id。"""
     request = ChatTurnRequest(
         tenant_id="tenant-demo",
         user_id="user-1",
@@ -127,6 +128,7 @@ def test_first_harness_turn_derives_a_recoverable_session_id() -> None:
 
 
 def test_team_tl_turn_keeps_leader_sops_routable() -> None:
+    """验证团队 TL 模式下负责人的 SOP 同时出现在可执行与可路由列表中。"""
     purchase = Skill(
         id="skill-purchase-row",
         tenant_id="tenant-demo",
@@ -168,6 +170,7 @@ def test_team_tl_turn_keeps_leader_sops_routable() -> None:
 
 
 def test_team_planner_receives_only_visible_user_message() -> None:
+    """验证团队规划器只收到用户可见消息，服务端上下文注入不会混入。"""
     request = ChatTurnRequest(
         tenant_id="tenant-demo",
         session_id="session-team",
@@ -184,9 +187,11 @@ def test_team_planner_receives_only_visible_user_message() -> None:
 
 
 def test_agent_loop_has_no_legacy_runtime_switch(monkeypatch) -> None:
+    """验证 AgentLoop 不再有旧运行时开关，各渠道统一走 Harness v2 引擎。"""
     calls: list[tuple[str, str]] = []
 
     def fake_run(self, request):  # noqa: ANN001
+        """替换引擎 run 方法，记录渠道与交互模式作为调度证据。"""
         calls.append((request.channel, request.interaction_mode))
         return request.message
 
@@ -226,6 +231,7 @@ def test_agent_loop_has_no_legacy_runtime_switch(monkeypatch) -> None:
 def test_first_harness_turn_recovers_from_a_concurrent_session_insert(
     tmp_path,
 ) -> None:
+    """验证首轮并发插入同一会话触发唯一约束冲突时，能读取已存在会话继续执行。"""
     database = create_engine(
         f"sqlite:///{tmp_path / 'harness-race.db'}",
         connect_args={"check_same_thread": False},
@@ -242,6 +248,7 @@ def test_first_harness_turn_recovers_from_a_concurrent_session_insert(
     )
 
     def concurrent_insert(_: ChatTurnRequest) -> ChatSession:
+        """模拟并发请求先插入同一会话再抛出唯一约束冲突。"""
         with Session(database) as other_db:
             other_db.add(
                 ChatSession(
@@ -276,6 +283,7 @@ def test_first_harness_turn_recovers_from_a_concurrent_session_insert(
 def test_harness_stream_retry_bootstraps_the_same_first_session(
     monkeypatch,
 ) -> None:
+    """验证流式重试复用首个会话：只创建一次会话，重试时不再产生 session_created 事件。"""
     engine = _test_engine()
     request = ChatTurnRequest(
         tenant_id="tenant-demo",
@@ -291,6 +299,7 @@ def test_harness_stream_retry_bootstraps_the_same_first_session(
         loop = AgentLoop(db)
 
         def fake_handle_turn(scoped: ChatTurnRequest) -> ChatTurnResponse:
+            """替换 handle_turn，记录会话 ID 并返回基于已持久化会话的响应。"""
             seen_session_ids.append(str(scoped.session_id))
             session = db.get(ChatSession, scoped.session_id)
             assert session is not None
@@ -319,6 +328,7 @@ def test_harness_stream_retry_bootstraps_the_same_first_session(
 
 
 def test_turn_planner_falls_back_to_an_isolated_conversation_frame() -> None:
+    """验证规划器在没有 SOP 目标时回退为独立的 conversation 任务帧。"""
     session = _chat_session()
     plan = TurnPlan(
         decision="answer_only",
@@ -346,6 +356,7 @@ def test_turn_planner_falls_back_to_an_isolated_conversation_frame() -> None:
 
 
 def test_turn_planner_keeps_team_delegation_as_separate_remote_frames() -> None:
+    """验证团队委派被拆成多个 team_member 远程帧，且彼此没有依赖。"""
     plan = TurnPlan(
         decision="answer_only",
         user_intent="并行安排人事和行政查询制度",
@@ -401,6 +412,7 @@ def test_turn_planner_keeps_team_delegation_as_separate_remote_frames() -> None:
 
 
 def test_turn_planner_does_not_merge_normal_conversation_frames() -> None:
+    """验证普通对话任务帧不会被合并，两个需求保持独立。"""
     plan = TurnPlan(
         decision="answer_only",
         user_intent="完成两个独立查询",
@@ -436,6 +448,7 @@ def test_turn_planner_does_not_merge_normal_conversation_frames() -> None:
     ["completed", "awaiting_user", "handoff", "failed", "blocked", "action_budget"],
 )
 def test_single_task_reply_uses_harness_finish_reply(status: str) -> None:
+    """验证单任务完成时直接采用 Harness 生成的回复并去掉首尾空白。"""
     result = TaskExecutionResult(
         task_frame_id="task-1",
         status=status,
@@ -446,6 +459,7 @@ def test_single_task_reply_uses_harness_finish_reply(status: str) -> None:
 
 
 def test_single_task_reply_keeps_multi_task_and_empty_reply_on_synthesis_path() -> None:
+    """验证多任务或空回复时不走单任务直出，仍交给综合回复流程。"""
     completed = TaskExecutionResult(
         task_frame_id="task-1",
         status="completed",
@@ -467,6 +481,7 @@ def test_single_task_reply_keeps_multi_task_and_empty_reply_on_synthesis_path() 
 
 
 def test_single_task_reply_synthesizes_incomplete_structured_projection() -> None:
+    """验证结构化结果与不完整片段不一致时走综合流程，一致时直接复用回复。"""
     structured_result = {
         "requirements": ["需求分析", "FS 草稿", "追踪矩阵"],
         "status": "complete",
@@ -494,6 +509,7 @@ def test_single_task_reply_synthesizes_incomplete_structured_projection() -> Non
 
 
 def test_response_task_payload_keeps_structured_result_for_synthesis() -> None:
+    """验证响应 payload 保留 structured_result，供后续综合回复使用。"""
     structured_result = {"fs": {"title": "ClickHouse 分析面板"}}
     result = TaskExecutionResult(
         task_frame_id="task-structured",
@@ -518,6 +534,7 @@ def test_response_task_payload_keeps_structured_result_for_synthesis() -> None:
 
 
 def test_harness_finish_prompt_requires_user_visible_markdown_layout() -> None:
+    """验证 finish 提示词强制要求用户可见回复使用 Markdown 分组排版。"""
     prompt = harness_agent_module.PROMPT_PATH.read_text(encoding="utf-8")
 
     assert "用户可见回复排版规则（适用于 `finish.reply_fragment`）" in prompt
@@ -528,6 +545,7 @@ def test_harness_finish_prompt_requires_user_visible_markdown_layout() -> None:
 
 
 def test_combine_results_exposes_only_terminal_sop_step_reply() -> None:
+    """验证合并多步结果时只暴露最终步骤回复，并累加摘要、槽位与动作数。"""
     collected_name = TaskExecutionResult(
         task_frame_id="task-purchase",
         status="completed",
@@ -557,10 +575,7 @@ def test_combine_results_exposes_only_terminal_sop_step_reply() -> None:
 
 
 def test_turn_planner_routes_handoff_human_to_sop_handoff_node() -> None:
-    """When router decides handoff_human and an active SOP has a handoff node,
-    the planner should create an SOP frame targeting that node instead of a
-    conversation frame. This ensures harness executes the handoff node and
-    reads its assignee_user_id for Feishu notification."""
+    """验证 handoff_human 且活动 SOP 有转人工节点时生成指向该节点的 SOP 帧，以便读取 assignee_user_id 发通知。"""
     skill = Skill(
         id="skill-repair",
         tenant_id="tenant-demo",
@@ -621,9 +636,7 @@ def test_turn_planner_routes_handoff_human_to_sop_handoff_node() -> None:
 
 
 def test_turn_planner_handoff_human_falls_back_to_conversation_without_handoff_node() -> None:
-    """When router decides handoff_human but the active SOP has no handoff
-    node, the planner falls back to a conversation frame so the harness
-    conversation-handoff path still fires."""
+    """验证 handoff_human 但活动 SOP 没有转人工节点时，回退为 conversation 帧继续转人工。"""
     skill = Skill(
         id="skill-refund",
         tenant_id="tenant-demo",
@@ -670,8 +683,7 @@ def test_turn_planner_handoff_human_falls_back_to_conversation_without_handoff_n
 
 
 def test_turn_planner_handoff_human_picks_reachable_handoff_node() -> None:
-    """When multiple handoff nodes exist, the planner should pick the one
-    reachable from the current node via edges, not the first in array order."""
+    """验证存在多个转人工节点时选中从当前节点可达的一个，而不是数组里的第一个。"""
     skill = Skill(
         id="skill-multi-handoff",
         tenant_id="tenant-demo",
@@ -732,6 +744,7 @@ def test_turn_planner_handoff_human_picks_reachable_handoff_node() -> None:
 
 
 def test_turn_plan_defaults_null_container_fields() -> None:
+    """验证 TurnPlan 把 null 的依赖、槽位提示与 task_updates 归一为空容器。"""
     plan = TurnPlan.model_validate(
         {
             "decision": "answer_only",
@@ -755,6 +768,7 @@ def test_turn_plan_defaults_null_container_fields() -> None:
 
 
 def test_turn_planner_retries_schema_invalid_json(monkeypatch) -> None:
+    """验证规划输出不符合 schema 时会携带校验错误重试一次，并复用首轮 payload 的 SOP 列表。"""
     payloads: list[dict[str, object]] = []
     outputs = iter(
         [
@@ -780,12 +794,14 @@ def test_turn_planner_retries_schema_invalid_json(monkeypatch) -> None:
     )
 
     class FakeLLMClient:
+        """按脚本依次返回预置规划结果的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录模型收到的规划 payload 并返回下一份预置输出。"""
             payloads.append(deepcopy(payload))
             return next(outputs)
 
@@ -820,15 +836,18 @@ def test_turn_planner_retries_schema_invalid_json(monkeypatch) -> None:
 
 
 def test_turn_planner_exposes_sops_but_not_runtime_capabilities(monkeypatch) -> None:
+    """验证规划 payload 只暴露 available_sops，不向规划模型泄露运行时能力。"""
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
+        """返回固定退款 SOP 规划结果的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录规划 payload 并返回匹配退款 SOP 的规划结果。"""
             payloads.append(deepcopy(payload))
             return {
                 "decision": "start_new_task",
@@ -864,6 +883,7 @@ def test_turn_planner_exposes_sops_but_not_runtime_capabilities(monkeypatch) -> 
 
 
 def test_turn_planner_discards_an_unknown_sop_target() -> None:
+    """验证规划器丢弃未知 SOP 目标，改为 conversation 帧并保留用户意图。"""
     session = _chat_session()
     plan = TurnPlan(
         decision="start_new_task",
@@ -897,6 +917,7 @@ def test_turn_planner_discards_an_unknown_sop_target() -> None:
 
 
 def test_turn_planner_and_store_bound_task_frames_per_turn() -> None:
+    """验证规划器与 TaskFrameStore 都把每轮任务帧数量限制在上限内。"""
     session = _chat_session()
     plan = TurnPlan(
         decision="answer_only",
@@ -937,6 +958,7 @@ def test_turn_planner_and_store_bound_task_frames_per_turn() -> None:
 
 
 def test_task_request_compiler_builds_a_composite_requirement_without_outer_context() -> None:
+    """验证编译器构造复合需求时不泄露外层上下文，并正确传递槽位、必填槽与记忆投影。"""
     session = _chat_session(
         active_skill_id="refund",
         active_step_id="collect",
@@ -1031,6 +1053,7 @@ def test_task_request_compiler_builds_a_composite_requirement_without_outer_cont
 
 
 def test_sibling_task_intents_only_returns_other_frames_from_same_turn() -> None:
+    """验证 _sibling_task_intents 只返回同轮次其他任务帧的意图。"""
     engine = _test_engine()
     with Session(engine) as db:
         current = HarnessTaskFrameRecord(
@@ -1067,6 +1090,7 @@ def test_sibling_task_intents_only_returns_other_frames_from_same_turn() -> None
 
 
 def test_task_requirement_only_marks_explicitly_required_node_capabilities() -> None:
+    """验证 TaskRequirement 只把节点显式声明的能力标记为必需能力。"""
     skill = Skill(
         id="skill-http-chain",
         tenant_id="tenant-demo",
@@ -1122,11 +1146,13 @@ def test_task_requirement_only_marks_explicitly_required_node_capabilities() -> 
 
 
 def test_required_capability_refs_must_also_be_selected() -> None:
+    """验证只声明 required_tool_ids 而没选中该工具时会报 ValueError。"""
     with pytest.raises(ValueError, match="required_tool_ids"):
         SkillCapabilityRefs(required_tool_ids=["tool-ocr"])
 
 
 def test_sop_step_result_keeps_capability_output_for_the_next_step() -> None:
+    """验证 _prior_result 保留能力输出，供 SOP 下一步骤继续使用。"""
     projected = _prior_result(
         TaskExecutionResult(
             task_frame_id="task-http-chain",
@@ -1155,6 +1181,7 @@ def test_attachments_are_materialized_inside_only_the_task_workspace(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证附件只落到任务工作区内部，非法路径无法越界，非纯文本附件不被物化。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     descriptors = materialize_task_attachments(
         [
@@ -1198,6 +1225,7 @@ def test_staged_image_is_both_a_sandbox_file_and_vision_payload(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证已暂存图片同时提供为沙箱文件与视觉 payload。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     raw = b"\x89PNG\r\n\x1a\n"
     parsed = ChatAttachmentRead(
@@ -1238,6 +1266,7 @@ def test_staged_image_is_both_a_sandbox_file_and_vision_payload(
 
 
 def test_capability_manifest_only_exposes_current_step_sop_specific_resources() -> None:
+    """验证能力清单只暴露当前 SOP 步骤专属资源，不泄露其他步骤资源。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant-demo", name="Demo"))
@@ -1357,6 +1386,7 @@ def test_capability_manifest_only_exposes_current_step_sop_specific_resources() 
 
 
 def test_nested_sop_tool_grant_survives_parent_expansion() -> None:
+    """验证父 SOP 展开后仍保留嵌套子 SOP 的工具授权。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant-demo", name="Demo"))
@@ -1436,6 +1466,7 @@ def test_nested_sop_tool_grant_survives_parent_expansion() -> None:
 
 
 def test_general_tools_remain_discoverable_across_sop_steps() -> None:
+    """验证通用工具在各 SOP 步骤中始终可被发现。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant-demo", name="Demo"))
@@ -1521,6 +1552,7 @@ def test_general_tools_remain_discoverable_across_sop_steps() -> None:
 
 
 def test_windows_manifest_exposes_platform_shell_exec_command(monkeypatch) -> None:
+    """验证 Windows 平台的能力清单暴露 shell 命令执行能力。"""
     monkeypatch.setattr(sys, "platform", "win32")
     engine = _test_engine()
     with Session(engine) as db:
@@ -1532,6 +1564,7 @@ def test_windows_manifest_exposes_platform_shell_exec_command(monkeypatch) -> No
 
 
 def test_scheduled_harness_outcome_uses_taskframes_and_records_sop_scope() -> None:
+    """验证定时任务结果基于 TaskFrame 生成，并记录 SOP 归属范围。"""
     engine = _test_engine()
     now = utc_now()
     with Session(engine) as db:
@@ -1656,6 +1689,7 @@ def test_scheduled_harness_outcome_uses_taskframes_and_records_sop_scope() -> No
 
 
 def test_one_shot_scheduled_task_stays_retryable_when_harness_needs_input() -> None:
+    """验证一次性定时任务在需要用户补充输入时保持可重试的暂停状态。"""
     engine = _test_engine()
     now = utc_now()
     with Session(engine) as db:
@@ -1689,6 +1723,7 @@ def test_one_shot_scheduled_task_stays_retryable_when_harness_needs_input() -> N
 
 
 def test_due_scheduled_tasks_completes_expired_task_without_claiming_it() -> None:
+    """验证已过期的定时任务被直接完成，且不会被调度器领取。"""
     engine = _test_engine()
     now = utc_now()
     with Session(engine) as db:
@@ -1717,6 +1752,7 @@ def test_due_scheduled_tasks_completes_expired_task_without_claiming_it() -> Non
 
 
 def test_skip_misfire_records_skip_and_advances_past_backlog() -> None:
+    """验证跳过错过的触发时记录 skipped 运行，并把下次执行时间推进到当前之后。"""
     engine = _test_engine()
     now = utc_now()
     scheduled_for = now - timedelta(days=3)
@@ -1748,6 +1784,7 @@ def test_skip_misfire_records_skip_and_advances_past_backlog() -> None:
 
 
 def test_retrying_scheduled_run_reuses_same_run_and_session() -> None:
+    """验证定时任务重试时复用同一运行记录与会话，并清理上次错误。"""
     engine = _test_engine()
     now = utc_now()
     with Session(engine) as db:
@@ -1788,6 +1825,7 @@ def test_retrying_scheduled_run_reuses_same_run_and_session() -> None:
 
 
 def test_external_tool_names_cannot_shadow_later_builtin_capabilities() -> None:
+    """验证外部工具名不能占用后续内置能力名，避免遮蔽同名内置能力。"""
     available = [
         CapabilityDescriptor(
             capability_id="builtin.fs.read_file",
@@ -1820,6 +1858,7 @@ def test_external_tool_names_cannot_shadow_later_builtin_capabilities() -> None:
 
 
 def test_external_failure_claim_is_released_only_when_request_was_not_sent() -> None:
+    """验证只有请求未发出的失败才释放认领，超时与 HTTP 错误都不释放。"""
     assert _failure_was_not_sent(
         {"success": False, "error": {"code": "CAPABILITY_SNAPSHOT_CHANGED"}}
     )
@@ -1831,6 +1870,7 @@ def test_invoker_requires_run_local_activation_before_hidden_capability_call(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证隐藏能力必须先经 capability_describe 在本轮激活，否则拒绝直接调用。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     with Session(engine) as db:
@@ -1877,6 +1917,7 @@ def test_file_mutation_is_private_until_publish_artifact_succeeds(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证文件修改在发布产物前保持私有，发布成功后才产出可见附件。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     with Session(engine) as db:
@@ -1927,6 +1968,7 @@ def test_harness_reads_published_deliverable_from_an_earlier_task_frame(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证 Harness 能列出并读取上一任务帧发布的交付物，且拒绝越权读取。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     content = "# 开发排期\n\n第一阶段完成接口设计。\n"
@@ -2038,6 +2080,7 @@ def test_workspace_discovery_returns_source_and_generated_image(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证工作区发现能同时返回脚本源码与生成的图片产物。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     with Session(engine) as db:
@@ -2078,6 +2121,7 @@ def test_large_external_json_result_uses_sandbox_reference_and_auto_resolves(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证超大外部 JSON 结果转为沙箱文件引用，并能自动解析回读。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     large_tool = Tool(
         id="tool-large-json",
@@ -2114,6 +2158,7 @@ def test_large_external_json_result_uses_sandbox_reference_and_auto_resolves(
     sink_arguments: list[dict[str, object]] = []
 
     def fake_execute(_self, _tenant_id, tool_call, **_kwargs):  # noqa: ANN001
+        """按工具名返回预设结果，并记录落地调用的参数。"""
         if tool_call.name == large_tool.name:
             return ToolResult(tool_name=tool_call.name, success=True, data=large_data)
         if tool_call.name == small_tool.name:
@@ -2152,6 +2197,7 @@ def test_large_external_json_result_uses_sandbox_reference_and_auto_resolves(
         )
 
         def metadata(tool: Tool) -> dict[str, str]:
+            """构造外部工具来源与内容摘要元数据。"""
             return {
                 "source_tool_name": tool.name,
                 "content_digest": tool_snapshot_digest(db, tool),
@@ -2204,6 +2250,7 @@ def test_mcp_app_descriptor_is_host_only_and_emitted_as_trace(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证 MCP App 描述符只留在宿主侧，并以 trace 事件形式输出。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     app_tool = Tool(
         id="tool-mcp-app",
@@ -2223,6 +2270,7 @@ def test_mcp_app_descriptor_is_host_only_and_emitted_as_trace(
     }
 
     def fake_execute(_self, _tenant_id, tool_call, **_kwargs):  # noqa: ANN001
+        """返回带 MCP App 描述符的工具结果。"""
         return ToolResult(
             tool_name=tool_call.name,
             success=True,
@@ -2280,6 +2328,7 @@ def test_knowledge_search_large_json_result_uses_internal_sandbox_reference(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证知识检索的大 JSON 结果转为内部沙箱引用，且不产生对外附件。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     large_payload = [
         {"id": index, "content": "policy-" + ("x" * 80)}
@@ -2330,6 +2379,7 @@ def test_external_idempotency_key_is_stable_per_task_not_entire_session(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证外部调用幂等键按任务稳定，不同任务之间不会复用。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     tool = Tool(
         id="tool-write",
@@ -2394,6 +2444,7 @@ def test_general_skill_harness_tool_reads_full_package_when_requested(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证请求全量包时通用技能工具返回完整文件列表、包根与入口路径。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     skill = GeneralSkill(
         id="general-runner",
@@ -2461,6 +2512,7 @@ def test_exec_command_nonzero_exit_is_a_failed_capability_result(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证 exec_command 非零退出码记为失败能力结果，并保留退出码与 stderr。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     descriptor = CapabilityDescriptor(
         capability_id="builtin.exec-command",
@@ -2513,6 +2565,7 @@ def test_general_skill_harness_tool_defaults_to_read_instead_of_generating_code(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证纯指令类通用技能默认走读取，不会生成执行脚本。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     skill = GeneralSkill(
         id="instruction-only",
@@ -2533,6 +2586,7 @@ def test_general_skill_harness_tool_defaults_to_read_instead_of_generating_code(
     )
 
     def unexpected_run(*_args, **_kwargs):
+        """断言技能运行器不会被调用，否则测试失败。"""
         raise AssertionError("instruction loading must not generate a runner")
 
     monkeypatch.setattr(
@@ -2569,6 +2623,7 @@ def test_general_skill_harness_tool_defaults_to_read_instead_of_generating_code(
 
 
 def test_harness_task_agent_stops_when_sop_step_deadline_is_exhausted() -> None:
+    """验证 SOP 步骤截止时间耗尽时立即停止，不执行动作并输出超时事件。"""
     trace_events: list[tuple[str, dict[str, object]]] = []
 
     result = HarnessTaskAgent().run(
@@ -2603,6 +2658,7 @@ def test_general_skill_harness_tool_treats_legacy_execute_as_instruction_load(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证 legacy execute 被当作指令加载处理，返回 read 并给出弃用提示。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     skill = GeneralSkill(
         id="guarded-runner",
@@ -2623,6 +2679,7 @@ def test_general_skill_harness_tool_treats_legacy_execute_as_instruction_load(
     )
 
     def unexpected_run(*_args, **_kwargs):
+        """断言业务 Harness 不会生成技能运行器。"""
         raise AssertionError("business Harness must not generate a skill runner")
 
     monkeypatch.setattr(
@@ -2660,6 +2717,7 @@ def test_general_skill_harness_tool_never_executes_generated_runner(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证通用技能工具只读取指令，不会执行生成的 runner。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     captured: dict[str, object] = {}
     trace_events: list[tuple[str, dict[str, object]]] = []
@@ -2677,6 +2735,7 @@ def test_general_skill_harness_tool_never_executes_generated_runner(
         workspace_root=None,
         is_cancelled=None,
     ) -> GeneralSkillRunResponse:
+        """伪造 runner 运行结果，并记录收到的参数与工作区。"""
         artifact_path = workspace_root / "general_skill_fake" / "outputs" / "weather.txt"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         artifact_path.write_text("30 C", encoding="utf-8")
@@ -2746,6 +2805,7 @@ def test_general_skill_harness_tool_never_executes_generated_runner(
     engine = _test_engine()
 
     def cancelled() -> bool:
+        """返回未取消状态，模拟运行期间未被中断。"""
         return False
 
     with Session(engine) as db:
@@ -2794,9 +2854,11 @@ def test_general_skill_harness_tool_does_not_enter_legacy_sandbox_runner(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证通用技能工具不进入 legacy 沙箱 runner，沙箱不支持时仍按读取返回。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
 
     def fail_run(*_args, **_kwargs):
+        """模拟 legacy runner 因沙箱策略不支持而失败。"""
         raise HarnessExecutionError(
             "SANDBOX_POLICY_UNSUPPORTED",
             "当前沙盒不支持域名白名单。",
@@ -2861,6 +2923,7 @@ def test_general_skill_harness_tool_does_not_publish_legacy_runner_artifacts(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证通用技能工具不发布 legacy runner 产物，避免硬链接私密文件外泄。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
 
     def fake_run(
@@ -2873,6 +2936,7 @@ def test_general_skill_harness_tool_does_not_publish_legacy_runner_artifacts(
         workspace_root,
         **_kwargs,
     ):
+        """伪造 runner 产物目录，写入合法文件与指向私密源的硬链接。"""
         artifact_dir = workspace_root / "general_skill_mixed" / "artifacts"
         artifact_dir.mkdir(parents=True)
         (artifact_dir / "valid.txt").write_text("valid", encoding="utf-8")
@@ -2961,6 +3025,7 @@ def test_general_skill_harness_tool_does_not_publish_legacy_runner_artifacts(
 def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
     monkeypatch,
 ) -> None:
+    """验证 Harness 智能体强制执行工具白名单，并保持独立的内层对话记录。"""
     payloads: list[dict[str, object]] = []
     system_prompts: list[str] = []
     actions = iter(
@@ -2985,12 +3050,14 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录系统提示与 payload，并返回下一段预置动作。"""
             system_prompts.append(system_prompt)
             payloads.append(deepcopy(payload))
             return next(actions)
@@ -3000,6 +3067,7 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
     trace_events: list[tuple[str, dict[str, object]]] = []
 
     def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        """记录被调用的工具与参数，返回带引用的成功结果。"""
         invoked.append((name, arguments))
         return {
             "success": True,
@@ -3072,6 +3140,7 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
 def test_harness_agent_adapts_bare_json_after_loading_general_skill(
     monkeypatch,
 ) -> None:
+    """验证加载通用技能后，裸业务 JSON 会被适配为结构化结果。"""
     business_result = {
         "function": "ZRFC_HR_GET_PERNR_INFO",
         "params": '{"I_ENAME":"张三","I_BS":"1"}',
@@ -3091,10 +3160,12 @@ def test_harness_agent_adapts_bare_json_after_loading_general_skill(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(self, _system_prompt, _payload):
+            """返回下一段预置动作。"""
             return next(actions)
 
     monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
@@ -3102,6 +3173,7 @@ def test_harness_agent_adapts_bare_json_after_loading_general_skill(
     trace_events: list[tuple[str, dict[str, object]]] = []
 
     def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        """记录调用并返回通用技能的读取结果。"""
         invoked.append((name, arguments))
         return {
             "success": True,
@@ -3174,11 +3246,14 @@ def test_harness_agent_adapts_bare_json_after_loading_general_skill(
 def test_harness_agent_does_not_adapt_bare_json_without_loaded_general_skill(
     monkeypatch,
 ) -> None:
+    """验证未加载通用技能时裸业务 JSON 不被适配，任务以动作协议错误失败。"""
     class FakeLLMClient:
+        """返回裸业务 JSON 而非动作协议的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(self, _system_prompt, _payload):
+            """返回不符合动作协议的裸业务 JSON。"""
             return {
                 "function": "ZRFC_HR_GET_PERNR_INFO",
                 "params": '{"I_ENAME":"张三","I_BS":"1"}',
@@ -3209,6 +3284,7 @@ def test_harness_agent_does_not_adapt_bare_json_without_loaded_general_skill(
 def test_harness_agent_repairs_invalid_tool_action_envelope_once(
     monkeypatch,
 ) -> None:
+    """验证动作信封非法时只修复一次，之后按 capability_describe 正常执行。"""
     payloads: list[dict[str, object]] = []
     actions = iter(
         [
@@ -3230,10 +3306,12 @@ def test_harness_agent_repairs_invalid_tool_action_envelope_once(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(self, _system_prompt, payload):
+            """记录 payload 并返回下一段预置动作。"""
             payloads.append(deepcopy(payload))
             return next(actions)
 
@@ -3282,6 +3360,7 @@ def test_harness_agent_repairs_invalid_tool_action_envelope_once(
 def test_harness_agent_executes_consecutive_json_actions_in_order(
     monkeypatch,
 ) -> None:
+    """验证模型连续返回的多个 JSON 动作会按顺序全部执行。"""
     outputs = iter(
         [
             [
@@ -3305,10 +3384,12 @@ def test_harness_agent_executes_consecutive_json_actions_in_order(
     )
 
     class FakeLLMClient:
+        """按脚本返回动作序列的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json_sequence(self, _system_prompt, _payload):
+            """返回下一批预置动作序列。"""
             return next(outputs)
 
     monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
@@ -3364,6 +3445,7 @@ def test_harness_agent_executes_consecutive_json_actions_in_order(
 
 
 def test_invalid_action_protocol_failure_keeps_sop_loop_recoverable() -> None:
+    """验证动作协议错误可恢复，而业务失败不可恢复。"""
     failure = TaskExecutionResult(
         task_frame_id="task-purchase",
         status="failed",
@@ -3394,12 +3476,14 @@ def test_resumed_agent_sees_latest_user_reply(monkeypatch) -> None:
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录 payload 并返回下一段预置动作。"""
             payloads.append(deepcopy(payload))
             return next(actions)
 
@@ -3430,6 +3514,7 @@ def test_resumed_agent_sees_latest_user_reply(monkeypatch) -> None:
 
 
 def test_failed_following_sop_step_keeps_completed_checkpoint_reply() -> None:
+    """验证后续 SOP 步骤失败时保留上一完成步骤的回复，并标记为动作预算延迟。"""
     completed = TaskExecutionResult(
         task_frame_id="task-price-compare",
         status="completed",
@@ -3464,6 +3549,7 @@ def test_failed_following_sop_step_keeps_completed_checkpoint_reply() -> None:
 def test_harness_agent_blocks_repeated_non_retryable_action(
     monkeypatch,
 ) -> None:
+    """验证不可重试动作重复出现时不再执行，交由模型直接收尾。"""
     repeated_action = {
         "action": "tool",
         "tool_name": "exec_command",
@@ -3483,16 +3569,19 @@ def test_harness_agent_blocks_repeated_non_retryable_action(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(self, _system_prompt, _payload):
+            """返回下一段预置动作。"""
             return next(actions)
 
     monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
     invoked: list[tuple[str, dict[str, object]]] = []
 
     def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        """记录调用并返回不可重试的失败结果。"""
         invoked.append((name, arguments))
         return {
             "success": False,
@@ -3536,6 +3625,7 @@ def test_harness_agent_blocks_repeated_non_retryable_action(
 def test_harness_agent_does_not_restore_non_retryable_failures_from_checkpoint(
     monkeypatch,
 ) -> None:
+    """验证不可重试的失败不会从检查点恢复，新轮次会重新调用工具。"""
     action = {
         "action": "tool",
         "tool_name": "read_file",
@@ -3554,10 +3644,12 @@ def test_harness_agent_does_not_restore_non_retryable_failures_from_checkpoint(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(self, _system_prompt, _payload):
+            """返回下一段预置动作。"""
             return next(actions)
 
     monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
@@ -3602,6 +3694,7 @@ def test_harness_agent_does_not_restore_non_retryable_failures_from_checkpoint(
 def test_harness_agent_activates_described_capability_for_current_revision(
     monkeypatch,
 ) -> None:
+    """验证描述结果匹配当前快照修订时激活能力，并允许随后调用。"""
     actions = iter(
         [
             {
@@ -3624,16 +3717,19 @@ def test_harness_agent_activates_described_capability_for_current_revision(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(self, _system_prompt, _payload):
+            """返回下一段预置动作。"""
             return next(actions)
 
     monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
     invoked: list[str] = []
 
     def invoke_tool(name: str, _arguments: dict[str, object]) -> dict[str, object]:
+        """模拟能力描述与业务工具调用，返回带修订号的描述结果。"""
         invoked.append(name)
         if name == "capability_describe":
             return {
@@ -3680,6 +3776,7 @@ def test_harness_agent_activates_described_capability_for_current_revision(
 
 
 def test_harness_agent_rejects_describe_result_from_another_snapshot() -> None:
+    """验证来自其他快照修订的描述结果被拒绝，且不激活任何能力。"""
     requirement = TaskRequirement(
         task_frame_id="task-discovery",
         kind="conversation",
@@ -3712,6 +3809,7 @@ def test_harness_agent_rejects_describe_result_from_another_snapshot() -> None:
 def test_harness_agent_keeps_knowledge_results_and_citations_linked(
     monkeypatch,
 ) -> None:
+    """验证知识检索结果与引用保持关联，并输出带标号的全局引用。"""
     actions = iter(
         [
             {
@@ -3729,12 +3827,14 @@ def test_harness_agent_keeps_knowledge_results_and_citations_linked(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, _payload: dict[str, object]
         ) -> dict[str, object]:
+            """返回下一段预置动作。"""
             return next(actions)
 
     monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
@@ -3803,6 +3903,7 @@ def test_harness_agent_keeps_knowledge_results_and_citations_linked(
 def test_harness_agent_limits_successful_knowledge_searches_to_two(
     monkeypatch,
 ) -> None:
+    """验证同类知识检索最多成功两次，第三次被拒绝并标记失败码。"""
     actions = iter(
         [
             {
@@ -3830,17 +3931,20 @@ def test_harness_agent_limits_successful_knowledge_searches_to_two(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, _payload: dict[str, object]
         ) -> dict[str, object]:
+            """返回下一段预置动作。"""
             return next(actions)
 
     monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
 
     def invoke_tool(_name: str, arguments: dict[str, object]) -> dict[str, object]:
+        """按查询词返回对应的知识检索证据。"""
         query = str(arguments["query"])
         slug = "latest" if query == "最新制度" else "old"
         return {
@@ -3907,6 +4011,7 @@ def test_harness_agent_projects_only_validated_current_turn_images(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """验证只有经校验的本轮图片被投影给模型，data_url 不进入持久化载荷。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     data_url = "data:image/png;base64,iVBORw0KGgo="
     descriptors = materialize_task_attachments(
@@ -3927,12 +4032,14 @@ def test_harness_agent_projects_only_validated_current_turn_images(
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
+        """返回完成动作并记录模型 payload 的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录 payload 并返回完成动作。"""
             payloads.append(deepcopy(payload))
             return {
                 "action": "finish",
@@ -4037,15 +4144,18 @@ def test_harness_agent_projects_only_validated_current_turn_images(
 def test_harness_agent_drops_tampered_image_data_url(
     monkeypatch,
 ) -> None:
+    """验证被篡改的图片 data_url 被丢弃，只保留不可用标记。"""
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
+        """记录 payload 并返回完成动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录 payload 并返回图片校验失败的完成动作。"""
             payloads.append(deepcopy(payload))
             return {
                 "action": "finish",
@@ -4095,6 +4205,7 @@ def test_harness_agent_drops_tampered_image_data_url(
 def test_harness_agent_cannot_skip_required_sop_tool(
     monkeypatch,
 ) -> None:
+    """验证必选 SOP 工具未调用前 finish 被打回，补调后才允许完成。"""
     actions = iter(
         [
             {
@@ -4119,18 +4230,21 @@ def test_harness_agent_cannot_skip_required_sop_tool(
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录 payload 并返回下一段预置动作。"""
             payloads.append(deepcopy(payload))
             return next(actions)
 
     calls: list[tuple[str, dict[str, object]]] = []
 
     def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        """记录工具调用并返回 OCR 成功结果。"""
         calls.append((name, arguments))
         return {"success": True, "data": {"text": "OCR result"}}
 
@@ -4201,18 +4315,21 @@ def test_harness_agent_blocks_failed_finish_without_attempting_required_tool(
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录 payload 并返回下一段预置动作。"""
             payloads.append(deepcopy(payload))
             return next(actions)
 
     calls: list[str] = []
 
     def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        """记录调用并返回服务端拒绝的失败结果。"""
         calls.append(name)
         return {"success": False, "error": {"code": "SERVER_REJECTED"}}
 
@@ -4249,6 +4366,7 @@ def test_harness_agent_blocks_failed_finish_without_attempting_required_tool(
 
 
 def test_harness_agent_requires_the_configured_knowledge_base(monkeypatch) -> None:
+    """验证 knowledge_search 必须使用配置的知识库，否则被打回重试。"""
     actions = iter(
         [
             {
@@ -4275,17 +4393,20 @@ def test_harness_agent_requires_the_configured_knowledge_base(monkeypatch) -> No
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, _payload: dict[str, object]
         ) -> dict[str, object]:
+            """返回下一段预置动作。"""
             return next(actions)
 
     calls: list[dict[str, object]] = []
 
     def invoke_tool(_name: str, arguments: dict[str, object]) -> dict[str, object]:
+        """记录检索参数并返回空结果。"""
         calls.append(arguments)
         return {"success": True, "data": {"chunks": []}}
 
@@ -4323,6 +4444,7 @@ def test_harness_agent_requires_the_configured_knowledge_base(monkeypatch) -> No
 
 
 def test_task_frame_store_persists_frames_and_projects_only_active_sop_work() -> None:
+    """验证 TaskFrameStore 持久化任务帧，且只把活动 SOP 工作投影到会话。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session(
@@ -4432,6 +4554,7 @@ def test_task_frame_store_persists_frames_and_projects_only_active_sop_work() ->
 
 
 def test_agent_loop_identity_is_durable_per_general_session_and_sop_frame() -> None:
+    """验证通用会话共享同一循环身份，而不同 SOP 帧各自拥有独立循环。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session()
@@ -4523,6 +4646,7 @@ def test_agent_loop_identity_is_durable_per_general_session_and_sop_frame() -> N
 def test_harness_agent_checkpoint_restores_transcript_across_activation(
     monkeypatch,
 ) -> None:
+    """验证检查点能跨激活恢复内层对话记录，新任务开始时清空。"""
     payloads: list[dict[str, object]] = []
     actions = iter(
         [
@@ -4545,12 +4669,14 @@ def test_harness_agent_checkpoint_restores_transcript_across_activation(
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(
             self, _system_prompt: str, payload: dict[str, object]
         ) -> dict[str, object]:
+            """记录 payload 并返回下一段预置动作。"""
             payloads.append(payload)
             return next(actions)
 
@@ -4604,7 +4730,7 @@ def test_harness_agent_checkpoint_restores_transcript_across_activation(
 
 
 def test_multi_step_detached_task_resumes_agent_after_external_result(monkeypatch) -> None:
-    """A detached step must pause, then allow the next step after result injection."""
+    """验证分离步骤先暂停，注入外部结果后恢复并继续执行下一步骤。"""
 
     actions = iter(
         [
@@ -4622,10 +4748,12 @@ def test_multi_step_detached_task_resumes_agent_after_external_result(monkeypatc
     )
 
     class FakeLLMClient:
+        """按脚本返回预置动作的假 LLM 客户端。"""
         def __init__(self, _model_config: ModelConfig):
-            pass
+            """忽略模型配置，仅满足客户端构造签名。"""
 
         def generate_json(self, _system_prompt: str, _payload: dict[str, object]):
+            """返回下一段预置动作。"""
             return next(actions)
 
     monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
@@ -4703,6 +4831,7 @@ def test_multi_step_detached_task_resumes_agent_after_external_result(monkeypatc
 
 
 def test_turn_action_budget_defers_unstarted_frames_as_queued() -> None:
+    """验证超出本轮动作预算的未启动任务帧被推迟为 queued。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session()
@@ -4737,6 +4866,7 @@ def test_turn_action_budget_defers_unstarted_frames_as_queued() -> None:
 
 
 def test_dependent_followup_stays_queued_then_releases_with_parent_result() -> None:
+    """验证依赖父任务结果的后续帧先排队，父结果就绪后才释放。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session()
@@ -4860,6 +4990,7 @@ def test_dependent_followup_stays_queued_then_releases_with_parent_result() -> N
 
 
 def test_referenced_session_results_resolve_prior_capability_by_exact_slot_value() -> None:
+    """验证引用会话结果时按精确槽位值匹配先前的能力调用。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session()
@@ -4931,6 +5062,7 @@ def test_referenced_session_results_resolve_prior_capability_by_exact_slot_value
 
 
 def test_ready_dependency_frames_repairs_legacy_dependency_block() -> None:
+    """验证 legacy 依赖阻塞会被修复，父任务完成后释放子帧。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session()
@@ -4966,6 +5098,7 @@ def test_ready_dependency_frames_repairs_legacy_dependency_block() -> None:
 
 
 def test_replanning_existing_followup_preserves_its_dependency() -> None:
+    """验证重新规划已存在的后续帧时保留其依赖关系。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session()
@@ -5014,6 +5147,7 @@ def test_replanning_existing_followup_preserves_its_dependency() -> None:
 
 
 def test_cancellation_closes_every_frame_and_running_run_from_source_turn() -> None:
+    """验证取消会关闭同轮次所有任务帧并取消运行中的运行记录。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session()
@@ -5081,6 +5215,7 @@ def test_cancellation_closes_every_frame_and_running_run_from_source_turn() -> N
 
 
 def test_latest_awaiting_conversation_takes_focus_without_losing_sop() -> None:
+    """验证最新等待中的对话任务获得焦点，同时不丢失活动 SOP。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session(
@@ -5154,6 +5289,7 @@ def test_latest_awaiting_conversation_takes_focus_without_losing_sop() -> None:
 
 
 def test_frame_and_run_completion_are_fenced_by_current_lease() -> None:
+    """验证任务帧与运行记录的完成都受当前租约栅栏保护。"""
     engine = _test_engine()
     with Session(engine) as db:
         session = _chat_session()
@@ -5233,6 +5369,7 @@ def test_frame_and_run_completion_are_fenced_by_current_lease() -> None:
 
 
 def _test_engine():
+    """创建共享内存 SQLite 测试引擎，并建好全部表结构。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -5250,10 +5387,13 @@ def test_activate_frame_records_skill_call_events_for_stats() -> None:
     """
 
     class _StubRuntime:
+        """记录被恢复任务帧的桩运行时。"""
         def __init__(self) -> None:
+            """初始化已恢复任务帧列表。"""
             self.restored: list[dict[str, object]] = []
 
         def restore_task_frame(self, session: ChatSession, frame: dict[str, object]) -> None:
+            """记录恢复的任务帧，供测试断言。"""
             self.restored.append(frame)
 
     engine = _test_engine()
@@ -5272,6 +5412,7 @@ def test_activate_frame_records_skill_call_events_for_stats() -> None:
         db.commit()
 
         def _frame_record(decision: str) -> HarnessTaskFrameRecord:
+            """按决策类型构造用于激活测试的 SOP 任务帧记录。"""
             return HarnessTaskFrameRecord(
                 tenant_id="tenant-demo",
                 session_id="session-1",
@@ -5317,6 +5458,7 @@ def test_activate_frame_records_skill_call_events_for_stats() -> None:
 
 
 def _chat_session(**updates: object) -> ChatSession:
+    """构造带默认租户的会话，并允许测试覆盖字段。"""
     values: dict[str, object] = {
         "id": "session-1",
         "tenant_id": "tenant-demo",
@@ -5326,6 +5468,7 @@ def _chat_session(**updates: object) -> ChatSession:
 
 
 def _refund_skill() -> Skill:
+    """构造发布状态的退款 SOP 技能，供多个测试复用。"""
     return Skill(
         id="skill-refund",
         tenant_id="tenant-demo",
@@ -5355,6 +5498,7 @@ def _refund_skill() -> Skill:
 
 
 def _scope_skill() -> Skill:
+    """构造带分步能力范围的 SOP 技能，用于能力清单测试。"""
     return Skill(
         id="skill-scope",
         tenant_id="tenant-demo",
@@ -5385,6 +5529,7 @@ def _scope_skill() -> Skill:
 
 
 def _model_config() -> ModelConfig:
+    """构造最小可用的测试模型配置。"""
     return ModelConfig(
         id="model-test",
         tenant_id="tenant-demo",
@@ -5395,6 +5540,7 @@ def _model_config() -> ModelConfig:
 
 
 def test_agent_loop_transcript_compacts_old_tool_payloads_but_keeps_skill_instructions() -> None:
+    """验证内层对话记录会压缩旧工具载荷，但保留技能指令与历史回执。"""
     transcript = [
         {
             "role": "tool",
@@ -5471,6 +5617,7 @@ def test_current_time_uses_client_timezone_with_safe_fallback() -> None:
 
 
 def test_compile_threads_client_timezone_into_requirement() -> None:
+    """验证编译任务需求时把客户端时区传入 current_time。"""
     requirement = TaskRequestCompiler().compile(
         PlannedTaskFrame(task_id="task-tz", kind="conversation"),
         ChatSession(id="s-tz", tenant_id="t1"),

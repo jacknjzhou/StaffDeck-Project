@@ -6,6 +6,7 @@ from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_serv
 
 
 def test_mock_api_rejects_anonymous_and_invalid_internal_requests() -> None:
+    """验证 mock API 拒绝匿名请求与无效内部服务令牌，两种情况均返回 401。"""
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
@@ -20,6 +21,7 @@ def test_mock_api_rejects_anonymous_and_invalid_internal_requests() -> None:
 
 
 def test_mock_api_accepts_internal_service_token() -> None:
+    """验证携带合法内部服务令牌时请求返回 200 并命中订单数据。"""
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)

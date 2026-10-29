@@ -16,6 +16,7 @@ const weatherCommand: ChatSlashCommand = {
   command: '/skill weather',
 };
 
+/** 渲染一条用户消息，并注入斜杠命令与聊天会话 mock。 */
 function renderSlashMessage(content: string, slashCommands: ChatSlashCommand[] = [weatherCommand]) {
   const item: ChatMessage = {
     id: 'message-1',
@@ -52,6 +53,7 @@ function renderSlashMessage(content: string, slashCommands: ChatSlashCommand[] =
 }
 
 describe('MessageBubble slash command card', () => {
+  /** 验证已发送的斜杠命令渲染为卡片，并与请求正文分别展示。 */
   it('renders a sent slash command as a card beside its request text', () => {
     renderSlashMessage('/skill weather 北京天气如何');
 
@@ -60,6 +62,7 @@ describe('MessageBubble slash command card', () => {
     expect(screen.queryByText('/skill weather 北京天气如何')).toBeNull();
   });
 
+  /** 验证引用的资源已不在命令列表中时仍保留命令卡片。 */
   it('keeps the card when the referenced resource is no longer listed', () => {
     renderSlashMessage('/skill archived_weather 北京天气如何', []);
 
@@ -68,6 +71,7 @@ describe('MessageBubble slash command card', () => {
 });
 
 describe('MessageBubble responsive sizing', () => {
+  /** 验证短用户消息不会被收缩包裹容器包住，避免气泡宽度异常。 */
   it('keeps a short user message out of a shrink-to-fit wrapper', () => {
     renderSlashMessage('确认', []);
 
@@ -78,6 +82,7 @@ describe('MessageBubble responsive sizing', () => {
 });
 
 describe('MessageBubble team group identity', () => {
+  /** 验证助手消息旁展示团队项目领导的头像、姓名与身份标签。 */
   it('shows the project leader avatar and name beside assistant messages', () => {
     const item: ChatMessage = {
       id: 'message-team-1',
@@ -132,6 +137,7 @@ describe('MessageBubble team group identity', () => {
     expect(screen.getByText('团队回复')).toBeTruthy();
   });
 
+  /** 验证团队进行中展示实时进度，并在汇总完成前隐藏反馈按钮。 */
   it('shows live team progress and hides feedback until synthesis finishes', () => {
     const item: ChatMessage = {
       id: 'message-team-progress',

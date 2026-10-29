@@ -32,14 +32,15 @@ CancellationCheck = Callable[[], bool]
 
 
 class HarnessExecutionCancelled(RuntimeError):
-    pass
+    """调用方已取消本次 Harness 执行时抛出，用于中断内层动作循环。"""
 
 
 class HarnessExecutionFenced(RuntimeError):
-    pass
+    """会话租约丢失或被其他执行者抢占时抛出，调用方必须立即停止写入。"""
 
 
 class HarnessAction(BaseModel):
+    """模型单步输出的动作协议：调用一个已授权能力，或结束当前任务。"""
     action: Literal["tool", "finish"]
     tool_name: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -52,7 +53,7 @@ class HarnessAction(BaseModel):
 
 
 class HarnessTaskAgent:
-    """Runs one isolated TaskRequirement without outer conversation messages."""
+    """执行单个 TaskRequirement 的隔离运行体，不读取外层会话消息。"""
 
     def run(
         self,
@@ -68,6 +69,12 @@ class HarnessTaskAgent:
         step_timeout_seconds: int | None = None,
         checkpoint: dict[str, Any] | None = None,
     ) -> TaskExecutionResult:
+        """执行本轮任务直到产出结论，返回 TaskExecutionResult。
+
+        每轮把压缩后的对话记录、冻结能力清单与知识检索预算交给模型，解析出的动作
+        依次执行；达到动作上限、单步超时或取消时返回对应状态，并通过
+        loop_checkpoint 保存可恢复的上下文。
+        """
         max_actions = max(1, min(int(max_actions), 100))
         checkpoint = dict(checkpoint or {})
         current_step_id = _requirement_step_id(requirement)
@@ -132,6 +139,7 @@ class HarnessTaskAgent:
         pending_actions: list[HarnessAction] = []
 
         def finish(result: TaskExecutionResult) -> TaskExecutionResult:
+            """补齐任务摘要，并按当前 TaskFrame 与步骤写入 loop_checkpoint 后返回。"""
             summary = " ".join(
                 str(result.task_summary or result.reply_fragment or "").split()
             ).strip()
@@ -661,6 +669,7 @@ class HarnessTaskAgent:
 
 
 def _requirement_step_id(requirement: TaskRequirement) -> str:
+    """提取 SOP 上下文里的步骤标识，依次尝试 step_id、node_id、id。"""
     step = requirement.sop_context.get("step")
     if not isinstance(step, dict):
         return ""
@@ -672,6 +681,7 @@ def _requirement_step_id(requirement: TaskRequirement) -> str:
 
 
 def _dict_items(value: object) -> list[dict[str, Any]]:
+    """把任意值过滤为字典列表，非列表与非字典元素一律丢弃。"""
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, dict)]
@@ -682,6 +692,11 @@ def _activate_described_capabilities(
     tool_name: str,
     result: dict[str, Any],
 ) -> set[str]:
+    """把 capability_describe 返回的新能力并入冻结清单，返回本次激活的名称。
+
+    快照版本不一致、能力不可用或 kind 为 internal 的条目会被忽略，避免模型借
+    描述动作扩大自身可调用的能力范围。
+    """
     if tool_name != "capability_describe" or result.get("success") is not True:
         return set()
     data = result.get("data")
@@ -715,6 +730,7 @@ def _is_loaded_general_skill_result(
     tool_name: str,
     result: dict[str, Any],
 ) -> bool:
+    """判断工具结果是否为 General Skill 说明的成功加载（operation=read）。"""
     data = result.get("data")
     return (
         tool_name.startswith("general_skill.")
@@ -726,6 +742,7 @@ def _is_loaded_general_skill_result(
 
 
 def _action_signature(tool_name: str, arguments: dict[str, Any]) -> str:
+    """生成工具名与参数的稳定签名，用于识别重复的不可重试调用。"""
     return json.dumps(
         {"tool_name": tool_name, "arguments": arguments},
         ensure_ascii=False,
@@ -736,6 +753,7 @@ def _action_signature(tool_name: str, arguments: dict[str, Any]) -> str:
 
 
 def _is_non_retryable_failure(result: object) -> bool:
+    """判断工具结果是否为明确标记 retryable=false 的失败。"""
     if not isinstance(result, dict) or result.get("success") is not False:
         return False
     error = result.get("error")
@@ -747,7 +765,7 @@ def _generate_harness_action_json(
     system_prompt: str,
     payload: dict[str, Any],
 ) -> Any:
-    """Use sequence-aware parsing when the concrete client supports it."""
+    """优先调用支持动作序列的生成接口，老客户端回退到单动作生成。"""
 
     sequence_generator = getattr(client, "generate_json_sequence", None)
     if callable(sequence_generator):
@@ -757,7 +775,11 @@ def _generate_harness_action_json(
 
 
 def _harness_actions_from_raw(raw: object) -> list[HarnessAction]:
-    """Normalize one action or an ordered action sequence from a provider response."""
+    """把模型原始输出归一化为有序动作列表。
+
+    兼容单个动作、{"actions": [...]} 包装与裸数组；序列为空或 finish 不在末尾时
+    抛 ValueError，由上层触发一次协议修复。
+    """
 
     items: object = raw
     if isinstance(raw, dict) and set(raw) == {"actions"}:
@@ -777,13 +799,10 @@ def _adapt_general_skill_structured_result(
     *,
     loaded_general_skill_names: list[str],
 ) -> HarnessAction | None:
-    """Turn an instruction-only Skill's bare business JSON into a safe finish action.
+    """把仅含说明的 Skill 直接返回的业务 JSON 适配成安全的 finish 动作。
 
-    Skill authors describe the business output contract, not the Harness control
-    protocol.  The adapter is deliberately gated on a successfully loaded
-    GeneralSkill and never accepts an object that attempted to emit an invalid
-    Harness action.  Consequently an RFC/MCP-shaped object is returned as data;
-    it is not interpreted or executed as a tool call.
+    适配只在成功加载过 General Skill 时生效，且拒绝任何自带 action/actions 字段
+    的输入，因此 RFC 或 MCP 形态的对象只会作为数据返回，不会被当作工具调用执行。
     """
 
     if not loaded_general_skill_names or not isinstance(raw, (dict, list)):
@@ -816,6 +835,7 @@ def _missing_required_capabilities(
     capability_results: list[dict[str, Any]],
     satisfied_required_knowledge_ids: set[str],
 ) -> list[str]:
+    """列出尚未成功执行的强制能力，知识库需求以 knowledge_search:<id> 形式表示。"""
     succeeded = {
         str(item.get("tool_name") or "")
         for item in capability_results
@@ -829,6 +849,7 @@ def _missing_required_capabilities(
 
 
 def _has_usable_knowledge_evidence(result: dict[str, Any]) -> bool:
+    """判断知识检索结果是否带有可用证据（引用列表或 evidence_pack）。"""
     citations = result.get("citations")
     if isinstance(citations, list) and any(isinstance(item, dict) for item in citations):
         return True
@@ -849,6 +870,11 @@ def _finish_result(
     *,
     action_count: int,
 ) -> TaskExecutionResult:
+    """把模型 finish 动作转换为 TaskExecutionResult。
+
+    next_step_id 必须落在允许的迁移目标内，否则清空；处于 handoff 节点且未指定
+    下一步时，状态归一化为 handoff。
+    """
     status = action.status or "completed"
     step = requirement.sop_context.get("step") if requirement.sop_context else None
     step_type = str(step.get("type") or "").strip() if isinstance(step, dict) else ""
@@ -883,6 +909,7 @@ def _finish_result(
 
 
 def _extend_dict_list(target: list[dict[str, Any]], value: object) -> None:
+    """把 value 中的字典元素追加到目标列表，其他类型静默忽略。"""
     if not isinstance(value, list):
         return
     for item in value:
@@ -891,11 +918,13 @@ def _extend_dict_list(target: list[dict[str, Any]], value: object) -> None:
 
 
 def _raise_if_cancelled(check: CancellationCheck | None) -> None:
+    """取消检查命中时抛 HarnessExecutionCancelled，中断当前执行。"""
     if check is not None and check():
         raise HarnessExecutionCancelled("Harness execution was cancelled.")
 
 
 def _deadline_expired(deadline_monotonic: float | None) -> bool:
+    """判断单调时钟是否已到达单步截止时刻，未设置截止时恒为 False。"""
     return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
 
 
@@ -903,6 +932,7 @@ def _deadline_llm_client(
     model_config: ModelConfig,
     deadline_monotonic: float | None,
 ) -> LLMClient:
+    """构造带剩余时长约束的 LLM 客户端，避免单次调用越过单步截止时刻。"""
     if deadline_monotonic is None:
         return LLMClient(model_config)
     remaining = max(deadline_monotonic - time.monotonic(), 0.1)
@@ -928,6 +958,7 @@ def _step_timeout_result(
     artifacts: list[dict[str, Any]],
     trace_sink: TraceSink | None,
 ) -> TaskExecutionResult:
+    """构造单步超时的失败结果，并上报 harness_step_timeout 追踪事件。"""
     limit_text = f"{timeout_seconds} 秒" if timeout_seconds else "配置的时间"
     error = {
         "code": "SOP_STEP_TIMEOUT",
@@ -963,6 +994,7 @@ def _bounded_capability_result(
     *,
     max_chars: int = 12_000,
 ) -> dict[str, Any]:
+    """构造写入对话与检查点的能力结果，超长时截断为预览并标记 truncated。"""
     payload = {
         "tool_name": tool_name,
         "success": bool(result.get("success")),
@@ -996,12 +1028,10 @@ def _transcript_for_model(
     *,
     keep_recent_entries: int = 6,
 ) -> list[dict[str, Any]]:
-    """Project persistent tool history into a bounded execution context.
+    """把持久的工具历史投影成有界的模型上下文。
 
-    Tool results stay in the durable invocation/trace records.  The model only
-    needs the newest interactions plus stable receipts for older operations.
-    GeneralSkill package instructions are retained because they define the
-    workflow the current AgentLoop is following.
+    旧工具结果压缩为回执，只保留最新若干条交互；每个 General Skill 的最新说明
+    条目始终保留，因为它定义了当前 AgentLoop 正在遵循的流程。
     """
 
     cutoff = max(0, len(transcript) - keep_recent_entries)
@@ -1085,6 +1115,7 @@ def _transcript_for_model(
 
 
 def _is_general_skill_instruction_entry(entry: dict[str, Any]) -> bool:
+    """判断条目是否为一条成功加载的 General Skill 说明（tool 角色且带结果）。"""
     if entry.get("role") != "tool" or not str(entry.get("tool_name") or "").startswith(
         "general_skill."
     ):
@@ -1094,6 +1125,7 @@ def _is_general_skill_instruction_entry(entry: dict[str, Any]) -> bool:
 
 
 def _history_receipt(value: Any) -> dict[str, Any]:
+    """为被省略的历史内容生成回执：原始字符数与内容摘要，便于模型确认已裁剪。"""
     serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
     return {
         "omitted_chars": len(serialized),
@@ -1102,6 +1134,7 @@ def _history_receipt(value: Any) -> dict[str, Any]:
 
 
 def _compact_old_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """参数较短时原样返回，超过 1000 字符则替换为历史回执以压缩上下文。"""
     serialized = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
     if len(serialized) <= 1_000:
         return dict(arguments)
@@ -1109,6 +1142,7 @@ def _compact_old_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _string_list(value: object) -> list[str]:
+    """把任意值规整为非空去空白的字符串列表，非列表输入返回空列表。"""
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
@@ -1118,6 +1152,7 @@ def _trace_capability_result(
     tool_name: str,
     result: dict[str, Any],
 ) -> dict[str, Any]:
+    """裁剪 Trace 中的能力结果，General Skill 只保留少量关键字段。"""
     trace_result = dict(result)
     data = trace_result.get("data")
     if tool_name.startswith("general_skill.") and isinstance(data, dict):

@@ -5,6 +5,7 @@ from app.core.harness_capability_invoker import HarnessCapabilityInvoker
 
 
 def test_a2a_file_parts_become_harness_workspace_artifacts(tmp_path) -> None:
+    """验证 A2A 文件分片被解码落盘，并回填 path/sandbox_path 与 sha256 校验和。"""
     content = b"A2A artifact\n"
     payload = {
         "success": True,

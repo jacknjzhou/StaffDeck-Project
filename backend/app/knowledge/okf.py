@@ -37,6 +37,8 @@ MIN_CONCEPT_SEARCH_SCORE = 4.0
 
 @dataclass
 class ParsedOkfDocument:
+    """单篇 OKF 文档的解析结果：规范化 concept_id、frontmatter、正文与重渲染文本。"""
+
     concept_id: str
     frontmatter: dict[str, Any]
     body: str
@@ -48,6 +50,10 @@ def build_okf_for_document(
     section_nodes: list[dict[str, Any]],
     buckets: list[KnowledgeBucket],
 ) -> list[dict[str, Any]]:
+    """为原始文档生成 Source Document、章节与知识桶三类 OKF 概念页。
+
+    章节最多取前 80 个，每个概念以 content_md 携带完整 frontmatter 与正文。
+    """
     document_slug = safe_path_segment(document.title or Path(document.filename).stem or document.id)
     document_concept_id = f"sources/{document_slug}"
     document_card = document.metadata_json.get("document_card") if isinstance(document.metadata_json, dict) else {}
@@ -70,6 +76,10 @@ def upsert_concepts(
     knowledge_base_version_id: str | None,
     concepts: list[dict[str, Any]],
 ) -> list[KnowledgeConcept]:
+    """按 (版本, concept_id) 幂等写入概念页，返回已提交并刷新的行。
+
+    缺少 concept_id 或 content_md 的条目会被跳过；已存在则原地更新并刷新 updated_at。
+    """
     rows: list[KnowledgeConcept] = []
     for item in concepts:
         concept_id = normalize_concept_id(str(item.get("concept_id") or ""))
@@ -132,6 +142,7 @@ def upsert_concepts(
 
 
 def selected_concept_cards(concepts: list[KnowledgeConcept]) -> list[dict[str, Any]]:
+    """把选中的概念行转成检索结果卡片，正文去掉 frontmatter 并截断到摘录上限。"""
     return [
         {
             "id": row.id,
@@ -149,6 +160,10 @@ def selected_concept_cards(concepts: list[KnowledgeConcept]) -> list[dict[str, A
 
 
 def search_concepts(query: str, concepts: list[KnowledgeConcept], limit: int = 6) -> list[KnowledgeConcept]:
+    """按关键词重叠对概念粗排，返回得分达阈值的前 limit 条。
+
+    标题/类型/描述命中权重高于正文；Source Document 命中后略降权，避免入口页挤占结果。
+    """
     if not query.strip():
         return []
     scored = []
@@ -187,6 +202,7 @@ def search_concepts(query: str, concepts: list[KnowledgeConcept], limit: int = 6
 
 
 def okf_citations_for_concepts(concepts: list[KnowledgeConcept]) -> list[dict[str, Any]]:
+    """汇总概念页的引用，按 (concept_id, target) 去重后返回。"""
     citations: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for row in concepts:
@@ -213,6 +229,7 @@ def export_okf_bundle(
     concepts: list[KnowledgeConcept],
     log_entries: list[dict[str, Any]] | None = None,
 ) -> bytes:
+    """把知识库导出为 OKF zip 字节流，含 index.md、log.md 与全部概念页。"""
     buffer = BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
         archive.writestr("index.md", build_index_markdown(kb, concepts))
@@ -223,6 +240,7 @@ def export_okf_bundle(
 
 
 def build_index_markdown(kb: KnowledgeBase, concepts: list[KnowledgeConcept]) -> str:
+    """生成 OKF 包入口 index.md：按概念类型分组列出带描述的链接目录。"""
     groups: dict[str, list[KnowledgeConcept]] = {}
     for concept in concepts:
         groups.setdefault(concept.concept_type or "Topic", []).append(concept)
@@ -245,6 +263,7 @@ def build_index_markdown(kb: KnowledgeBase, concepts: list[KnowledgeConcept]) ->
 
 
 def build_log_markdown(log_entries: list[dict[str, Any]], concepts: list[KnowledgeConcept]) -> str:
+    """生成 OKF 包更新日志 log.md；无日志条目时用最近概念更新时间兜底。"""
     by_date: dict[str, list[str]] = {}
     for entry in log_entries:
         date = str(entry.get("date") or "")[:10] or utc_now().date().isoformat()
@@ -263,6 +282,7 @@ def build_log_markdown(log_entries: list[dict[str, Any]], concepts: list[Knowled
 
 
 def parse_okf_bundle(filename: str, content: bytes) -> list[ParsedOkfDocument]:
+    """解析上传的 OKF 包：.zip 逐篇解析，.md 单篇解析，其它后缀抛 ValueError。"""
     suffix = Path(filename).suffix.lower()
     if suffix == ".zip":
         return _parse_okf_zip(content)
@@ -280,6 +300,10 @@ def create_concept_evidence_rows(
     document: KnowledgeDocument,
     concepts: list[KnowledgeConcept],
 ) -> None:
+    """为概念页重建知识桶与分块证据，并把文档标记为 ready。
+
+    先删除该文档此前由 OKF 生成的知识桶及其分块，再按正文重新切块并 commit。
+    """
     existing_buckets = db.exec(
         select(KnowledgeBucket).where(
             KnowledgeBucket.tenant_id == tenant_id,
@@ -361,6 +385,7 @@ def lint_okf_concepts(
     knowledge_base_id: str,
     knowledge_base_version_id: str | None,
 ) -> list[dict[str, Any]]:
+    """对知识库内 active 概念做 OKF 结构体检，返回类型/引用/链接/孤岛/重名问题。"""
     concepts = db.exec(
         select(KnowledgeConcept).where(
             KnowledgeConcept.tenant_id == tenant_id,
@@ -405,6 +430,10 @@ def persist_lint_issues(
     knowledge_base_version_id: str | None,
     issues: list[dict[str, Any]],
 ) -> None:
+    """把体检问题写成 knowledge discovery 的 warning 建议。
+
+    按标题去重，最多写入 100 条，结束时 commit。
+    """
     existing_titles = set(
         db.exec(
             select(KnowledgeDiscoverySuggestion.title).where(
@@ -439,6 +468,7 @@ def persist_lint_issues(
 
 
 def parse_okf_markdown(concept_id: str, content_md: str) -> ParsedOkfDocument:
+    """解析单篇 OKF markdown，补全缺省的 type/title 并返回规范化结果。"""
     text = content_md.replace("\r\n", "\n").replace("\r", "\n").strip()
     frontmatter: dict[str, Any] = {}
     body = text
@@ -457,6 +487,7 @@ def parse_okf_markdown(concept_id: str, content_md: str) -> ParsedOkfDocument:
 
 
 def render_okf_markdown(frontmatter: dict[str, Any], body: str) -> str:
+    """把 frontmatter 与正文渲染为带 --- 分隔的 OKF markdown 文本。"""
     lines = ["---"]
     for key, value in frontmatter.items():
         lines.append(f"{key}: {_yaml_scalar(value)}")
@@ -467,6 +498,7 @@ def render_okf_markdown(frontmatter: dict[str, Any], body: str) -> str:
 
 
 def normalize_concept_id(value: str) -> str:
+    """规范化概念 id：统一分隔符、去掉 .md 后缀，并逐段做路径安全化。"""
     text = value.strip().replace("\\", "/").strip("/")
     text = text.removesuffix(".md")
     parts = [safe_path_segment(part) for part in text.split("/") if part.strip()]
@@ -474,6 +506,7 @@ def normalize_concept_id(value: str) -> str:
 
 
 def safe_path_segment(value: Any, fallback: str = "concept") -> str:
+    """把任意文本转成安全的小写路径段；清洗后为空时返回 fallback。"""
     text = str(value or "").strip().lower()
     text = re.sub(r"\.md$", "", text)
     text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", text).strip("-")
@@ -481,6 +514,7 @@ def safe_path_segment(value: Any, fallback: str = "concept") -> str:
 
 
 def extract_links(markdown: str) -> list[dict[str, Any]]:
+    """提取 markdown 行内链接，返回 label/target 对，忽略空 target。"""
     links: list[dict[str, Any]] = []
     for match in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", markdown):
         label = match.group(1).strip()
@@ -491,6 +525,7 @@ def extract_links(markdown: str) -> list[dict[str, Any]]:
 
 
 def extract_citations(markdown: str) -> list[dict[str, Any]]:
+    """提取 # Citations 章节内的编号引用链接，index 缺省时按出现顺序补号。"""
     citations: list[dict[str, Any]] = []
     section = _citations_section(markdown)
     for index, match in enumerate(re.finditer(r"(?:\[(\d+)\]\s*)?\[([^\]]+)\]\(([^)]+)\)", section), start=1):
@@ -511,6 +546,7 @@ def _source_document_concept(
     buckets: list[KnowledgeBucket],
     document_card: dict[str, Any],
 ) -> dict[str, Any]:
+    """构造 Source Document 概念页：汇总摘要、章节大纲、知识桶与原始文档引用。"""
     title = document.title or Path(document.filename).stem or document.filename
     document_metadata = document.metadata_json or {}
     summary = str(document_card.get("summary") or document_metadata.get("summary") or "")
@@ -561,6 +597,7 @@ def _source_document_concept(
 
 
 def _source_section_concept(document: KnowledgeDocument, document_concept_id: str, section: dict[str, Any]) -> dict[str, Any]:
+    """构造 Source Section 概念页：写入章节摘要、正文与原始文档引用。"""
     section_id = str(section.get("section_id") or safe_path_segment(section.get("title"), "section"))
     concept_id = f"{document_concept_id}/sections/{safe_path_segment(section_id)}"
     title = str(section.get("path") or section.get("title") or "未命名章节")
@@ -603,6 +640,7 @@ def _source_section_concept(document: KnowledgeDocument, document_concept_id: st
 
 
 def _bucket_concept(document: KnowledgeDocument, document_concept_id: str, bucket: KnowledgeBucket) -> dict[str, Any]:
+    """构造知识桶概念页：按桶类型落到 playbooks/rules/topics，并回链来源章节。"""
     metadata = bucket.metadata_json or {}
     concept_type = _concept_type_for_bucket(bucket)
     folder = "playbooks" if concept_type == "Playbook" else "rules" if concept_type == "Business Rule" else "topics"
@@ -653,12 +691,14 @@ def _bucket_concept(document: KnowledgeDocument, document_concept_id: str, bucke
 
 
 def _concept_type_for_bucket(bucket: KnowledgeBucket) -> str:
+    """从知识桶元数据读取概念类型，缺失或非法时回退为 Topic。"""
     metadata = bucket.metadata_json if isinstance(bucket.metadata_json, dict) else {}
     concept_type = str(metadata.get("concept_type") or "Topic").strip()
     return concept_type if concept_type in {"Topic", "Playbook", "Business Rule"} else "Topic"
 
 
 def _parse_okf_zip(content: bytes) -> list[ParsedOkfDocument]:
+    """解析 OKF zip：跳过目录、非 .md 与保留文件名，按路径排序逐篇解析。"""
     rows: list[ParsedOkfDocument] = []
     with ZipFile(BytesIO(content)) as archive:
         for name in sorted(archive.namelist()):
@@ -673,6 +713,7 @@ def _parse_okf_zip(content: bytes) -> list[ParsedOkfDocument]:
 
 
 def _parse_frontmatter(raw: str) -> dict[str, Any]:
+    """解析 frontmatter：优先用 PyYAML，失败后回退到按行 key: value 的简易解析。"""
     try:
         import yaml  # type: ignore
 
@@ -695,6 +736,7 @@ def _parse_frontmatter(raw: str) -> dict[str, Any]:
 
 
 def _parse_scalar(value: str) -> Any:
+    """把 frontmatter 标量文本转成 Python 值：JSON 字面量、布尔值或原字符串。"""
     if not value:
         return ""
     if value[0] in {'"', "'", "[", "{"}:
@@ -708,12 +750,14 @@ def _parse_scalar(value: str) -> Any:
 
 
 def _yaml_scalar(value: Any) -> str:
+    """把任意值序列化为单行 JSON/YAML 标量文本，中文不转义。"""
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
     return json.dumps(value, ensure_ascii=False)
 
 
 def _decode_text(content: bytes) -> str:
+    """按 utf-8/utf-8-sig/gb18030/latin-1 依次尝试解码，最终忽略错误兜底。"""
     for encoding in ("utf-8", "utf-8-sig", "gb18030", "latin-1"):
         try:
             return content.decode(encoding)
@@ -723,6 +767,7 @@ def _decode_text(content: bytes) -> str:
 
 
 def _citations_section(markdown: str) -> str:
+    """返回 # Citations（或 # 引用）标题之后的文本；没有该章节时返回空字符串。"""
     match = re.search(r"(?im)^#\s+citations\s*$", markdown)
     if not match:
         match = re.search(r"(?im)^#\s+引用\s*$", markdown)
@@ -732,6 +777,7 @@ def _citations_section(markdown: str) -> str:
 
 
 def _strip_frontmatter(markdown: str) -> str:
+    """去掉 markdown 开头的 --- frontmatter，返回去空白后的正文。"""
     text = markdown.replace("\r\n", "\n").replace("\r", "\n").strip()
     if text.startswith("---\n"):
         end = text.find("\n---", 4)
@@ -741,6 +787,7 @@ def _strip_frontmatter(markdown: str) -> str:
 
 
 def _chunk_text(text: str, max_chars: int) -> list[str]:
+    """按空行分段把长文本切成不超过 max_chars 的块，超长段落再按字符硬切。"""
     paragraphs = [item.strip() for item in re.split(r"\n\s*\n+", text) if item.strip()]
     if not paragraphs:
         paragraphs = [text]
@@ -768,6 +815,7 @@ def _chunk_text(text: str, max_chars: int) -> list[str]:
 
 
 def _summarize(text: str, max_chars: int) -> str:
+    """压缩空白后截断到 max_chars，超长时追加省略号。"""
     compact = re.sub(r"\s+", " ", text or "").strip()
     if len(compact) <= max_chars:
         return compact
@@ -775,6 +823,7 @@ def _summarize(text: str, max_chars: int) -> str:
 
 
 def _optional_str(value: Any) -> str | None:
+    """把值转成去空白的字符串；None 或空串返回 None。"""
     if value is None:
         return None
     text = str(value).strip()
@@ -782,6 +831,10 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _query_tokens(query: str) -> list[str]:
+    """把查询拆成检索 token：英文/数字串与中文词，并为中文补充 2-4 字 n-gram。
+
+    结果去重后最多保留 96 个，兼顾中文无空格的分词场景。
+    """
     tokens: list[str] = []
     for token in re.findall(r"[A-Za-z0-9_.:/-]{2,}|[\u4e00-\u9fff]{2,}", query):
         text = token.lower().strip()
@@ -807,6 +860,7 @@ def _query_tokens(query: str) -> list[str]:
 
 
 def _lint_issue(row: KnowledgeConcept, issue_type: str, message: str) -> dict[str, Any]:
+    """组装一条 OKF 体检问题记录，携带概念与知识库定位信息。"""
     return {
         "issue_type": issue_type,
         "title": f"{row.title}：{message}",

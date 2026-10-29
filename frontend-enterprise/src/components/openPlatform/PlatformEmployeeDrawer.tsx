@@ -32,10 +32,12 @@ export type PlatformEmployeeDrawerProps = {
   onUse: () => void;
 };
 
+/** 抽屉内的横向分隔线，用于分隔头部、内容区与底部操作区。 */
 function DrawerDivider() {
   return <div className="h-px w-full shrink-0 bg-[#e3e7f1]" />;
 }
 
+/** 上一位/下一位切换按钮，按方向旋转箭头，禁用时不可点击。 */
 function NavChevron({
   direction,
   disabled,

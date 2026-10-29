@@ -30,6 +30,7 @@ def _descriptor(
     metadata: dict[str, Any] | None = None,
     available: bool = True,
 ) -> CapabilityDescriptor:
+    """构造测试用的能力描述符，统一填充默认字段以便各用例复用。"""
     return CapabilityDescriptor(
         capability_id=f"cap-{name}",
         name=name,
@@ -43,6 +44,7 @@ def _descriptor(
 
 
 def _catalog_chars(manifest: CapabilityManifest) -> int:
+    """按紧凑 JSON 计算目录字符数，用于校验 8K 预算是否被突破。"""
     return len(
         json.dumps(
             [item.model_dump(mode="json") for item in manifest.catalog],
@@ -53,6 +55,7 @@ def _catalog_chars(manifest: CapabilityManifest) -> int:
 
 
 def _forbidden_schema_paths(value: object, path: str = "$") -> list[str]:
+    """递归收集 schema 中残留的 forbidden 注解路径，便于断言清洗是否彻底。"""
     forbidden = {"default", "examples", "$comment"}
     matches: list[str] = []
     if isinstance(value, dict):
@@ -68,6 +71,7 @@ def _forbidden_schema_paths(value: object, path: str = "$") -> list[str]:
 
 
 def test_projected_catalog_respects_8k_budget_and_marks_truncation() -> None:
+    """验证目录投影不超过 8K 预算、按原始顺序截断并给出截断标记。"""
     descriptors = [
         _descriptor(
             f"tool_{index:03d}_{'x' * 48}",
@@ -92,6 +96,7 @@ def test_projected_catalog_respects_8k_budget_and_marks_truncation() -> None:
 
 
 def test_initial_projection_expands_only_kernel_and_sop_explicit_capabilities() -> None:
+    """验证初始投影只展开内核能力与显式允许的 SOP 能力，其余仅进目录。"""
     kernel = [
         _descriptor(
             name,
@@ -151,6 +156,7 @@ def test_initial_projection_expands_only_kernel_and_sop_explicit_capabilities() 
 
 
 def test_capability_search_honors_kind_limit_and_stable_name_order() -> None:
+    """验证能力搜索会按 kind 过滤、限制结果数并按名称稳定排序。"""
     tools = [
         _descriptor(f"tool_{index:02d}", description="zzzz shared capability")
         for index in reversed(range(25))
@@ -265,6 +271,7 @@ def test_model_descriptor_exposes_only_kind_specific_safe_metadata(
     metadata: dict[str, Any],
     expected: dict[str, Any],
 ) -> None:
+    """验证模型描述符只暴露各 kind 对应的安全元数据字段。"""
     projected = model_descriptor(
         _descriptor(f"demo.{kind}", kind=kind, metadata=metadata)
     )
@@ -273,6 +280,7 @@ def test_model_descriptor_exposes_only_kind_specific_safe_metadata(
 
 
 def test_model_descriptor_recursively_scrubs_non_operational_schema_annotations() -> None:
+    """验证模型描述符会递归清除 schema 中的 default/examples/$comment 注解。"""
     schema = {
         "$comment": "top-level internal note",
         "type": "object",

@@ -4,12 +4,14 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { CheckIcon, ChevronRightIcon } from "lucide-react"
 
+/** 下拉菜单根组件：管理开关状态与定位锚点，透传 Radix Root 的全部属性。 */
 function DropdownMenu({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
 }
 
+/** 下拉菜单门户容器：把弹层挂载到 body，避免被父级 overflow 或层级裁剪。 */
 function DropdownMenuPortal({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
@@ -18,6 +20,7 @@ function DropdownMenuPortal({
   )
 }
 
+/** 下拉菜单触发器：点击或键盘操作切换菜单展开状态。 */
 function DropdownMenuTrigger({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
@@ -29,6 +32,7 @@ function DropdownMenuTrigger({
   )
 }
 
+/** 下拉菜单内容面板：默认起始对齐、偏移 4px，并内置滚动与进出场动画。 */
 function DropdownMenuContent({
   className,
   align = "start",
@@ -48,6 +52,7 @@ function DropdownMenuContent({
   )
 }
 
+/** 菜单分组容器：把相关菜单项聚合为同一组，并提供无障碍分组语义。 */
 function DropdownMenuGroup({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) {
@@ -56,6 +61,7 @@ function DropdownMenuGroup({
   )
 }
 
+/** 单个菜单项：支持 inset 缩进与 destructive 危险操作配色。 */
 function DropdownMenuItem({
   className,
   inset,
@@ -79,6 +85,7 @@ function DropdownMenuItem({
   )
 }
 
+/** 复选菜单项：选中时在右侧显示勾选指示器，状态由 checked 控制。 */
 function DropdownMenuCheckboxItem({
   className,
   children,
@@ -113,6 +120,7 @@ function DropdownMenuCheckboxItem({
   )
 }
 
+/** 单选菜单组容器：在组内维护互斥的选中值。 */
 function DropdownMenuRadioGroup({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) {
@@ -124,6 +132,7 @@ function DropdownMenuRadioGroup({
   )
 }
 
+/** 单选菜单项：选中时显示勾选指示器，需配合 RadioGroup 使用。 */
 function DropdownMenuRadioItem({
   className,
   children,
@@ -156,6 +165,7 @@ function DropdownMenuRadioItem({
   )
 }
 
+/** 菜单分组标题：仅作展示，不参与键盘选中。 */
 function DropdownMenuLabel({
   className,
   inset,
@@ -176,6 +186,7 @@ function DropdownMenuLabel({
   )
 }
 
+/** 菜单分隔线：在视觉上区隔不同分组。 */
 function DropdownMenuSeparator({
   className,
   ...props
@@ -189,6 +200,7 @@ function DropdownMenuSeparator({
   )
 }
 
+/** 菜单快捷键提示：右对齐展示快捷键文案，仅作装饰、不可交互。 */
 function DropdownMenuShortcut({
   className,
   ...props
@@ -205,12 +217,14 @@ function DropdownMenuShortcut({
   )
 }
 
+/** 子菜单根组件：管理二级菜单的展开状态。 */
 function DropdownMenuSub({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>) {
   return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} />
 }
 
+/** 子菜单触发器：悬停或聚焦时展开右侧子菜单，并显示右向箭头。 */
 function DropdownMenuSubTrigger({
   className,
   inset,
@@ -235,6 +249,7 @@ function DropdownMenuSubTrigger({
   )
 }
 
+/** 子菜单内容面板：渲染在触发器侧边，样式与主菜单内容保持一致。 */
 function DropdownMenuSubContent({
   className,
   ...props

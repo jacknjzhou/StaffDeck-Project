@@ -30,7 +30,9 @@ from app.db.models import (
 
 
 class FakeAdapter:
+    """模拟渠道适配器的内存实现，记录发送内容并支持按次数注入失败。"""
     def __init__(self, *, fail_times: int = 0):
+        """初始化失败注入次数、已发送记录与去重键记录。"""
         self.fail_times = fail_times
         self.sent: list[tuple[str, dict, str]] = []
         self.dedupe_keys: list[str | None] = []
@@ -43,6 +45,7 @@ class FakeAdapter:
         *,
         idempotency_key: str | None = None,
     ) -> None:
+        """记录幂等键后模拟发送；注入的失败次数未耗尽时抛出 RuntimeError。"""
         self.dedupe_keys.append(idempotency_key)
         if self.fail_times > 0:
             self.fail_times -= 1
@@ -51,6 +54,7 @@ class FakeAdapter:
 
 
 class FakeFeishuAdapter(FakeAdapter):
+    """飞书适配器的内存替身，按顺序记录 reaction 与消息调用。"""
     reaction_token = "Get"
     reaction_attach_idempotent = False
 
@@ -60,6 +64,7 @@ class FakeFeishuAdapter(FakeAdapter):
         fail_reaction_add: bool = False,
         recovered_reaction_id: str | None = None,
     ):
+        """初始化 reaction 失败开关、可回查的 reaction_id 及调用记录。"""
         super().__init__()
         self.fail_reaction_add = fail_reaction_add
         self.recovered_reaction_id = recovered_reaction_id
@@ -72,6 +77,7 @@ class FakeFeishuAdapter(FakeAdapter):
         target: dict,
         emoji_type: str,
     ) -> str:
+        """记录添加 reaction 的调用；配置为失败时抛异常，否则返回固定 handle。"""
         self.reaction_targets.append(dict(target))
         self.calls.append(("add", str(target.get("message_id") or ""), emoji_type))
         if self.fail_reaction_add:
@@ -84,6 +90,7 @@ class FakeFeishuAdapter(FakeAdapter):
         target: dict,
         emoji_type: str,
     ) -> str | None:
+        """记录回查调用，并按配置返回远端已有 reaction_id 或 None。"""
         self.reaction_targets.append(dict(target))
         self.calls.append(("find", str(target.get("message_id") or ""), emoji_type))
         return self.recovered_reaction_id
@@ -94,6 +101,7 @@ class FakeFeishuAdapter(FakeAdapter):
         target: dict,
         reaction_id: str,
     ) -> None:
+        """记录撤回 reaction 的调用，不产生实际副作用。"""
         self.reaction_targets.append(dict(target))
         self.calls.append(("remove", str(target.get("message_id") or ""), reaction_id))
 
@@ -105,11 +113,13 @@ class FakeFeishuAdapter(FakeAdapter):
         *,
         idempotency_key: str | None = None,
     ) -> None:
+        """先记录发送调用，再委托父类维护幂等键与发送记录。"""
         self.calls.append(("send", str(target.get("message_id") or ""), text))
         super().send(binding, target, text, idempotency_key=idempotency_key)
 
 
 def _test_engine():
+    """创建共享同一连接的 SQLite 内存库并建表，供单测隔离使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -120,6 +130,7 @@ def _test_engine():
 
 
 def _seed_binding(db: Session, *, channel: str = "fake", status: str = "active") -> ChannelBinding:
+    """写入演示租户与指定渠道、状态的绑定，返回绑定实体。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     binding = ChannelBinding(
         tenant_id="tenant_demo",
@@ -134,6 +145,7 @@ def _seed_binding(db: Session, *, channel: str = "fake", status: str = "active")
 
 
 def _channel_session(binding: ChannelBinding) -> ChatSession:
+    """构造带渠道目标与账号键的渠道会话，模拟真实入站会话。"""
     return ChatSession(
         id="session_chan",
         tenant_id=binding.tenant_id,
@@ -148,6 +160,7 @@ def _channel_session(binding: ChannelBinding) -> ChatSession:
 
 
 def _assistant_message(session_id: str, message_id: str, content: str = "回复内容") -> Message:
+    """构造一条助手消息，便于断言投递内容。"""
     return Message(
         id=message_id,
         tenant_id="tenant_demo",
@@ -158,6 +171,7 @@ def _assistant_message(session_id: str, message_id: str, content: str = "回复�
 
 
 def test_web_session_is_not_staged() -> None:
+    """验证 Web 会话的助手回复不会进入渠道投递队列。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -173,6 +187,7 @@ def test_web_session_is_not_staged() -> None:
 
 
 def test_public_api_session_returns_through_api_without_channel_delivery() -> None:
+    """验证 public_api 会话的回复走 API 返回，不生成渠道投递。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -194,6 +209,7 @@ def test_public_api_session_returns_through_api_without_channel_delivery() -> No
 
 
 def test_skill_test_session_returns_through_debug_stream_without_channel_delivery() -> None:
+    """验证 skill_test 会话的回复走调试流返回，不生成渠道投递。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -215,6 +231,7 @@ def test_skill_test_session_returns_through_debug_stream_without_channel_deliver
 
 
 def test_pilotdeck_legacy_session_returns_through_api_without_channel_delivery() -> None:
+    """验证旧版 pilotdeck 群聊会话的回复走 API 返回，不生成渠道投递。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -236,6 +253,7 @@ def test_pilotdeck_legacy_session_returns_through_api_without_channel_delivery()
 
 
 def test_channel_session_stages_delivery_in_same_transaction() -> None:
+    """验证渠道会话在同一事务内写入一条待投递记录，字段取自会话与消息。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding = _seed_binding(db)
@@ -262,6 +280,7 @@ def test_channel_session_stages_delivery_in_same_transaction() -> None:
 
 
 def test_staging_is_idempotent_per_message() -> None:
+    """验证同一消息重复 staging 只落一条投递记录。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding = _seed_binding(db)
@@ -278,6 +297,7 @@ def test_staging_is_idempotent_per_message() -> None:
 
 
 def test_staging_is_idempotent_per_inbound_turn() -> None:
+    """验证同一入站轮次的多个投影只登记一条投递，并使用轮次级幂等键与目标。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding = _seed_binding(db)
@@ -319,8 +339,11 @@ def test_staging_is_idempotent_per_inbound_turn() -> None:
 
 
 def test_channel_staging_failure_propagates() -> None:
+    """验证底层数据库抛错时 staging 异常向上传播，不被吞掉。"""
     class BrokenDb:
+        """只实现 exec 且必定抛错的假数据库，用于制造 staging 失败。"""
         def exec(self, _statement):
+            """无条件抛出 RuntimeError，模拟数据库异常。"""
             raise RuntimeError("db 炸了")
 
     chat_session = ChatSession(
@@ -337,6 +360,7 @@ def test_channel_staging_failure_propagates() -> None:
 
 
 def test_legacy_session_claim_conflict_fails_channel_transaction() -> None:
+    """验证遗留会话被其他绑定占用时抛出认领冲突，且回滚不留下副作用。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding = _seed_binding(db)
@@ -362,6 +386,7 @@ def test_legacy_session_claim_conflict_fails_channel_transaction() -> None:
 
 
 def test_missing_target_stages_failed_delivery_for_audit() -> None:
+    """验证缺少投递目标时仍写入 failed 记录供审计，且不再重试。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding = _seed_binding(db)
@@ -381,6 +406,7 @@ def test_missing_target_stages_failed_delivery_for_audit() -> None:
 
 
 def _make_delivery(db: Session, binding: ChannelBinding, **overrides) -> ChannelDelivery:
+    """构造一条待投递记录并补建关联会话；支持按字段覆盖。"""
     values = {
         "tenant_id": binding.tenant_id,
         "binding_id": binding.id,
@@ -413,6 +439,7 @@ def _make_delivery(db: Session, binding: ChannelBinding, **overrides) -> Channel
 
 
 def test_daemon_delivers_pending() -> None:
+    """验证守护进程能把到期投递发送成功并记录送达时间与尝试次数。"""
     engine = _test_engine()
     adapter = FakeAdapter()
     register_channel_adapter("fake", adapter)
@@ -433,6 +460,7 @@ def test_daemon_delivers_pending() -> None:
 
 
 def test_daemon_rejects_reply_when_session_account_does_not_match_binding() -> None:
+    """验证会话账号与绑定账号不一致时拒绝发送并标记失败。"""
     engine = _test_engine()
     adapter = FakeAdapter()
     register_channel_adapter("fake", adapter)
@@ -455,6 +483,7 @@ def test_daemon_rejects_reply_when_session_account_does_not_match_binding() -> N
 
 
 def test_daemon_retries_with_backoff_then_fails(monkeypatch) -> None:
+    """验证发送失败按退避重试，达到最大次数后置 failed 并清空重试时间。"""
     engine = _test_engine()
     adapter = FakeAdapter(fail_times=10)
     register_channel_adapter("fake", adapter)
@@ -490,6 +519,7 @@ def test_daemon_retries_with_backoff_then_fails(monkeypatch) -> None:
 
 
 def test_daemon_recovers_then_delivers() -> None:
+    """验证首次失败后到期重试可成功投递，尝试次数累计为两次。"""
     engine = _test_engine()
     adapter = FakeAdapter(fail_times=1)
     register_channel_adapter("fake", adapter)
@@ -515,6 +545,7 @@ def test_daemon_recovers_then_delivers() -> None:
 
 
 def test_daemon_resets_stuck_sending() -> None:
+    """验证陈旧 sending 的投递被重置为 failed，且不触发重发。"""
     engine = _test_engine()
     adapter = FakeAdapter()
     register_channel_adapter("fake", adapter)
@@ -534,6 +565,7 @@ def test_daemon_resets_stuck_sending() -> None:
 
 
 def test_daemon_fails_delivery_for_inactive_binding() -> None:
+    """验证绑定停用时投递直接失败并记录停用原因。"""
     engine = _test_engine()
     adapter = FakeAdapter()
     register_channel_adapter("fake", adapter)
@@ -552,6 +584,7 @@ def test_daemon_fails_delivery_for_inactive_binding() -> None:
 
 
 def test_daemon_skips_future_deliveries() -> None:
+    """验证未到期的投递不会被守护进程领取。"""
     engine = _test_engine()
     adapter = FakeAdapter()
     register_channel_adapter("fake", adapter)
@@ -569,6 +602,7 @@ def test_daemon_skips_future_deliveries() -> None:
 
 
 def test_unregistered_channel_marks_failed_eventually(monkeypatch) -> None:
+    """验证渠道未注册时投递最终标记 failed 并说明未注册。"""
     engine = _test_engine()
     settings = get_settings().model_copy(update={"channel_delivery_max_attempts": 1})
     monkeypatch.setattr("app.channels.service_outbox.get_settings", lambda: settings)
@@ -586,6 +620,7 @@ def test_unregistered_channel_marks_failed_eventually(monkeypatch) -> None:
 
 
 def _seed_feishu_reaction_event(db: Session, binding: ChannelBinding) -> ChannelInboundEvent:
+    """写入已处理完成的飞书入站事件，作为 reaction 流程的载体。"""
     event = ChannelInboundEvent(
         id="event_feishu",
         tenant_id=binding.tenant_id,
@@ -609,6 +644,7 @@ def _seed_feishu_delivery(
     status: str = "pending",
     final: bool = True,
 ) -> ChannelDelivery:
+    """按投递类型写入飞书投递记录，填充目标、文本与幂等键。"""
     target = {"message_id": event.event_id, "event_pk": event.id}
     if kind == "reaction_remove":
         target["reaction_id"] = event.reaction_id
@@ -632,6 +668,7 @@ def _seed_feishu_delivery(
 
 
 def test_feishu_reaction_is_removed_after_response_delivery(monkeypatch) -> None:
+    """验证回复送达后登记并执行 reaction 撤回，最终清空事件上的 reaction_id。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -672,6 +709,7 @@ def test_feishu_reaction_is_removed_after_response_delivery(monkeypatch) -> None
 
 
 def test_delayed_feishu_reaction_is_cleaned_after_existing_response(monkeypatch) -> None:
+    """验证回复早已送达时，迟到的 reaction 添加也会被登记并撤回。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -704,6 +742,7 @@ def test_delayed_feishu_reaction_is_cleaned_after_existing_response(monkeypatch)
 
 
 def test_feishu_reaction_failure_does_not_block_response(monkeypatch) -> None:
+    """验证加 reaction 失败不阻塞回复投递，也不登记撤回。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter(fail_reaction_add=True)
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -736,6 +775,7 @@ def test_feishu_reaction_failure_does_not_block_response(monkeypatch) -> None:
 
 
 def test_content_lane_does_not_wait_for_pending_reaction(monkeypatch) -> None:
+    """验证内容投递无需等待仍处于 pending 的 reaction 投递。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -756,6 +796,7 @@ def test_content_lane_does_not_wait_for_pending_reaction(monkeypatch) -> None:
 
 
 def test_reaction_retry_recovers_remote_reaction_before_readding(monkeypatch) -> None:
+    """验证 reaction 重试先回查远端已有 reaction，避免重复添加。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter(recovered_reaction_id="reaction_recovered")
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -784,6 +825,7 @@ def test_reaction_retry_recovers_remote_reaction_before_readding(monkeypatch) ->
 
 
 def test_intermediate_notice_does_not_remove_reaction(monkeypatch) -> None:
+    """验证中间态通知不移除 reaction，仅最终通知触发撤回。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -817,6 +859,7 @@ def test_intermediate_notice_does_not_remove_reaction(monkeypatch) -> None:
 
 
 def test_disabled_feishu_binding_can_finish_reaction_cleanup(monkeypatch) -> None:
+    """验证绑定停用后仍能完成已知 reaction 的撤回清理。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -843,6 +886,7 @@ def test_disabled_feishu_binding_can_finish_reaction_cleanup(monkeypatch) -> Non
 
 
 def test_disabled_binding_reconciles_ambiguous_reaction_without_readding(monkeypatch) -> None:
+    """验证绑定停用时对结果不明的 reaction 只回查并登记撤回，不重新添加。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter(recovered_reaction_id="reaction_recovered")
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -879,6 +923,7 @@ def test_disabled_binding_reconciles_ambiguous_reaction_without_readding(monkeyp
 
 
 def test_disabled_binding_does_not_start_a_fresh_reaction_add(monkeypatch) -> None:
+    """验证绑定停用后不再发起新的 reaction 添加，投递直接失败。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -902,6 +947,7 @@ def test_disabled_binding_does_not_start_a_fresh_reaction_add(monkeypatch) -> No
 
 
 def test_binding_delete_cleanup_removes_known_feishu_reactions(monkeypatch) -> None:
+    """验证删除绑定前的清理会撤回已知飞书 reaction 并清空记录。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -924,6 +970,7 @@ def test_binding_delete_cleanup_reconciles_unknown_reaction(
     monkeypatch,
     status: str,
 ) -> None:
+    """验证 reaction 结果不明时，删除绑定前的清理会先回查再撤回。"""
     engine = _test_engine()
     adapter = FakeFeishuAdapter(recovered_reaction_id="reaction_recovered")
     monkeypatch.setitem(adapter_registry._adapters, "feishu", adapter)
@@ -954,18 +1001,22 @@ class FakeDingTalkAdapter(FakeAdapter):
     reaction_attach_idempotent = True
 
     def __init__(self):
+        """初始化调用记录，其余字段沿用父类默认值。"""
         super().__init__()
         self.calls: list[tuple[str, str, str]] = []
 
     def add_reaction(self, binding: ChannelBinding, target: dict, token: str) -> str:
+        """记录添加表情的调用并返回固定 handle；刻意不提供回查能力。"""
         self.calls.append(("add", str(target.get("message_id") or ""), token))
         return "emotion:2659900"
 
     def remove_reaction(self, binding: ChannelBinding, target: dict, handle: str) -> None:
+        """记录撤回表情的调用，handle 原样记录便于断言。"""
         self.calls.append(("remove", str(target.get("message_id") or ""), handle))
 
 
 def _seed_dingtalk_reaction_event(db: Session, binding: ChannelBinding) -> ChannelInboundEvent:
+    """写入钉钉入站事件，目标包含会话 id 与可用的 context_token。"""
     event = ChannelInboundEvent(
         id="event_dingtalk",
         tenant_id=binding.tenant_id,
@@ -993,6 +1044,7 @@ def _seed_dingtalk_delivery(
     kind: str,
     status: str = "pending",
 ) -> ChannelDelivery:
+    """按类型写入钉钉投递记录，目标由 reaction_target 推导。"""
     target = reaction_target(event)
     if kind not in {"reaction_add", "reaction_remove"}:
         target["reaction_final"] = True
@@ -1013,6 +1065,7 @@ def _seed_dingtalk_delivery(
 
 
 def test_dingtalk_reaction_is_recalled_after_response_delivery(monkeypatch) -> None:
+    """验证最终回复送达后登记并执行钉钉表情撤回，撤回目标带上会话 id。"""
     engine = _test_engine()
     adapter = FakeDingTalkAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "dingtalk", adapter)
@@ -1047,6 +1100,7 @@ def test_dingtalk_reaction_is_recalled_after_response_delivery(monkeypatch) -> N
 
 
 def test_dingtalk_reaction_retry_reattaches_without_query(monkeypatch) -> None:
+    """验证钉钉 reaction 重试直接重挂而不回查（该渠道声明可幂等重挂）。"""
     engine = _test_engine()
     adapter = FakeDingTalkAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "dingtalk", adapter)
@@ -1069,6 +1123,7 @@ def test_dingtalk_reaction_retry_reattaches_without_query(monkeypatch) -> None:
 
 
 def test_dingtalk_binding_delete_cleanup_recalls_without_query(monkeypatch) -> None:
+    """验证删除绑定前清理对状态不明的钉钉表情按对称参数无条件撤回。"""
     engine = _test_engine()
     adapter = FakeDingTalkAdapter()
     monkeypatch.setitem(adapter_registry._adapters, "dingtalk", adapter)
@@ -1089,6 +1144,7 @@ def test_dingtalk_binding_delete_cleanup_recalls_without_query(monkeypatch) -> N
 
 
 def test_two_workers_atomically_claim_one_delivery(tmp_path) -> None:
+    """验证两个 worker 并发领取同一投递时只有一方成功，且只发送一次。"""
     import app.channels.service_outbox as outbox
 
     engine = create_engine(
@@ -1122,6 +1178,7 @@ def test_two_workers_atomically_claim_one_delivery(tmp_path) -> None:
     claimed: list[bool] = []
 
     def worker() -> None:
+        """等待屏障后竞争领取同一投递，成功者执行投递并记录结果。"""
         with Session(engine) as db:
             barrier.wait(timeout=5.0)
             delivery = outbox._claim_delivery(
@@ -1151,6 +1208,7 @@ def test_two_workers_atomically_claim_one_delivery(tmp_path) -> None:
 
 @pytest.fixture(autouse=True)
 def _clean_adapter_registry():
+    """每个用例结束后清理测试注册的假适配器，避免污染其他用例。"""
     yield
     from app.channels.adapters.base import _adapters
 
@@ -1162,6 +1220,7 @@ def _clean_adapter_registry():
 
 
 def test_concurrent_daemons_claim_disjoint_deliveries(tmp_path) -> None:
+    """验证两个并发守护领取的投递集合互不重叠且合起来覆盖全部到期记录。"""
     import threading
 
     import app.channels.service_outbox as outbox
@@ -1182,6 +1241,7 @@ def test_concurrent_daemons_claim_disjoint_deliveries(tmp_path) -> None:
     barrier = threading.Barrier(3)
 
     def claim() -> None:
+        """等待屏障后逐个尝试领取全部投递，收集本线程成功领取的 id。"""
         barrier.wait()
         mine: set[str] = set()
         with Session(engine) as db:
@@ -1204,6 +1264,7 @@ def test_concurrent_daemons_claim_disjoint_deliveries(tmp_path) -> None:
 
 
 def test_delivery_retries_pass_same_dedupe_key() -> None:
+    """验证同一投递的每次重试都把相同幂等键作为 dedupe_key 传给适配器。"""
     engine = _test_engine()
     adapter = FakeAdapter(fail_times=1)
     register_channel_adapter("fake", adapter)
@@ -1229,6 +1290,7 @@ def test_delivery_retries_pass_same_dedupe_key() -> None:
 
 
 def test_claim_orders_by_next_attempt_at() -> None:
+    """验证领取按 next_attempt_at 排序，未到期记录不会被领取。"""
     engine = _test_engine()
     adapter = FakeAdapter()
     register_channel_adapter("fake", adapter)
@@ -1263,6 +1325,7 @@ def test_claim_orders_by_next_attempt_at() -> None:
 
 
 def _seed_alertable_wechat_binding(engine, *, with_identity: bool, with_session: bool) -> str:
+    """写入可告警的微信绑定及可选的创建者身份与会话，返回绑定 id。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(User(id="user_web", tenant_id="tenant_demo", username="zhangsan", password_hash="x"))
@@ -1307,6 +1370,7 @@ def _seed_alertable_wechat_binding(engine, *, with_identity: bool, with_session:
 
 
 def test_wechat_expired_alerts_creator_via_admin_alert() -> None:
+    """验证微信 token 过期时向创建者私聊投递告警，并把绑定标记为 expired。"""
     from app.channels.adapters.wechat import WeChatPollManager
 
     engine = _test_engine()
@@ -1329,6 +1393,7 @@ def test_wechat_expired_alerts_creator_via_admin_alert() -> None:
 
 
 def test_notify_skips_when_creator_has_no_identity() -> None:
+    """验证创建者没有身份时跳过告警只记日志，过期标记照常落库。"""
     from app.channels.adapters.wechat import WeChatPollManager
 
     engine = _test_engine()
@@ -1342,6 +1407,7 @@ def test_notify_skips_when_creator_has_no_identity() -> None:
 
 
 def test_notify_uses_identity_basics_without_session() -> None:
+    """验证无会话时用身份基本信息构造 to_user_id 并生成 alert 会话 id。"""
     from app.channels.adapters.wechat import WeChatPollManager
 
     engine = _test_engine()
@@ -1362,6 +1428,7 @@ def test_notify_uses_identity_basics_without_session() -> None:
 
 
 def test_reset_stuck_only_resets_stale_sending() -> None:
+    """验证只有超过阈值的 sending 被重置，阈值内的在飞发送保持不动。"""
     from app.channels.service_outbox import SENDING_STALE_SECONDS, _reset_stuck_deliveries
 
     engine = _test_engine()
@@ -1396,6 +1463,7 @@ def test_reset_stuck_only_resets_stale_sending() -> None:
 
 
 def test_notify_scopes_session_lookup_to_own_binding() -> None:
+    """验证创建者告警的会话查询限定在本绑定内，不串到同创建者的其他账号。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))

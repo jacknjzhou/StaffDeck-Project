@@ -21,7 +21,10 @@ ALLOWED_MEMORY_KINDS = {"profile", "preference", "fact"}
 
 
 class MemoryService:
+    """长期记忆门面:按用户与员工维度召回记忆、抽取本轮增量并去重落库。"""
+
     def __init__(self, db: Session):
+        """绑定本次操作使用的数据库会话。"""
         self.db = db
 
     def recall(
@@ -32,6 +35,7 @@ class MemoryService:
         limit: int | None = None,
         agent_id: str | None = None,
     ) -> list[MemoryRecord]:
+        """按用户召回长期记忆;当前不做相关性检索,query 与 limit 被忽略。"""
         del query, limit
         return self.context_memories(tenant_id, user_id, agent_id=agent_id)
 
@@ -42,6 +46,7 @@ class MemoryService:
         *,
         agent_id: str | None = None,
     ) -> list[MemoryRecord]:
+        """取允许进入提示词的记忆,仅保留 profile/preference/fact 三类。"""
         return [
             row
             for row in self._list_user_memories(
@@ -62,6 +67,11 @@ class MemoryService:
         model_config: ModelConfig,
         conversation_messages: list[dict[str, str]],
     ) -> list[MemoryRecord]:
+        """调用记忆抽取模型,按 key 增量写入或删除该用户的长期记忆。
+
+        无 user_id 的轮次直接跳过;delete 操作删除对应键,其余去重后 upsert,
+        返回本轮新增或更新的记录(不含被删除的行)。
+        """
         from app.core.context_projection import compact_step_result
 
         if not request.user_id:
@@ -130,6 +140,10 @@ class MemoryService:
         normalize: bool = True,
         agent_id: str | None = None,
     ) -> list[MemoryRecord]:
+        """按更新时间倒序取用户记忆,可按员工过滤;normalize 为真时做读时去重投影。
+
+        带员工过滤时先多取 5 倍再截断,避免过滤后条数不足。
+        """
         statement = (
             select(MemoryRecord)
             .where(
@@ -161,6 +175,7 @@ class MemoryService:
         metadata: dict[str, Any],
         agent_id: str | None = None,
     ) -> MemoryRecord:
+        """按 (kind, key) 更新既有记忆,并删除同键遗留的重复行;不存在则新建。"""
         existing, duplicates = self._find_keyed_memory_candidates(tenant_id, user_id, kind, key, agent_id=agent_id)
         now = utc_now()
         if existing:
@@ -198,6 +213,7 @@ class MemoryService:
         key: str,
         agent_id: str | None = None,
     ) -> None:
+        """删除该用户指定 (kind, key) 的记忆,连同同键重复行一并清理。"""
         existing, duplicates = self._find_keyed_memory_candidates(tenant_id, user_id, kind, key, agent_id=agent_id)
         for row in [existing, *duplicates]:
             if row:
@@ -211,6 +227,7 @@ class MemoryService:
         key: str,
         agent_id: str | None = None,
     ) -> tuple[MemoryRecord | None, list[MemoryRecord]]:
+        """取该 (kind, key) 最新一条记忆及其余重复行,供更新与删除复用。"""
         rows = list(
             self.db.exec(
                 select(MemoryRecord)
@@ -239,6 +256,7 @@ class MemoryService:
         metadata: dict[str, Any],
         agent_id: str | None = None,
     ) -> MemoryRecord:
+        """写入或更新该用户的 summary 记忆:有 agent_id 时按员工匹配,并累加轮次计数。"""
         summary_rows = list(
             self.db.exec(
                 select(MemoryRecord)
@@ -283,6 +301,7 @@ class MemoryService:
         return record
 
     def _memory_matches_agent(self, record: MemoryRecord, agent_id: str | None) -> bool:
+        """判断记忆是否属于该员工:先看 metadata.agent_id,再回落到来源会话的 agent。"""
         if memory_matches_agent(record, agent_id):
             return True
         if not agent_id or memory_agent_id(record) or not record.session_id:
@@ -292,6 +311,7 @@ class MemoryService:
 
 
 def memory_read(record: MemoryRecord) -> dict[str, Any]:
+    """把记忆行序列化为对外字典,时间字段转 ISO 字符串。"""
     return {
         "id": record.id,
         "tenant_id": record.tenant_id,
@@ -308,6 +328,7 @@ def memory_read(record: MemoryRecord) -> dict[str, Any]:
 
 
 def _memories_for_model(records: list[MemoryRecord]) -> str:
+    """把既有记忆渲染成 "kind/key: 内容" 的列表文本,作为抽取模型的输入。"""
     lines: list[str] = []
     for record in records:
         key = str((record.metadata_json or {}).get("key") or "").strip()
@@ -317,6 +338,7 @@ def _memories_for_model(records: list[MemoryRecord]) -> str:
 
 
 def memory_rows_for_read(rows: list[MemoryRecord]) -> list[MemoryRecord]:
+    """读时去重:同一用户、kind、员工与 key 只保留首条(入参需已按更新时间排序)。"""
     visible: list[MemoryRecord] = []
     seen_keys: set[tuple[str, str, str | None, str]] = set()
     for row in rows:
@@ -329,6 +351,7 @@ def memory_rows_for_read(rows: list[MemoryRecord]) -> list[MemoryRecord]:
 
 
 def memory_agent_id(record: MemoryRecord) -> str | None:
+    """取记忆 metadata 中记录的 agent_id;缺失、为空或非字符串时返回 None。"""
     metadata = record.metadata_json or {}
     value = metadata.get("agent_id")
     if isinstance(value, str) and value.strip():
@@ -337,12 +360,14 @@ def memory_agent_id(record: MemoryRecord) -> str | None:
 
 
 def memory_matches_agent(record: MemoryRecord, agent_id: str | None) -> bool:
+    """判断记忆是否归属指定员工;agent_id 为空时视为匹配任意员工。"""
     if not agent_id:
         return True
     return memory_agent_id(record) == agent_id
 
 
 def tool_read_for_activity(tool: Tool | None, result: ToolResult | None = None) -> dict[str, Any]:
+    """把工具及其调用结果压成活动流展示所需的最小字段,缺失项填 None。"""
     return {
         "name": result.tool_name if result else tool.name if tool else "",
         "display_name": tool.display_name if tool else None,
@@ -352,6 +377,11 @@ def tool_read_for_activity(tool: Tool | None, result: ToolResult | None = None) 
 
 
 def _normalize_memory_updates(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """清洗抽取模型返回的记忆增量,丢弃非法条目并补全键与重要度。
+
+    仅接受 upsert/delete 两种操作、三种允许的 kind;upsert 必须有内容,
+    缺失或非法的 key 按内容哈希生成,默认重要度为 0.7。
+    """
     items = raw.get("memories")
     if not isinstance(items, list):
         return []
@@ -384,6 +414,7 @@ def _normalize_memory_updates(raw: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _normalize_summary(raw: dict[str, Any]) -> str:
+    """归一化模型返回的会话摘要:优先 updated_summary,去空白后截断到 1800 字。"""
     value = raw.get("updated_summary") or raw.get("summary")
     if not isinstance(value, str):
         return ""
@@ -391,6 +422,7 @@ def _normalize_summary(raw: dict[str, Any]) -> str:
 
 
 def _normalize_memory_key(value: Any, kind: str, content: str) -> str:
+    """归一化记忆键:合法字符转下划线小写;清洗为空时按 kind 加内容哈希生成。"""
     if isinstance(value, str):
         normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip().lower()).strip("_")
         if normalized:
@@ -400,6 +432,7 @@ def _normalize_memory_key(value: Any, kind: str, content: str) -> str:
 
 
 def _normalize_importance(value: Any) -> float:
+    """把重要度夹到 [0, 1];不可解析时回落到默认值 0.7。"""
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -408,11 +441,13 @@ def _normalize_importance(value: Any) -> float:
 
 
 def _memory_matches_key(record: MemoryRecord, key: str) -> bool:
+    """判断记忆的 metadata.key 是否等于给定键。"""
     metadata = record.metadata_json or {}
     return metadata.get("key") == key
 
 
 def _read_dedupe_key(record: MemoryRecord) -> str:
+    """生成读时去重键:优先 metadata.key,summary 记忆固定为 summary,其余用记录 ID。"""
     metadata = record.metadata_json or {}
     key = metadata.get("key")
     if isinstance(key, str) and key.strip():

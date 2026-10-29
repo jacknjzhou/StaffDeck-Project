@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ModelConfigCreateRequest(BaseModel):
+    """新建模型配置的入参：连接信息、协议与生成参数，api_key 回显时打码。"""
     tenant_id: str
     name: str
     provider: Optional[str] = None
@@ -22,6 +23,7 @@ class ModelConfigCreateRequest(BaseModel):
 
 
 class ModelConfigUpdateRequest(BaseModel):
+    """局部更新模型配置的入参，字段全部可选，只有显式传入的项才会被覆盖。"""
     tenant_id: str
     name: Optional[str] = None
     provider: Optional[str] = None
@@ -38,6 +40,7 @@ class ModelConfigUpdateRequest(BaseModel):
 
 
 class ModelConfigRead(BaseModel):
+    """模型配置的对外视图：api_key 仅以掩码形式出现，并附带信任状态与配置版本号。"""
     id: str
     tenant_id: str
     name: str
@@ -64,12 +67,14 @@ class ModelConfigRead(BaseModel):
 
 
 class ModelCapabilityTestResult(BaseModel):
+    """单项模型能力的连通性测试结果，失败时带错误码便于前端分类提示。"""
     id: str
     success: bool
     error_code: Optional[str] = None
 
 
 class ModelProviderErrorDetail(BaseModel):
+    """上游模型服务返回的错误细节，保留 provider 原始编码与是否可重试的判定。"""
     code: str
     message: str
     upstream_status: Optional[int] = None
@@ -81,6 +86,7 @@ class ModelProviderErrorDetail(BaseModel):
 
 
 class ModelConfigTestResponse(BaseModel):
+    """模型配置测试接口的响应：测试结论、激活状态、样例输出与失败详情。"""
     success: bool
     message: str
     activated: bool = False

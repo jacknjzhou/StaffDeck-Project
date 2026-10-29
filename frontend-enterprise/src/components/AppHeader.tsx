@@ -40,33 +40,31 @@ function safeImageUrl(value: string): string {
 
 export type AppHeaderProps = {
   /**
-   * Page-specific content rendered on the left side of the header. When
-   * provided it takes precedence over the `title` / `description` fields.
+   * 页头左侧的页面自定义内容。一旦提供，将优先于 `title` / `description` 字段。
    */
   left?: ReactNode;
-  /** Convenience field for the left slot's title line. Ignored when `left` is set. */
+  /** 左侧插槽标题行的便捷字段；设置 `left` 时忽略。 */
   title?: ReactNode;
-  /** Convenience field for the left slot's description line. Ignored when `left` is set. */
+  /** 左侧插槽描述行的便捷字段；设置 `left` 时忽略。 */
   description?: ReactNode;
   /**
-   * Custom content for the right side of the header. When provided it fully
-   * replaces the default user avatar / logout dropdown (used e.g. on the
-   * signed-out login page which shows a theme toggle + login button instead).
+   * 页头右侧的自定义内容。提供后会整体替换默认的用户头像 / 退出登录下拉菜单
+   * （例如未登录的登录页改放主题切换与登录按钮）。
    */
   right?: ReactNode;
-  /** Called when the logout menu item is clicked. */
+  /** 点击退出登录菜单项时触发。 */
   onLogout?: () => void;
-  /** Current user's display name, used for the avatar initial. */
+  /** 当前用户的展示名，用于渲染头像首字母。 */
   userName?: string;
   className?: string;
 };
 
 /**
- * Global page header. The right side shows a user avatar button whose dropdown
- * holds the logout action; the left side is provided per-page via the `left`
- * slot, or via the `title` / `description` convenience fields. When `left` is
- * passed it is rendered as-is and the convenience fields are ignored.
- * Pass `right` to override the default avatar with page-specific actions.
+ * 全局页头：右侧默认渲染账户头像下拉菜单（含 API 密钥与退出登录）。
+ *
+ * 左侧由 `left` 插槽或 `title` / `description` 便捷字段提供，传入 `left` 时便捷字段被忽略；
+ * 传入 `right` 可用页面自定义操作整体替换默认头像区域。
+ * 挂载后按头像指针拉取头像二进制，上传 / 移除头像会同步刷新本地登录会话。
  */
 export default function AppHeader({
   left,
@@ -94,7 +92,11 @@ export default function AppHeader({
   // 仅放行 http/https/data:image/blob 协议,阻止 javascript: 等可执行协议注入
   const safeAvatarUrl = safeImageUrl(avatarUrl);
 
-  // blob URL 由 ref 跟踪:替换/清除/组件卸载时都能 revoke 到最新值,不受闭包快照影响
+  /**
+   * 更换被跟踪的 blob URL：与上次不同则 revoke 旧值，再写入 ref 并同步到 state。
+   *
+   * 用 ref 跟踪最新值，替换 / 清除 / 组件卸载时都能 revoke 到位，不受闭包快照影响。
+   */
   function replaceTrackedUrl(ref: { current: string }, set: (v: string) => void, next: string) {
     const prev = ref.current;
     if (prev && prev !== next) URL.revokeObjectURL(prev);
@@ -102,20 +104,27 @@ export default function AppHeader({
     set(next);
   }
 
+  /** 替换上传预览地址，旧的对象 URL 会被回收。 */
   function replaceUploadPreview(next: string) {
     replaceTrackedUrl(uploadPreviewUrlRef, setUploadPreviewUrl, next);
   }
 
+  /** 替换已拉取头像的 blob 地址，旧的对象 URL 会被回收。 */
   function replaceAvatarBlob(next: string) {
     replaceTrackedUrl(avatarBlobUrlRef, setAvatarBlobUrl, next);
   }
 
+  /** 清空上传预览并重置文件 input，保证再次选择同一文件也能触发 onChange。 */
   function clearUploadPreview() {
     replaceUploadPreview('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
-  // 头像二进制不随 login/me 内联:凭指针用认证请求拉字节,转 blob URL 渲染
+  /**
+   * 按会话中的头像指针拉取头像二进制，并转成 blob URL 供渲染。
+   *
+   * 头像数据不随 login/me 内联返回；无 token、无指针或请求失败时清空预览，回退为首字母。
+   */
   async function loadAvatar() {
     const session = getEnterpriseAuthSession();
     if (!session?.token || !session.user?.avatar_url) {
@@ -153,6 +162,11 @@ export default function AppHeader({
     [],
   );
 
+  /**
+   * 重新拉取当前用户信息并写回本地登录会话与组件 state，用于头像变更后同步展示。
+   *
+   * 无会话 token 时直接返回；刷新失败静默忽略，避免阻断已成功的头像操作。
+   */
   async function refreshSessionUser() {
     const session = getEnterpriseAuthSession();
     if (!session?.token) return;
@@ -165,7 +179,12 @@ export default function AppHeader({
     }
   }
 
-  // 选图即传:本地预览乐观渲染,成功后刷新会话;失败回滚并提示
+  /**
+   * 选图即传：先用本地对象 URL 乐观预览，再以 PUT 上传头像文件。
+   *
+   * 上传成功后提示、刷新登录会话并重拉头像字节（覆盖上传时指针不变，effect 不会重触发）；
+   * 失败时提示错误；无论成败都会清理本地预览，avatarSaving 期间忽略重复选择。
+   */
   async function pickAvatar(file: File | null) {
     if (!file || avatarSaving) return;
     clearUploadPreview();
@@ -195,6 +214,11 @@ export default function AppHeader({
     }
   }
 
+  /**
+   * 移除当前用户头像：DELETE 后提示、刷新登录会话并清空已拉取的头像字节。
+   *
+   * avatarSaving 期间重复调用无效；失败时提示错误并保留原头像。
+   */
   async function removeAvatar() {
     if (avatarSaving) return;
     setAvatarSaving(true);

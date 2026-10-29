@@ -4,6 +4,7 @@ from app.db.models import ChatSession, Skill
 
 
 def _skill() -> Skill:
+    """构造一个最小技能记录，供各接缝测试复用而无需落库。"""
     return Skill(
         tenant_id="tenant_test",
         skill_id="skill_test",
@@ -14,6 +15,7 @@ def _skill() -> Skill:
 
 
 def test_skill_steps_keeps_ordered_nodes_patch_seam() -> None:
+    """验证技能步骤直接取自可覆写的 _ordered_skill_nodes 接缝，保持节点顺序。"""
     loop = object.__new__(AgentLoop)
     loop._ordered_skill_nodes = lambda _skill: [{"node_id": "patched"}]
 
@@ -21,6 +23,7 @@ def test_skill_steps_keeps_ordered_nodes_patch_seam() -> None:
 
 
 def test_sibling_queue_keeps_edge_patch_seams() -> None:
+    """验证兄弟节点排队走可覆写的边条件接缝，仅把非当前节点的后继入队。"""
     loop = object.__new__(AgentLoop)
     calls: list[str] = []
     loop._graph_outgoing_edges = lambda _skill: {
@@ -31,6 +34,7 @@ def test_sibling_queue_keeps_edge_patch_seams() -> None:
     }
 
     def edge_condition(edge: dict) -> str:
+        """记录被求值的后继节点并返回小写化的边条件，用于验证接缝调用顺序。"""
         calls.append(str(edge["next_node_id"]))
         return str(edge["condition"]).lower()
 
@@ -54,6 +58,7 @@ def test_sibling_queue_keeps_edge_patch_seams() -> None:
 
 
 def test_intermediate_reply_node_does_not_complete_sop_when_graph_has_outgoing_edge() -> None:
+    """验证中间回复节点仍有出边时不会误判 SOP 完成，避免提前结束流程。"""
     loop = object.__new__(AgentLoop)
     skill = Skill(
         tenant_id="tenant_test",

@@ -8,6 +8,7 @@ from app.capability_scope import CapabilityScope
 
 
 class ToolExecutionPolicy(BaseModel):
+    """工具执行策略：超时、同步/异步模式，以及 Provider 托管任务的轮询配置。"""
     timeout_seconds: float = Field(ge=1, le=3600)
     execution_mode: Literal["sync", "detached"] = "sync"
     async_strategy: Literal["staffdeck_worker", "provider_task"] = "staffdeck_worker"
@@ -21,6 +22,7 @@ class ToolExecutionPolicy(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider_tracking(self) -> "ToolExecutionPolicy":
+        """校验 Provider 托管的 detached 工具必须提供 status_url，否则抛 ValueError。"""
         if (
             self.execution_mode == "detached"
             and self.async_strategy == "provider_task"
@@ -31,6 +33,7 @@ class ToolExecutionPolicy(BaseModel):
 
 
 class ToolCreateRequest(BaseModel):
+    """创建工具的请求体，覆盖 HTTP/A2A/MCP 三类工具的连接、schema 与执行配置。"""
     tenant_id: str
     name: str
     display_name: Optional[str] = None
@@ -51,10 +54,12 @@ class ToolCreateRequest(BaseModel):
 
 
 class ToolUpdateRequest(ToolCreateRequest):
+    """更新工具的请求体；capability_scope 为空表示沿用原值。"""
     capability_scope: Optional[CapabilityScope] = None
 
 
 class ToolRead(BaseModel):
+    """工具详情的响应体，支持从 ORM 行读取。"""
     id: str
     tenant_id: str
     name: str
@@ -82,6 +87,7 @@ class ToolRead(BaseModel):
 
 
 class ToolBucketRead(BaseModel):
+    """工具分桶统计：总数、启用/禁用数量与桶内工具 id。"""
     bucket: str
     total: int
     enabled_count: int
@@ -90,16 +96,19 @@ class ToolBucketRead(BaseModel):
 
 
 class ToolCall(BaseModel):
+    """一次工具调用的名字与参数。"""
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolError(BaseModel):
+    """工具调用失败的错误码与消息。"""
     code: str
     message: str
 
 
 class MCPAppDescriptor(BaseModel):
+    """下发给 MCP App 的会话描述，用于渲染内嵌应用并回填调用上下文。"""
     server_id: str
     resource_uri: str
     tool_name: str
@@ -114,6 +123,7 @@ class MCPAppDescriptor(BaseModel):
 
 
 class ToolResult(BaseModel):
+    """工具执行结果：成功数据、错误、MCP App 描述与附加元数据。"""
     tool_name: str
     success: bool
     data: Optional[Any] = None
@@ -123,12 +133,14 @@ class ToolResult(BaseModel):
 
 
 class ToolTestRequest(BaseModel):
+    """工具试调用请求；client_request_id 供调用方做幂等重试。"""
     client_request_id: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     tenant_id: str
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolProbeRequest(BaseModel):
+    """工具落库前的探测请求，附带用于试跑的样例参数。"""
     tenant_id: str
     name: str
     display_name: Optional[str] = None
@@ -147,6 +159,7 @@ class ToolProbeRequest(BaseModel):
 
 
 class ToolProbeResponse(BaseModel):
+    """探测结果：状态码、数据预览与推断出的输出 schema。"""
     success: bool
     status_code: Optional[int] = None
     data_preview: Optional[Any] = None
@@ -171,6 +184,7 @@ class MCPServerConnection(BaseModel):
 
 
 class MCPServerCreateRequest(BaseModel):
+    """创建 MCP Server 的请求体，包含传输连接配置与 MCP App 模式。"""
     tenant_id: str
     name: str
     display_name: Optional[str] = None
@@ -183,10 +197,12 @@ class MCPServerCreateRequest(BaseModel):
 
 
 class MCPServerUpdateRequest(MCPServerCreateRequest):
+    """更新 MCP Server 的请求体；capability_scope 为空表示沿用原值。"""
     capability_scope: Optional[CapabilityScope] = None
 
 
 class MCPDiscoveredTool(BaseModel):
+    """MCP 服务端发现到的单个工具，并携带本地导入与启用状态。"""
     name: str
     title: str = ""
     description: str = ""
@@ -203,6 +219,7 @@ class MCPDiscoveredTool(BaseModel):
 
 
 class MCPServerRead(BaseModel):
+    """MCP Server 详情响应体，含协商结果、同步时间与工具数量。"""
     id: str
     tenant_id: str
     name: str
@@ -222,6 +239,7 @@ class MCPServerRead(BaseModel):
 
 
 class MCPDiscoverRequest(BaseModel):
+    """探测 MCP Server 的请求：可直接给连接配置，也可只给已保存的 server_id。"""
     tenant_id: str
     # 未保存前用连接配置直接探测；已保存则可只传 server_id
     connection: Optional[MCPServerConnection] = None
@@ -229,6 +247,7 @@ class MCPDiscoverRequest(BaseModel):
 
 
 class MCPDiscoverResponse(BaseModel):
+    """MCP 工具发现结果，含工具列表、服务端能力与服务端信息。"""
     success: bool
     tools: list[MCPDiscoveredTool] = Field(default_factory=list)
     server_capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -237,6 +256,7 @@ class MCPDiscoverResponse(BaseModel):
 
 
 class MCPAppResourceRead(BaseModel):
+    """读取 MCP App 资源的响应：URI、mime_type、正文与元数据。"""
     server_id: str
     uri: str
     mime_type: str
@@ -245,6 +265,7 @@ class MCPAppResourceRead(BaseModel):
 
 
 class MCPAppToolCallRequest(BaseModel):
+    """由 MCP App 前端发起的工具调用请求，可声明已确认副作用。"""
     tenant_id: str
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -255,6 +276,7 @@ class MCPAppToolCallRequest(BaseModel):
 
 
 class MCPAppToolCallResponse(BaseModel):
+    """MCP App 工具调用结果，失败或需确认副作用时带相应标记。"""
     success: bool
     result: Optional[ToolResult] = None
     requires_confirmation: bool = False
@@ -262,6 +284,7 @@ class MCPAppToolCallResponse(BaseModel):
 
 
 class MCPSyncRequest(BaseModel):
+    """同步 MCP 工具的请求；tool_names 为空表示导入全部已发现工具。"""
     tenant_id: str
     # 需要导入/更新的工具名；为空表示导入全部发现到的工具
     tool_names: Optional[list[str]] = None
@@ -269,6 +292,7 @@ class MCPSyncRequest(BaseModel):
 
 
 class MCPSyncResponse(BaseModel):
+    """同步结果：成功导入、更新与移除的工具名。"""
     success: bool
     imported: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)

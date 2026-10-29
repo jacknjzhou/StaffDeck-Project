@@ -102,6 +102,7 @@ import type {
 const KNOWLEDGE_PAGE_SIZE = 10;
 const KNOWLEDGE_SEARCH_MODEL_STORAGE_KEY = 'knowledge-search-model';
 const TERMINAL_KNOWLEDGE_JOB_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+/** 懒加载的知识图谱可视化组件，按需加载以减小首屏体积。 */
 const KnowledgeGraphVisualization = lazy(() => import('@/components/knowledge/KnowledgeGraphVisualization').then(
   (module) => ({ default: module.KnowledgeGraphVisualization }),
 ));
@@ -152,6 +153,7 @@ type KnowledgePageProps = {
   onLogout?: () => void;
 };
 
+/** 解析当前应使用的知识库员工范围：优先保留可见的当前员工，管理员可回落到广场范围。 */
 function resolveKnowledgeAgentScope(
   rows: AgentProfileRead[],
   currentUser: EnterpriseAuthUser | undefined,
@@ -165,11 +167,18 @@ function resolveKnowledgeAgentScope(
   return visibleEmployeeAgents(rows, currentUser, { activeOnly: true })[0]?.id || '';
 }
 
+/** 仅当员工存在且不是广场总体时返回其 ID，否则返回空字符串表示广场范围。 */
 function effectiveKnowledgeAgentId(rows: AgentProfileRead[], agentId: string): string {
   const agent = rows.find((item) => item.id === agentId);
   return agent && !agent.is_overall ? agent.id : '';
 }
 
+/**
+ * 知识库管理页：展示知识库广场或当前数字员工的文档卡片、知识图谱与检索调试。
+ *
+ * 负责加载员工范围与知识库、文档、索引数据，并维护编辑、导入导出、版本与删除对话框。
+ * 范围切换或加载失败时会先清空视图，再按解析后的员工重新拉取数据。
+ */
 export default function KnowledgeManagePage({ currentUser, onLogout }: KnowledgePageProps = {}) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -355,6 +364,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     return () => window.removeEventListener('ultrarag-enterprise-agent-scope-change', onScopeChange);
   }, []);
 
+  /** 应用解析后的员工范围：同步持久化存储、组件状态并广播范围变更事件。 */
   function applyResolvedAgentScope(nextAgentId: string) {
     if (nextAgentId === agentId) return;
     if (nextAgentId) {
@@ -366,6 +376,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     emitAgentScopeChange(nextAgentId);
   }
 
+  /** 清空当前知识库视图数据，用于员工范围切换或加载失败时重置界面。 */
   function clearKnowledgeViewState() {
     setDocuments([]);
     setKnowledgeBases([]);
@@ -376,6 +387,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     setSearchResult(null);
   }
 
+  /**
+   * 加载可见数字员工列表并解析当前知识库范围。
+   *
+   * 范围变化时清空视图并广播变更；失败时同样清空视图并提示错误，最终都标记范围已加载。
+   */
   async function loadAgentScope() {
     setAgentScopeLoaded(false);
     try {
@@ -394,6 +410,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 刷新当前范围下的文档与知识库列表，并恢复选中文档。
+   *
+   * 优先保持 preferredDocument：先按 id、再按知识库与文件名匹配；无文档时回落到加载图谱概念。
+   */
   async function refresh(
     scopedAgentId = effectiveAgentId,
     preferredDocument: KnowledgeDocumentRead | null = selectedDocument,
@@ -442,6 +463,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 加载指定文档的内部索引桶，并同时刷新该文档所属知识库的概念。
+   *
+   * select 为 true 时会同时把该文档设为选中项；失败时清空桶并提示错误。
+   */
   async function loadBuckets(document: KnowledgeDocumentRead, select = true) {
     if (select) setSelectedDocument(document);
     setBuckets([]);
@@ -460,6 +486,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 加载指定知识库的知识图谱概念；未传知识库 ID 时清空概念与检查结果。
+   *
+   * 404 视为尚无图谱并静默处理，其余错误提示；showLoading 控制是否显示加载态。
+   */
   async function loadOkfConcepts(knowledgeBaseId?: string, showLoading = true) {
     if (!knowledgeBaseId) {
       setOkfConcepts([]);
@@ -486,6 +517,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 切换选中的知识库：优先加载该库下第一份文档的索引，没有文档时直接加载图谱概念。 */
   function selectKnowledgeBase(knowledgeBaseId: string) {
     setKnowledgeBaseFilter(knowledgeBaseId);
     const nextDocument =
@@ -502,6 +534,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     void loadOkfConcepts(knowledgeBaseId === '__all__' ? undefined : knowledgeBaseId);
   }
 
+  /**
+   * 以调试模式执行一次知识检索，范围限定为当前员工与选中的知识库。
+   *
+   * 查询为空时提示并中止；请求期间维护检索加载态并保存返回结果。
+   */
   async function runKnowledgeSearch() {
     const query = searchQuery.trim();
     if (!query) {
@@ -533,6 +570,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 打开知识库复制对话框：加载员工列表与来源知识库，可预选指定资源。
+   *
+   * mode 决定来源是开放广场还是其他数字员工。
+   */
   async function openImportKnowledgeBases(mode: 'plaza' | 'employee' = 'plaza', selectedResourceId?: string) {
     try {
       const agentRows = agents.length ? agents : await api.get<AgentProfileRead[]>(`/api/enterprise/agents?tenant_id=${TENANT_ID}`);
@@ -557,6 +599,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 加载指定来源员工下可复制的知识库（仅 active），并重置已选列表。
+   *
+   * 返回加载到的知识库数组，失败时提示并返回空数组。
+   */
   async function loadImportSourceKnowledgeBases(sourceAgentId: string): Promise<KnowledgeBaseRead[]> {
     setImportSourceKnowledgeBases([]);
     setImportSelectedKnowledgeBaseIds([]);
@@ -574,6 +621,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 调用通用资源导入接口，把选中的知识库复制到当前员工。
+   *
+   * 成功后关闭对话框并刷新列表，同时提示成功复制与未复制的数量。
+   */
   async function submitImportKnowledgeBases() {
     if (!agentId) {
       notify.warning('请先选择一个数字员工');
@@ -610,6 +662,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 处理「新增」菜单动作：跳转新建页、导入备份包或从广场或员工复制知识库。 */
   function handleCreateAction(key: string) {
     if (key === 'blank') {
       navigate('/enterprise/knowledge/new');
@@ -628,6 +681,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 上传知识库备份包并导入到当前知识库范围。
+   *
+   * 导入成功后关闭对话框并刷新数据，期间维护导入中状态。
+   */
   async function importOkfFile(file: File) {
     setOkfImporting(true);
     try {
@@ -649,6 +707,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 导出知识库备份包：拉取 zip 流并触发浏览器下载。
+   *
+   * 未选择知识库时提示并中止。
+   */
   async function exportOkfBundle(targetKnowledgeBase = selectedKnowledgeBase) {
     if (!targetKnowledgeBase) {
       notify.warning('请先选择知识库');
@@ -673,6 +736,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /**
+   * 触发知识图谱检查并打开检查报告对话框。
+   *
+   * 目标知识库与当前选中不一致时会先切换选中项，结束后关闭加载态。
+   */
   async function lintOkfBundle(targetKnowledgeBase = selectedKnowledgeBase) {
     if (!targetKnowledgeBase) {
       notify.warning('请先选择知识库');
@@ -698,15 +766,18 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 打开概念编辑器，并以概念正文初始化草稿。 */
   function openConceptEditor(row: KnowledgeConceptRead) {
     setEditingConcept(row);
     setConceptDraft(row.content_md || '');
   }
 
+  /** 打开概念查看弹窗。 */
   function openConceptViewer(row: KnowledgeConceptRead) {
     setViewingConcept(row);
   }
 
+  /** 从查看弹窗切换到编辑弹窗，复用当前查看的概念。 */
   function editViewingConcept() {
     if (!viewingConcept) return;
     const concept = viewingConcept;
@@ -714,6 +785,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     openConceptEditor(concept);
   }
 
+  /**
+   * 保存当前编辑的概念：按路径提交正文并刷新图谱。
+   *
+   * 成功后用返回值替换列表项、关闭编辑器并重新加载概念。
+   */
   async function saveConcept() {
     if (!editingConcept || !selectedKnowledgeBase) return;
     const suffix = effectiveAgentId ? `?agent_id=${encodeURIComponent(effectiveAgentId)}` : '';
@@ -736,6 +812,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 打开知识库详情对话框，并用该行数据回填名称、描述、状态与能力范围。 */
   function openEditKnowledgeBase(row: KnowledgeBaseRead) {
     setEditingKnowledgeBase(row);
     setKnowledgeBaseDraft({
@@ -746,6 +823,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     });
   }
 
+  /**
+   * 保存知识库详情修改并刷新列表。
+   *
+   * 成功后更新本地行数据、关闭对话框并重新拉取数据。
+   */
   async function saveKnowledgeBase() {
     if (!editingKnowledgeBase) return;
     const suffix = effectiveAgentId ? `?agent_id=${encodeURIComponent(effectiveAgentId)}` : '';
@@ -766,6 +848,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 上线或下线知识库：提交状态后在本地替换该行并刷新列表。 */
   async function setKnowledgeBaseStatus(row: KnowledgeBaseRead, active: boolean) {
     const suffix = effectiveAgentId ? `?agent_id=${encodeURIComponent(effectiveAgentId)}` : '';
     try {
@@ -781,10 +864,16 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 打开删除或移除知识库的确认对话框。 */
   function deleteKnowledgeBase(row: KnowledgeBaseRead) {
     setDeleteKbTarget(row);
   }
 
+  /**
+   * 确认删除（广场）或移除（员工）知识库，并刷新列表。
+   *
+   * 员工范围内仅移除当前分支的引用，不删除广场原数据。
+   */
   async function runDeleteKnowledgeBase() {
     const row = deleteKbTarget;
     if (!row) return;
@@ -800,6 +889,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 加载知识库版本列表并打开版本管理对话框。 */
   async function openKnowledgeBaseVersions(row: KnowledgeBaseRead) {
     const suffix = effectiveAgentId ? `&agent_id=${encodeURIComponent(effectiveAgentId)}` : '';
     try {
@@ -813,6 +903,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 将广场知识库同步到当前员工范围并刷新列表。 */
   async function syncKnowledgeBaseFromOverall(row: KnowledgeBaseRead) {
     if (!agentId) {
       notify.warning('请先选择员工');
@@ -827,6 +918,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 将当前员工的知识库发布到广场并刷新列表。 */
   async function promoteKnowledgeBaseToOverall(row: KnowledgeBaseRead) {
     if (!agentId) {
       notify.warning('请先选择员工');
@@ -841,6 +933,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 回滚知识库到指定版本，成功后重新加载版本列表并刷新数据。 */
   async function rollbackKnowledgeBaseVersion(version: KnowledgeBaseVersionRead) {
     if (!versionKnowledgeBase || !effectiveAgentId) return;
     try {
@@ -857,6 +950,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 打开文档编辑对话框，并用文档标题、状态与原始资料正文初始化草稿。 */
   function openEditDocument(row: KnowledgeDocumentRead) {
     const metadata = row.metadata || {};
     const documentCard = isRecord(metadata.document_card) ? metadata.document_card : {};
@@ -870,6 +964,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     setDocumentEditorMode('edit');
   }
 
+  /**
+   * 保存文档标题、状态与正文，保存后重建知识索引并刷新视图。
+   *
+   * 正文为空时提示并中止；提交时携带版本号做并发校验。
+   */
   async function saveDocument() {
     if (!editingDocument) return;
     if (!documentDraft.content_md.trim()) {
@@ -899,6 +998,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 打开内部索引编辑对话框，并加载该桶的引用来源切片初始化草稿。 */
   async function openBucketEditor(row: KnowledgeBucketRead) {
     setEditingBucket(row);
     setBucketDraft({ title: row.title, summary: row.summary });
@@ -915,6 +1015,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 依次保存桶标题与摘要、各引用来源切片内容，并刷新当前文档的桶列表。 */
   async function saveBucketAndChunks() {
     if (!editingBucket) return;
     setContentSaving(true);
@@ -941,6 +1042,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     }
   }
 
+  /** 渲染知识库行操作菜单：详情、版本、导出、检查、同步、上下线与删除。 */
   function renderKnowledgeBaseActions(item: KnowledgeBaseRead) {
     return (
       <DropdownMenu>
@@ -1063,6 +1165,7 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
     },
   ];
 
+  /** 渲染移动端知识库卡片：展示状态、能力范围与内容统计，点击切换选中项。 */
   const renderMobileKnowledgeBaseCard = (item: KnowledgeBaseRead) => (
     <article
       className={cn(
@@ -1703,6 +1806,11 @@ export default function KnowledgeManagePage({ currentUser, onLogout }: Knowledge
   );
 }
 
+/**
+ * 新建知识库页：上传文档即创建独立知识库，并轮询入库任务与知识发现建议。
+ *
+ * 上传成功后刷新知识库列表；任务进入终态后重新加载列表并检查可确认的发现建议。
+ */
 export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
   const navigate = useNavigate();
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseRead[]>([]);
@@ -1801,6 +1909,7 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
       });
   }, [sortedJobs, checkedDiscoveryJobIds, agentId]);
 
+  /** 按当前员工范围刷新知识库列表；非管理员且未选员工时清空列表。 */
   async function refreshKnowledgeBases() {
     if (!isEnterpriseAdmin(currentUser) && !agentId) {
       setKnowledgeBases([]);
@@ -1815,6 +1924,7 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
     }
   }
 
+  /** 加载最近 8 条入库任务并按 id 建立映射；失败时清空任务列表。 */
   async function loadRecentJobs() {
     if (!isEnterpriseAdmin(currentUser) && !agentId) {
       setJobs({});
@@ -1831,6 +1941,11 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
     }
   }
 
+  /**
+   * 上传单个文档创建知识库与入库任务。
+   *
+   * 成功后登记新任务并刷新知识库列表；未选员工时提示并中止。
+   */
   async function uploadFile(file: File) {
     if (!isEnterpriseAdmin(currentUser) && !agentId) {
       notify.warning('请先选择一个数字员工');
@@ -1854,6 +1969,11 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
     }
   }
 
+  /**
+   * 请求取消入库任务：先标记取消中，再提交取消请求并用返回值更新任务。
+   *
+   * 任务已处于终态时不处理；无论成败都移除取消中标记。
+   */
   async function cancelJob(job: KnowledgeIngestJobRead) {
     if (!['queued', 'running', 'cancel_requested'].includes(job.status)) return;
     setCancellingJobIds((current) => (current.includes(job.id) ? current : [...current, job.id]));
@@ -1870,6 +1990,11 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
     }
   }
 
+  /**
+   * 拉取本次入库任务相关的待确认知识发现建议并弹出确认对话框。
+   *
+   * 命中建议会按 id 去重后追加；任务 id 会记录为已检查，避免重复触发。
+   */
   async function loadDiscoveriesForJob(job: KnowledgeIngestJobRead) {
     setCheckedDiscoveryJobIds((prev) => (prev.includes(job.id) ? prev : [...prev, job.id]));
     try {
@@ -1893,6 +2018,7 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
     }
   }
 
+  /** 确认知识发现建议：调用确认接口后从待处理列表移除并刷新知识库。 */
   async function confirmDiscovery(item: KnowledgeDiscoveryRead) {
     try {
       await api.post(`/api/enterprise/knowledge/discoveries/${item.id}/confirm?tenant_id=${TENANT_ID}`);
@@ -1904,6 +2030,7 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
     }
   }
 
+  /** 拒绝知识发现建议：调用拒绝接口后从待处理列表移除。 */
   async function rejectDiscovery(item: KnowledgeDiscoveryRead) {
     try {
       await api.post(`/api/enterprise/knowledge/discoveries/${item.id}/reject?tenant_id=${TENANT_ID}`);
@@ -2010,6 +2137,7 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
   );
 }
 
+/** 入库任务卡片：展示阶段标签、平滑进度条、阶段轨迹与取消入口。 */
 function KnowledgeJobCard({
   job,
   cancelling,
@@ -2063,6 +2191,7 @@ function KnowledgeJobCard({
   );
 }
 
+/** 取任务的排序时间戳：优先创建时间，缺失或非法时回落到更新时间。 */
 function knowledgeJobSortTime(job: KnowledgeIngestJobRead): number {
   const createdAt = Date.parse(job.created_at || '');
   if (Number.isFinite(createdAt)) return createdAt;
@@ -2070,6 +2199,7 @@ function knowledgeJobSortTime(job: KnowledgeIngestJobRead): number {
   return Number.isFinite(updatedAt) ? updatedAt : 0;
 }
 
+/** 平滑进度条：以 80ms 步进逼近目标进度，并按任务状态切换颜色。 */
 function SmoothProgress({ job }: { job: KnowledgeIngestJobRead }) {
   const target = Math.max(0, Math.min(100, Math.round((job.progress || 0) * 100)));
   const [displayProgress, setDisplayProgress] = useState(target);
@@ -2111,6 +2241,11 @@ function SmoothProgress({ job }: { job: KnowledgeIngestJobRead }) {
   );
 }
 
+/**
+ * 解析入库阶段列表：优先读取任务元数据中的 ingest_steps，缺失时按默认阶段与进度推断。
+ *
+ * 取消的任务按当前进度标记已完成阶段，其余任务按 stage 与进度判定 running/done/pending。
+ */
 function ingestSteps(job: KnowledgeIngestJobRead): IngestStepView[] {
   const raw = (job.metadata || {}).ingest_steps;
   if (Array.isArray(raw)) {
@@ -2143,14 +2278,17 @@ function ingestSteps(job: KnowledgeIngestJobRead): IngestStepView[] {
   }));
 }
 
+/** 将阶段 key 映射为默认阶段中文标签，未知时回退到原值或「处理中」。 */
 function stageLabelFallback(stage: string): string {
   return DEFAULT_INGEST_STEPS.find((item) => item.key === stage)?.label || stage || '处理中';
 }
 
+/** 仅当元数据值为字符串时返回该值，否则返回空字符串。 */
 function stringFromMetadata(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** 规范化 Markdown 显示：统一换行符，并在标题前补空行以便分块渲染。 */
 function normalizeMarkdownForDisplay(markdown: string): string {
   return markdown
     .replace(/\r\n/g, '\n')
@@ -2158,6 +2296,11 @@ function normalizeMarkdownForDisplay(markdown: string): string {
     .trim();
 }
 
+/**
+ * 取文档的原始资料 Markdown：优先 raw_text 与 content，其次拼接 section_tree，最后回落到摘要。
+ *
+ * section_tree 节点优先取 content，其次由 title 与 summary 组合成二级标题段落。
+ */
 function documentSourceMarkdown(document: KnowledgeDocumentRead, fallback: string): string {
   const metadata = document.metadata || {};
   const rawText = stringFromMetadata(metadata.raw_text) || stringFromMetadata(metadata.content);
@@ -2198,6 +2341,11 @@ type KnowledgeOverviewItem = {
   bucket?: KnowledgeBucketRead;
 };
 
+/**
+ * 目录索引概览：展示文档卡片，以及目录索引、知识图谱、引用来源三类预览与详情弹窗。
+ *
+ * 图谱模式下挂载可视化组件；详情弹窗打开后会滚动并短暂高亮目标条目。
+ */
 function 目录索引Overview({
   document,
   knowledgeBase,
@@ -2242,10 +2390,12 @@ function 目录索引Overview({
     () => previewEvidenceItems(buckets, totalChunkCount, OKF_PREVIEW_LIMIT),
     [buckets, totalChunkCount],
   );
+  /** 打开详情弹窗，可携带目标条目 key 用于滚动定位。 */
   const openDetail = (view: KnowledgeDetailView, focusKey?: string) => {
     setDetailFocusKey(focusKey || null);
     setDetailView(view);
   };
+  /** 打开内容详情弹窗：sections 视图复用目录索引详情，其余视图直接打开。 */
   const openContentDetail = (view: KnowledgeContentView, focusKey?: string) => {
     if (view === 'sections') {
       openDetail('sections', focusKey);
@@ -2685,6 +2835,7 @@ function 目录索引Overview({
   );
 }
 
+/** 知识图谱查看弹窗标题：展示概念类型、标题与页面路径。 */
 function WikiViewerTitle({ concept }: { concept: KnowledgeConceptRead }) {
   return (
     <div className="flex min-w-0 flex-col gap-[4px]">
@@ -2697,6 +2848,11 @@ function WikiViewerTitle({ concept }: { concept: KnowledgeConceptRead }) {
   );
 }
 
+/**
+ * 知识图谱详情视图：渲染概念摘要、元信息、正文以及关联页面、引用与来源标签。
+ *
+ * 关联标签最多展示 12 个，正文会先剥离 frontmatter。
+ */
 function WikiConceptViewer({ concept }: { concept: KnowledgeConceptRead }) {
   const body = stripOkfFrontmatter(concept.content_md || '');
   const tags = Array.isArray(concept.frontmatter?.tags) ? concept.frontmatter.tags : [];
@@ -2776,6 +2932,7 @@ function WikiConceptViewer({ concept }: { concept: KnowledgeConceptRead }) {
   );
 }
 
+/** Markdown 预览：规范化文本后按块渲染，空内容显示占位文案。 */
 function MarkdownPreview({ markdown }: { markdown: string }) {
   const normalized = normalizeMarkdownForDisplay(markdown);
   return (
@@ -2785,10 +2942,12 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
   );
 }
 
+/** 移除 Markdown 开头的 YAML frontmatter 并去除首尾空白。 */
 function stripOkfFrontmatter(markdown: string) {
   return markdown.replace(/^---\s*\n[\s\S]*?\n---\s*/, '').trim();
 }
 
+/** 从记录中按候选键取首个非空值作为标签，非对象或取不到时回退到字符串或 JSON。 */
 function recordLabel(item: unknown, keys: string[]) {
   if (!isRecord(item)) return String(item || 'unknown');
   for (const key of keys) {
@@ -2798,6 +2957,7 @@ function recordLabel(item: unknown, keys: string[]) {
   return JSON.stringify(item);
 }
 
+/** 关系标签胶囊：用于展示关联页面、引用与来源等短文本。 */
 function KnowledgeRelationChip({ children }: { children: ReactNode }) {
   return (
     <span className="inline-block min-w-0 max-w-full rounded-[6px] bg-[#f2f3f5] px-[8px] py-px text-[12px] font-medium leading-[18px] whitespace-normal wrap-anywhere text-[#5b6273]">
@@ -2806,6 +2966,11 @@ function KnowledgeRelationChip({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * 桶来源与代表引用标签：非仅引用模式下额外展示覆盖来源路径。
+ *
+ * 代表引用为空时根据 chunk_count 回退为数量提示。
+ */
 function KnowledgeBucketLinks({ bucket, evidenceOnly = false }: { bucket: KnowledgeBucketRead; evidenceOnly?: boolean }) {
   const sourceSections = bucketSourceSections(bucket);
   const representativeChunks = bucketRepresentativeChunks(bucket);
@@ -2835,6 +3000,7 @@ function KnowledgeBucketLinks({ bucket, evidenceOnly = false }: { bucket: Knowle
   );
 }
 
+/** 将详情视图类型映射为弹窗标题，未知视图回退到「知识详情」。 */
 function knowledgeDetailTitle(view: KnowledgeDetailView | null) {
   if (view === 'document') return '文档详情';
   if (view === 'sections') return '目录索引 目录';
@@ -2843,6 +3009,7 @@ function knowledgeDetailTitle(view: KnowledgeDetailView | null) {
   return '知识详情';
 }
 
+/** 读取桶元数据中的来源章节路径，优先 section_paths，其次 section_ids。 */
 function bucketSourceSections(bucket: KnowledgeBucketRead) {
   const bucketMeta = bucket.metadata || {};
   if (Array.isArray(bucketMeta.section_paths)) return bucketMeta.section_paths;
@@ -2850,6 +3017,7 @@ function bucketSourceSections(bucket: KnowledgeBucketRead) {
   return [];
 }
 
+/** 读取桶的代表引用 ID：过滤空值与内部 chunk 哈希 ID，最多返回 12 个。 */
 function bucketRepresentativeChunks(bucket: KnowledgeBucketRead) {
   const representativeChunks = Array.isArray(bucket.metadata?.representative_chunk_ids)
     ? bucket.metadata.representative_chunk_ids
@@ -2860,6 +3028,7 @@ function bucketRepresentativeChunks(bucket: KnowledgeBucketRead) {
     .slice(0, 12);
 }
 
+/** 取桶可展示正文：依次回落到元数据 content、excerpt 与桶摘要。 */
 function bucketContentMarkdown(bucket: KnowledgeBucketRead): string {
   const metadata = bucket.metadata || {};
   const content = stringFromMetadata(metadata.content).trim();
@@ -2869,6 +3038,7 @@ function bucketContentMarkdown(bucket: KnowledgeBucketRead): string {
   return bucket.summary || '';
 }
 
+/** 汇总各桶代表引用 ID 并去重，最多返回 3 个用于预览。 */
 function previewRepresentativeChunkIds(buckets: KnowledgeBucketRead[]) {
   const ids: string[] = [];
   buckets.forEach((bucket) => {
@@ -2877,6 +3047,11 @@ function previewRepresentativeChunkIds(buckets: KnowledgeBucketRead[]) {
   return Array.from(new Set(ids)).slice(0, 3);
 }
 
+/**
+ * 构造引用来源预览条目：优先使用有切片的桶，并为每桶生成至多 180 字的摘要。
+ *
+ * 无可用桶时回落到代表引用 ID，再回落到引用总数提示，全部为空则返回空数组。
+ */
 function previewEvidenceItems(buckets: KnowledgeBucketRead[], chunkCount: number, limit: number) {
   const bucketItems = buckets
     .filter((bucket) => bucket.chunk_count > 0)
@@ -2920,6 +3095,11 @@ function previewEvidenceItems(buckets: KnowledgeBucketRead[], chunkCount: number
   return [];
 }
 
+/**
+ * 渐进检索调试面板：展示路由阶段轨迹与各折叠区（知识图谱、文档、来源、引用包）。
+ *
+ * 加载中或无结果时渲染占位提示；compact 用于紧凑布局。
+ */
 function KnowledgeSearchDebug({
   result,
   loading,
@@ -2994,6 +3174,7 @@ function KnowledgeSearchDebug({
   );
 }
 
+/** 知识发现建议列：列出技能或工具建议，并支持确认、拒绝待处理项。 */
 function DiscoveryColumn({
   title,
   description,
@@ -3058,6 +3239,7 @@ function DiscoveryColumn({
   );
 }
 
+/** 将检索路由阶段 key 映射为中文标签，未知阶段原样返回。 */
 function routePhaseLabel(phase: string) {
   const map: Record<string, string> = {
     document_route: '选择知识库文档',
@@ -3075,6 +3257,11 @@ function routePhaseLabel(phase: string) {
   return map[phase] || phase || '检索阶段';
 }
 
+/**
+ * 判断知识库是否为空壳：文档上传遗留且无来源文档，或名为「默认知识库」且无任何内容。
+ *
+ * 存在文档、索引或引用时不视为空壳。
+ */
 function isEmptyDefaultKnowledgeBase(item: KnowledgeBaseRead) {
   const hasRuntimeKnowledge = item.document_count > 0 || item.bucket_count > 0 || item.chunk_count > 0;
   if (!hasRuntimeKnowledge && item.metadata?.created_from_document_upload && !item.metadata?.source_document_id) {
@@ -3088,10 +3275,12 @@ function isEmptyDefaultKnowledgeBase(item: KnowledgeBaseRead) {
   );
 }
 
+/** 判断值是否为非数组的普通对象，可作为 Record 使用。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+/** 将状态字符串渲染为对应色调的标签，未知状态回退为原值。 */
 function statusTag(status: string) {
   const map: Record<string, { color: string; label: string }> = {
     active: { color: 'green', label: '已上线' },
@@ -3112,6 +3301,7 @@ function statusTag(status: string) {
   return <KTag color={item.color}>{item.label}</KTag>;
 }
 
+/** 渲染桶状态标签：ready 显示达标，其余显示待补足。 */
 function bucketStatusTag(bucket: KnowledgeBucketRead) {
   if (bucket.status === 'ready') return <KTag color="green">达标</KTag>;
   return <KTag color="gold">待补足</KTag>;
@@ -3130,6 +3320,7 @@ const KTAG_TONE_CLASS: Record<string, string> = {
   default: 'bg-[#f2f3f5] text-[#5b6273]',
 };
 
+/** 轻量标签组件：按语义色调渲染圆角小标签。 */
 function KTag({ color = 'default', children }: { color?: string; children: ReactNode }) {
   return (
     <span
@@ -3143,6 +3334,7 @@ function KTag({ color = 'default', children }: { color?: string; children: React
   );
 }
 
+/** 卡片容器：可选标题栏与右侧扩展区，其余属性透传到 section。 */
 function KCard({
   className,
   bodyClassName,
@@ -3176,6 +3368,7 @@ function KCard({
   );
 }
 
+/** 对话框取消按钮：使用统一的次要按钮样式。 */
 function KDialogCancelButton({
   children = '取消',
   className,
@@ -3188,6 +3381,7 @@ function KDialogCancelButton({
   );
 }
 
+/** 对话框主操作按钮：使用统一的主要按钮样式。 */
 function KDialogPrimaryButton({
   children,
   className,
@@ -3200,6 +3394,7 @@ function KDialogPrimaryButton({
   );
 }
 
+/** 通用对话框：统一标题、滚动内容区与可选底部操作区，并支持自定义宽度。 */
 function KDialog({
   open,
   title,
@@ -3237,6 +3432,7 @@ function KDialog({
   );
 }
 
+/** 空状态占位：居中展示说明文案。 */
 function EmptyState({ description }: { description: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-[6px] py-[36px] text-center text-[13px] text-[#858b9c]">
@@ -3245,6 +3441,11 @@ function EmptyState({ description }: { description: ReactNode }) {
   );
 }
 
+/**
+ * 文件拖放区：支持点击选择、键盘触发、拖拽上传与禁用态。
+ *
+ * 选中文件后交给 onFiles，multiple 为 false 时只取第一个文件。
+ */
 function FileDropzone({
   accept,
   multiple = false,
@@ -3260,6 +3461,7 @@ function FileDropzone({
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  /** 归一化选中的文件列表：multiple 为 false 时只取第一个文件后回调。 */
   const emit = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
@@ -3311,6 +3513,7 @@ function FileDropzone({
   );
 }
 
+/** 将概念 ID 按路径分段编码，保证作为 URL 片段时安全。 */
 function conceptPath(conceptId: string) {
   return conceptId
     .split('/')
@@ -3328,10 +3531,12 @@ const CONCEPT_TYPE_LABELS = new Map<string, string>([
   ['Query Analysis', '查询分析'],
 ]);
 
+/** 将概念类型映射为中文标签，未知类型回退原值或「概念」。 */
 function conceptTypeLabel(type: string) {
   return CONCEPT_TYPE_LABELS.get(type) || type || '概念';
 }
 
+/** 将概念类型映射为标签色调，未知类型使用默认色调。 */
 function conceptTypeColor(type: string) {
   const map: Record<string, string> = {
     'Source Document': 'blue',
@@ -3344,6 +3549,7 @@ function conceptTypeColor(type: string) {
   return map[type] || 'default';
 }
 
+/** 按概念类型优先级排序，同类型再按标题使用当前语言环境排序。 */
 function sortWikiConcepts(concepts: KnowledgeConceptRead[]) {
   const rank: Record<string, number> = {
     'Source Document': 0,
@@ -3361,6 +3567,11 @@ function sortWikiConcepts(concepts: KnowledgeConceptRead[]) {
   });
 }
 
+/**
+ * 按来源文档或类型把概念聚合为目录索引分组，并在追加概念时重算分组描述。
+ *
+ * 返回按类型排序后的分组列表，组内概念同样按类型与标题排序。
+ */
 function buildWikiIndexGroups(concepts: KnowledgeConceptRead[]): WikiIndexGroup[] {
   const groupMap = new Map<string, WikiIndexGroup>();
   concepts.forEach((concept) => {
@@ -3384,6 +3595,7 @@ function buildWikiIndexGroups(concepts: KnowledgeConceptRead[]): WikiIndexGroup[
   }));
 }
 
+/** 生成目录索引分组键：优先来源文档，其次首个来源引用，最后回落到类型。 */
 function wikiIndexGroupKey(concept: KnowledgeConceptRead) {
   const sourceDocument = stringFromMetadata(concept.frontmatter?.source_document);
   if (sourceDocument) return `source:${sourceDocument}`;
@@ -3395,6 +3607,7 @@ function wikiIndexGroupKey(concept: KnowledgeConceptRead) {
   return `type:${concept.concept_type || '知识图谱'}`;
 }
 
+/** 生成目录索引分组标题：取来源文档名（去掉 sources/ 前缀）或概念类型标签。 */
 function wikiIndexGroupTitle(concept: KnowledgeConceptRead) {
   const sourceDocument = stringFromMetadata(concept.frontmatter?.source_document);
   if (sourceDocument) return sourceDocument.replace(/^sources\//, '');
@@ -3406,6 +3619,7 @@ function wikiIndexGroupTitle(concept: KnowledgeConceptRead) {
   return conceptTypeLabel(concept.concept_type);
 }
 
+/** 生成目录索引分组描述：统计概念数、覆盖类型与前三个示例标题。 */
 function wikiIndexGroupDescription(concepts: KnowledgeConceptRead[]) {
   const types = Array.from(new Set(concepts.map((concept) => conceptTypeLabel(concept.concept_type)).filter(Boolean))).slice(0, 4);
   const samples = concepts
@@ -3417,11 +3631,17 @@ function wikiIndexGroupDescription(concepts: KnowledgeConceptRead[]) {
   return `${concepts.length} 个知识图谱，覆盖 ${typeText}${sampleText}`;
 }
 
+/** 从概念正文生成纯文本摘要，剥离 frontmatter 与 Markdown 标记，超长截断。 */
 function conceptSummary(concept: KnowledgeConceptRead) {
   const body = concept.content_md.replace(/^---[\s\S]*?---\s*/m, '').replace(/[#>*_\-[\]()`]/g, ' ').trim();
   return body.length > 160 ? `${body.slice(0, 160)}...` : body || '暂无摘要';
 }
 
+/**
+ * 读取概念 Markdown frontmatter 中指定键的值。
+ *
+ * 值优先按 JSON 解析为字符串，解析失败时去除首尾引号；缺失时返回 fallback。
+ */
 function okfFrontmatterValue(markdown: string, key: string, fallback = '') {
   const frontmatter = markdown.match(/^---\n([\s\S]*?)\n---/);
   if (!frontmatter) return fallback;
@@ -3437,6 +3657,11 @@ function okfFrontmatterValue(markdown: string, key: string, fallback = '') {
   }
 }
 
+/**
+ * 更新概念 Markdown frontmatter 中指定键的值（JSON 编码写入）。
+ *
+ * 无 frontmatter 时在文首补一段，键不存在时追加到末尾。
+ */
 function updateOkfFrontmatterValue(markdown: string, key: string, value: string) {
   const normalizedValue = JSON.stringify(value);
   const frontmatter = markdown.match(/^---\n([\s\S]*?)\n---/);
@@ -3453,6 +3678,7 @@ function updateOkfFrontmatterValue(markdown: string, key: string, value: string)
   return markdown.replace(/^---\n[\s\S]*?\n---/, `---\n${lines.join('\n')}\n---`);
 }
 
+/** 按当前语言环境格式化日期时间，空值或非法时间回退为占位文本。 */
 function formatDateTime(value: string) {
   if (!value) return '未知时间';
   const date = new Date(value);
@@ -3465,12 +3691,14 @@ function formatDateTime(value: string) {
   });
 }
 
+/** 将发现建议类型映射为中文标签：技能、工具或提示。 */
 function typeLabel(type: string) {
   if (type === 'skill') return '技能';
   if (type === 'tool') return '工具';
   return '提示';
 }
 
+/** 将文件读取为 Base64 字符串（不含 Data URL 前缀）。 */
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

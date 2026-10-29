@@ -28,6 +28,7 @@ from app.harness import (
 
 
 def _test_engine():
+    """创建可跨连接共享的内存 SQLite 引擎并建表，供下载测试使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -45,6 +46,7 @@ def _seed_artifact(
     task_frame_id: str = "task_demo",
     artifact_path: str = "reports/result.txt",
 ) -> User:
+    """写入租户、用户、会话、任务帧与含已发布产物的助手消息，返回会话所有者。"""
     db.add(Tenant(id=tenant_id, name="Demo"))
     user = User(
         id="user_owner",
@@ -94,6 +96,7 @@ def _seed_artifact(
 
 
 async def _read_response_body(response) -> bytes:
+    """异步拼接流式响应体并执行后台任务，返回完整字节。"""
     chunks: list[bytes] = []
     async for chunk in response.body_iterator:
         chunks.append(chunk if isinstance(chunk, bytes) else chunk.encode())
@@ -106,6 +109,7 @@ def test_downloads_only_a_published_file_from_the_exact_frame(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证只能下载该任务帧内已发布的文件，且响应头含长度、类型、附件名、nosniff 与 sha256 ETag。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     with Session(engine) as db:
@@ -150,6 +154,7 @@ def test_downloads_only_a_published_file_from_the_exact_frame(
 
 
 def test_publisher_builds_relative_hashed_metadata(tmp_path: Path) -> None:
+    """验证发布元数据使用相对路径，并带上 sha256、大小与来源操作。"""
     workspace = tmp_path / "task"
     artifact = workspace / "outputs" / "report.csv"
     artifact.parent.mkdir(parents=True)
@@ -177,6 +182,7 @@ def test_publisher_builds_relative_hashed_metadata(tmp_path: Path) -> None:
 def test_command_artifact_discovery_publishes_only_created_or_modified_files(
     tmp_path: Path,
 ) -> None:
+    """验证命令执行后只发布新增或修改的文件，未变文件被忽略。"""
     workspace = (tmp_path / "task").resolve()
     workspace.mkdir()
     unchanged = workspace / "input.txt"
@@ -201,6 +207,7 @@ def test_command_artifact_discovery_publishes_only_created_or_modified_files(
 def test_command_artifact_discovery_rejects_oversized_workspaces(
     tmp_path: Path,
 ) -> None:
+    """验证工作区条目数超过上限时快照直接报错，避免遍历失控。"""
     workspace = (tmp_path / "task").resolve()
     workspace.mkdir()
     (workspace / "one.txt").write_text("1", encoding="utf-8")
@@ -213,6 +220,7 @@ def test_command_artifact_discovery_rejects_oversized_workspaces(
 def test_windows_artifact_open_does_not_require_posix_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """验证 Windows 平台上打开产物不依赖 POSIX 专有标志位。"""
     workspace = (tmp_path / "task").resolve()
     workspace.mkdir()
     (workspace / "result.txt").write_text("ok", encoding="utf-8")
@@ -226,6 +234,7 @@ def test_windows_artifact_open_does_not_require_posix_flags(
 
 
 def test_publisher_rejects_hard_linked_files(tmp_path: Path) -> None:
+    """验证发布器拒绝硬链接文件，防止工作区外内容被导出。"""
     workspace = (tmp_path / "task").resolve()
     workspace.mkdir()
     source = tmp_path / "source.txt"
@@ -243,6 +252,7 @@ def test_download_rejects_a_file_changed_after_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证文件在发布后被改动时下载返回 409。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     with Session(engine) as db:
@@ -272,6 +282,7 @@ def test_download_requires_session_owner_frame_scope_and_published_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证下载要求会话所有者、正确任务帧、已发布路径与匹配租户，否则返回 404 或 403。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     with Session(engine) as db:
@@ -349,6 +360,7 @@ def test_download_requires_session_owner_frame_scope_and_published_path(
     ],
 )
 def test_artifact_path_normalization_rejects_unsafe_paths(path: str) -> None:
+    """验证路径规范化会拒绝目录穿越、绝对路径、Windows 盘符、回收目录与空字节。"""
     with pytest.raises(HarnessArtifactAccessError):
         normalize_harness_artifact_path(path)
 
@@ -356,6 +368,7 @@ def test_artifact_path_normalization_rejects_unsafe_paths(path: str) -> None:
 def test_secure_open_rejects_file_and_parent_symlinks(
     tmp_path: Path,
 ) -> None:
+    """验证符号链接文件或其父目录无法用于读取工作区外内容。"""
     workspace = tmp_path / "workspace"
     external = tmp_path / "external"
     workspace.mkdir()

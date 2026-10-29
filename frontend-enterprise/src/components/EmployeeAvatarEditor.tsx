@@ -24,6 +24,7 @@ const AVATAR_CANVAS_SIZE = 360;
 
 type AvatarDraft = Pick<EmployeeProfile, 'avatarKind' | 'avatarImage' | 'avatarPreset' | 'avatarText' | 'avatarTone'>;
 
+/** 员工头像编辑弹窗：可从预设头像中选择或上传自定义图片，保存后写入员工 metadata。 */
 export default function EmployeeAvatarEditor({
   agent,
   open,
@@ -66,6 +67,7 @@ export default function EmployeeAvatarEditor({
       avatarTone: selected.tone,
     };
 
+  /** 读取本地图片并裁剪为方形头像，成功后切换到上传模式；失败时提示错误。 */
   async function handleUpload(file: File | undefined) {
     if (!file) return;
     try {
@@ -79,6 +81,11 @@ export default function EmployeeAvatarEditor({
     }
   }
 
+  /**
+   * 将当前头像草稿合并进员工 metadata 并提交保存。
+   *
+   * 上传模式写入 avatar_image，预设模式删除该字段；成功后关闭弹窗并派发作用域刷新事件。
+   */
   async function save() {
     if (!agent) return;
     setSaving(true);
@@ -213,6 +220,7 @@ export default function EmployeeAvatarEditor({
   );
 }
 
+/** 用 FileReader 将文件读取为 DataURL，失败时抛出“头像读取失败”。 */
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -222,6 +230,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/** 将图片地址加载为 HTMLImageElement，解码失败时抛出“无法解析头像图片”。 */
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -231,6 +240,11 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   });
 }
 
+/**
+ * 校验图片类型与大小后，居中裁剪为方形并转为 DataURL。
+ *
+ * 非图片或超过 5MB 直接抛错；PNG 体积过大时回退为 JPEG，避免超出存储限制。
+ */
 async function fileToAvatarDataUrl(file: File): Promise<string> {
   if (!file.type.startsWith('image/')) {
     throw new Error('请选择图片文件');

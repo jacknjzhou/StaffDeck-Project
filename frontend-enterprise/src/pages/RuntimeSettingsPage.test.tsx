@@ -24,11 +24,14 @@ const validForm = {
   sandbox_allowed_domains: '',
 };
 
+/** 运行时上下文设置表单的校验规则。 */
 describe('runtime context settings validation', () => {
+  /** 验证默认运行时设置可以通过校验。 */
   it('accepts the default runtime settings', () => {
     expect(validateContextSettings(validForm)).toBeNull();
   });
 
+  /** 验证长期与近期摘要预算之和超过上下文预算时返回对应错误提示。 */
   it('rejects summary budgets larger than the context budget', () => {
     expect(validateContextSettings({
       ...validForm,
@@ -36,6 +39,7 @@ describe('runtime context settings validation', () => {
     })).toBe('长期与近期摘要预算之和不能超过上下文预算');
   });
 
+  /** 验证历史消息角色为空、摘要前缀空白时分别返回对应的错误提示。 */
   it('requires at least one history role and both summary prefixes', () => {
     expect(validateContextSettings({
       ...validForm,

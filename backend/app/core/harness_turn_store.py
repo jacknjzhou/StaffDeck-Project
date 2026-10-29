@@ -22,24 +22,27 @@ TURN_LEASE_SECONDS = 900
 
 
 class HarnessTurnConflict(RuntimeError):
-    pass
+    """幂等收据冲突：同一 client_turn_id 被复用，或收据已被其他执行者改写。"""
 
 
 class HarnessTurnClaim:
+    """claim 的返回值：record 为本次收据行，replay 非空表示可直接回放已完成的响应。"""
     def __init__(
         self,
         *,
         record: HarnessTurnRecord | None,
         replay: ChatTurnResponse | None = None,
     ) -> None:
+        """保存收据行与可选的回放响应。"""
         self.record = record
         self.replay = replay
 
 
 class HarnessTurnStore:
-    """Durable exactly-once receipts keyed by the caller's client_turn_id."""
+    """以调用方 client_turn_id 为键的持久化 exactly-once 收据存储。"""
 
     def __init__(self, db: Session) -> None:
+        """绑定本次收据读写使用的数据库会话。"""
         self.db = db
 
     def claim(
@@ -47,6 +50,10 @@ class HarnessTurnStore:
         session: ChatSession,
         request: ChatTurnRequest,
     ) -> HarnessTurnClaim:
+        """为带 client_turn_id 的请求抢占一条租约收据。
+
+        重复请求不会重复执行：已完成则回放响应，执行中或已结束则抛 HarnessTurnConflict；唯一约束冲突时回滚并转入已有收据处理。
+        """
         client_turn_id = str(request.client_turn_id or "").strip()
         if not client_turn_id:
             return HarnessTurnClaim(record=None)
@@ -81,6 +88,7 @@ class HarnessTurnStore:
         record: HarnessTurnRecord | None,
         user_message_id: str,
     ) -> None:
+        """把持久化的用户消息 id 记到收据上；record 为空时跳过。"""
         if record is None:
             return
         self._fenced_update(
@@ -92,7 +100,7 @@ class HarnessTurnStore:
         )
 
     def renew(self, record: HarnessTurnRecord | None) -> None:
-        """Keep the durable turn receipt alive while its executor is healthy."""
+        """在收据仍处于 started/finalizing 时续租，让健康执行者的租约持续有效。"""
 
         if record is None or record.status not in {"started", "finalizing"}:
             return
@@ -111,6 +119,7 @@ class HarnessTurnStore:
         record: HarnessTurnRecord | None,
         response: ChatTurnResponse,
     ) -> None:
+        """在 started/finalizing 状态下把收据置为 completed 并写入响应快照。"""
         if record is None:
             return
         now = utc_now()
@@ -129,7 +138,7 @@ class HarnessTurnStore:
         )
 
     def begin_completion(self, record: HarnessTurnRecord | None) -> None:
-        """Acquire the durable right to publish the normal terminal reply."""
+        """把 started 收据原子推进到 finalizing，独占正常终态回复的发布权。"""
 
         if record is None:
             return
@@ -145,7 +154,7 @@ class HarnessTurnStore:
         *,
         message: str = "用户取消了当前 Harness 执行。",
     ) -> bool:
-        """Atomically make cancellation the terminal owner for a receipt."""
+        """把 started 收据原子置为 cancelled 并写入 CANCELLED 错误，返回是否抢到终态。"""
 
         if record is None:
             return False
@@ -169,6 +178,7 @@ class HarnessTurnStore:
         code: str,
         message: str,
     ) -> None:
+        """在 started/finalizing 状态下写入失败状态与错误码，消息截断到 2000 字符。"""
         if record is None or record.status not in {"started", "finalizing"}:
             return
         now = utc_now()
@@ -191,6 +201,7 @@ class HarnessTurnStore:
         session: ChatSession,
         client_turn_id: str,
     ) -> HarnessTurnRecord | None:
+        """在租户与会话范围内按 client_turn_id 查收据。"""
         return self.db.exec(
             select(HarnessTurnRecord).where(
                 HarnessTurnRecord.tenant_id == session.tenant_id,
@@ -204,6 +215,7 @@ class HarnessTurnStore:
         existing: HarnessTurnRecord,
         request_digest: str,
     ) -> HarnessTurnClaim:
+        """比对请求摘要后决定回放、拒绝重复执行或抛冲突。"""
         if existing.request_digest != request_digest:
             raise HarnessTurnConflict(
                 "同一个 client_turn_id 不能用于不同的 Harness 请求。"
@@ -233,6 +245,7 @@ class HarnessTurnStore:
         expected_statuses: tuple[str, ...] = ("started",),
         values: dict[str, Any],
     ) -> None:
+        """执行带状态与 lease_owner 栅栏的更新，未命中时抛 HarnessTurnConflict。"""
         if self._try_fenced_update(
             record,
             expected_statuses=expected_statuses,
@@ -248,6 +261,7 @@ class HarnessTurnStore:
         expected_statuses: tuple[str, ...],
         values: dict[str, Any],
     ) -> bool:
+        """按 id、期望状态和 lease_owner 做栅栏更新，返回是否恰好命中一行。"""
         result = self.db.exec(
             update(HarnessTurnRecord)
             .where(
@@ -268,6 +282,7 @@ class HarnessTurnStore:
 
 
 def _request_digest(request: ChatTurnRequest) -> str:
+    """计算请求指纹（排除 session_id 与 client_turn_id），用于识别摘要不一致的复用。"""
     payload = request.model_dump(
         mode="json",
         exclude={"session_id", "client_turn_id"},

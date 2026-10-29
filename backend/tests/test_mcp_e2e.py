@@ -19,6 +19,7 @@ FINANCE_AGENT = "agent_f2828efc2a2a476d"
 
 
 def _authed_client():
+    """构建带管理员令牌与 MCP API Key 的测试客户端,供各用例复用同一套鉴权环境。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -31,6 +32,7 @@ def _authed_client():
     app = create_public_api_app()
 
     def override():
+        """用测试内存数据库替换真实会话依赖,每个请求独立开启一次 Session。"""
         with Session(engine) as db:
             yield db
 
@@ -49,6 +51,7 @@ def _authed_client():
 
 
 def test_full_handshake_then_tool_call():
+    """验证完整 MCP 握手(initialize→initialized→tools/list→tools/call)可用且不泄露凭据。"""
     client, auth = _authed_client()
 
     init = client.post(
@@ -123,7 +126,7 @@ def test_full_handshake_then_tool_call():
 
 
 def test_every_advertised_tool_is_callable():
-    """A tool that tools/list advertises but tools/call rejects would break the client."""
+    """验证 tools/list 公告的每个工具都能被 tools/call 分发,不会被判定为 TOOL_NOT_FOUND。"""
     client, auth = _authed_client()
     listed = client.post(
         "/mcp",

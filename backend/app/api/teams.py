@@ -108,6 +108,7 @@ AWARD_OVERRIDABLE_STATUSES = {"bidding", "pending"}
 
 
 def _ensure_request_tenant(tenant_id: str, user: User) -> None:
+    """校验请求的 tenant_id 与登录用户所属租户一致,不一致直接 403。"""
     if user.tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
 
@@ -119,6 +120,7 @@ def _ensure_team_manager(team: Team, user: User) -> None:
 
 
 def _member_read(db: Session, member) -> TeamMemberRead:
+    """把团队成员记录转换成 TeamMemberRead,并补齐 Agent 显示名(Agent 缺失时为 None)。"""
     agent = db.get(AgentProfile, member.agent_id)
     return TeamMemberRead(
         id=member.id,
@@ -131,6 +133,7 @@ def _member_read(db: Session, member) -> TeamMemberRead:
 
 
 def _team_read(db: Session, team: Team) -> TeamRead:
+    """把 Team 实体展开成 TeamRead,附带成员列表与 config 副本。"""
     members = [_member_read(db, item) for item in list_team_members(db, team.id)]
     return TeamRead(
         id=team.id,
@@ -147,6 +150,10 @@ def _team_read(db: Session, team: Team) -> TeamRead:
 
 
 def _task_read(db: Session, task: TeamTask, *, with_events: bool = False) -> TeamTaskRead:
+    """把 TeamTask 展开成 TeamTaskRead,with_events 时一并加载任务事件与竞标记录。
+
+    事件按 created_at 升序、竞标按轮次升序返回;默认不查这两张子表以省开销。
+    """
     events: list[TeamTaskEventRead] = []
     bids: list[TeamTaskBidRead] = []
     if with_events:
@@ -216,6 +223,7 @@ def _task_read(db: Session, task: TeamTask, *, with_events: bool = False) -> Tea
 
 
 def _get_team_task(db: Session, team: Team, task_id: str) -> TeamTask:
+    """按团队作用域取任务,不存在或属于其它团队时统一抛 404,避免跨团队探测。"""
     task = db.get(TeamTask, task_id)
     if task is None or task.team_id != team.id:
         raise HTTPException(status_code=404, detail="Team task not found")
@@ -228,6 +236,7 @@ def create_team_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamRead:
+    """创建团队,并把当前登录用户登记为 owner;租户需存在且与登录用户一致。"""
     ensure_tenant(db, request.tenant_id)
     _ensure_request_tenant(request.tenant_id, current_user)
     team = create_team(
@@ -247,6 +256,7 @@ def list_teams(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[TeamRead]:
+    """列出本租户全部团队,按 updated_at 倒序;tenant_id 必须与登录用户一致。"""
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     rows = db.exec(
@@ -262,6 +272,7 @@ def get_team_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamRead:
+    """读取单个团队详情(含成员列表);团队不存在或跨租户时返回 404。"""
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     return _team_read(db, get_team(db, tenant_id, team_id))
@@ -274,6 +285,10 @@ def update_team_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamRead:
+    """更新团队名称/描述/状态/配置,仅 owner 或管理员可操作。
+
+    改名会去首尾空白并做同租户重名校验:空名 400、重名 409;未传的字段保持原值。
+    """
     ensure_tenant(db, request.tenant_id)
     _ensure_request_tenant(request.tenant_id, current_user)
     team = get_team(db, request.tenant_id, team_id)
@@ -310,6 +325,7 @@ def delete_team_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
+    """删除团队及其关联数据,仅 owner 或管理员可操作;成功返回 {"ok": True}。"""
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     team = get_team(db, tenant_id, team_id)
@@ -325,6 +341,7 @@ def add_member_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamMemberRead:
+    """把 Agent 加入团队并指定角色,仅 owner 或管理员可操作。"""
     ensure_tenant(db, request.tenant_id)
     _ensure_request_tenant(request.tenant_id, current_user)
     team = get_team(db, request.tenant_id, team_id)
@@ -341,6 +358,7 @@ def remove_member_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
+    """把 Agent 移出团队,仅 owner 或管理员可操作;成功返回 {"ok": True}。"""
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     team = get_team(db, tenant_id, team_id)
@@ -356,6 +374,7 @@ def set_leader_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamMemberRead:
+    """把指定团队成员设为 TL(团队领导),仅 owner 或管理员可操作。"""
     ensure_tenant(db, request.tenant_id)
     _ensure_request_tenant(request.tenant_id, current_user)
     team = get_team(db, request.tenant_id, team_id)
@@ -371,6 +390,11 @@ def tl_chat_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamTLChatResponse:
+    """与团队 TL 对话:复用或新建 TL 会话,跑一轮 AgentLoop 并落库 TL 产出的任务。
+
+    传 session_id 时必须同时匹配团队、「TL 对话」标题与当前 TL Agent,否则 404,
+    避免把 A 团队的会话写进 B 团队上下文;回复会去掉内嵌 JSON 块后再返回。
+    """
     ensure_tenant(db, request.tenant_id)
     _ensure_request_tenant(request.tenant_id, current_user)
     team = get_team(db, request.tenant_id, team_id)
@@ -667,7 +691,11 @@ def get_team_conversation_stream(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamConversationStreamRead:
-    """Return the latest member turn's incremental reply without exposing injected prompts."""
+    """取该会话最近一轮成员回复的增量内容,且不暴露注入给成员的提示词。
+
+    以最后一条 user_message_received 为起点回放 AgentEvent,按 turn_id 过滤事件:
+    stream_delta/replace 累积正文,stream_end 记 completed,取消/中断/报错记 failed。
+    """
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     team = get_team(db, tenant_id, team_id)
@@ -919,6 +947,7 @@ def list_team_tasks(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[TeamTaskRead]:
+    """列出团队任务,可按 status 过滤;未知状态直接 400,结果按 updated_at 倒序。"""
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     team = get_team(db, tenant_id, team_id)
@@ -939,6 +968,7 @@ def get_team_task(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamTaskRead:
+    """读取单个团队任务详情,含事件流与竞标记录;跨团队或不存在时 404。"""
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     team = get_team(db, tenant_id, team_id)
@@ -1133,6 +1163,7 @@ def resume_team_task(
 
 
 def _blackboard_entry_read(entry: TeamBlackboardEntry) -> TeamBlackboardEntryRead:
+    """把黑板条目实体转换成 TeamBlackboardEntryRead,tags 与 citation 取 JSON 副本。"""
     return TeamBlackboardEntryRead(
         id=entry.id,
         team_id=entry.team_id,
@@ -1151,6 +1182,7 @@ def _blackboard_entry_read(entry: TeamBlackboardEntry) -> TeamBlackboardEntryRea
 
 
 def _get_blackboard_entry(db: Session, team: Team, entry_id: str) -> TeamBlackboardEntry:
+    """按团队作用域取黑板条目,不存在或属于其它团队时抛 404。"""
     entry = db.get(TeamBlackboardEntry, entry_id)
     if entry is None or entry.team_id != team.id:
         raise HTTPException(status_code=404, detail="Blackboard entry not found")
@@ -1165,6 +1197,7 @@ def list_blackboard_entries(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[TeamBlackboardEntryRead]:
+    """按状态列出团队黑板条目,置顶优先、同置顶按 updated_at 倒序;未知状态 400。"""
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     team = get_team(db, tenant_id, team_id)
@@ -1213,6 +1246,10 @@ def update_blackboard_entry(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamBlackboardEntryRead:
+    """更新黑板条目的内容/标签/置顶,仅 owner 或管理员可操作。
+
+    内容先经 normalize_blackboard_content 归一化,归一化后为空则 400;未传字段保持原值。
+    """
     ensure_tenant(db, request.tenant_id)
     _ensure_request_tenant(request.tenant_id, current_user)
     team = get_team(db, request.tenant_id, team_id)
@@ -1242,6 +1279,7 @@ def archive_blackboard_entry(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TeamBlackboardEntryRead:
+    """把黑板条目标记为 archived 归档:数据保留,不再出现在 active 列表中。"""
     ensure_tenant(db, request.tenant_id)
     _ensure_request_tenant(request.tenant_id, current_user)
     team = get_team(db, request.tenant_id, team_id)

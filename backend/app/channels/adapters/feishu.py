@@ -38,19 +38,30 @@ _PERMANENT_MESSAGE_CODES = {
 
 
 class FeishuSendError(RuntimeError):
+    """飞书投递异常基类，``retryable`` 标识该错误是否值得重试。"""
     retryable = True
 
 
 class FeishuPermanentError(FeishuSendError):
+    """永久性失败：凭证无效、目标不可达等，重试不会成功。"""
     retryable = False
 
 
 class FeishuTransientError(FeishuSendError):
+    """暂时性失败：网络超时、服务 429/5xx 等，可稍后重试。"""
     retryable = True
 
 
 class FeishuTokenProvider:
+    """按绑定缓存 tenant_access_token，带过期提前量与按绑定的回源锁。
+
+    缓存键为（应用标识、租户标识、配置版本）；同一绑定并发取 token 只会回源
+    一次，凭证缺失或无效抛 FeishuPermanentError，网络与服务端临时故障抛
+    FeishuTransientError 交由上层重试。
+    """
+
     def __init__(self, *, client_factory: Callable[[], httpx.Client] | None = None):
+        """注入可替换的 httpx 客户端工厂，并初始化 token 缓存与两级锁。"""
         self._client_factory = client_factory or (lambda: httpx.Client(timeout=10.0))
         self._cache: dict[tuple[str, str, int], tuple[str, float]] = {}
         self._lock = threading.Lock()
@@ -58,6 +69,7 @@ class FeishuTokenProvider:
 
     @staticmethod
     def _key(binding: ChannelBinding) -> tuple[str, str, int]:
+        """由绑定的应用标识、租户标识与配置版本拼出 token 缓存键。"""
         return (
             str(binding.external_account_key or ""),
             str(binding.provider_tenant_key or ""),
@@ -65,6 +77,11 @@ class FeishuTokenProvider:
         )
 
     def invalidate(self, binding: ChannelBinding, *, expected_token: str | None = None) -> bool:
+        """失效绑定的 token 缓存，返回是否真的清掉了缓存。
+
+        传入 expected_token 时仅当缓存值仍是它才清除，避免并发刷新互相覆盖；
+        缓存已被其他请求替换则返回 False。
+        """
         with self._lock:
             key = self._key(binding)
             cached = self._cache.get(key)
@@ -74,6 +91,11 @@ class FeishuTokenProvider:
             return True
 
     def get(self, binding: ChannelBinding, *, force_refresh: bool = False) -> str:
+        """取得绑定的 tenant_access_token，未过期时直接命中缓存。
+
+        同一绑定的回源请求串行执行，避免并发重复换取；有效期扣除
+        TOKEN_REFRESH_SKEW_SECONDS 提前量，至少保留 1 秒。
+        """
         key = self._key(binding)
         now = time.monotonic()
         with self._lock:
@@ -126,6 +148,11 @@ def validate_feishu_credentials(
     *,
     client_factory: Callable[[], httpx.Client] | None = None,
 ) -> dict[str, str]:
+    """校验飞书应用凭证可用，返回机器人 open_id 与名称。
+
+    先换 tenant_access_token，再查 bot/v3/info；凭证无效或权限不足抛
+    FeishuPermanentError，网络与服务端临时故障抛 FeishuTransientError。
+    """
     factory = client_factory or (lambda: httpx.Client(timeout=10.0))
     try:
         with factory() as client:
@@ -164,6 +191,8 @@ def validate_feishu_credentials(
 
 
 class FeishuAdapter:
+    """飞书渠道适配器：负责发消息、发/改卡片、reaction 维护与附件下载。"""
+
     # 飞书 reaction 会返回远端 reaction_id，重复挂会产生第二个表情，因此重试前必须
     # 先用 find_own_reaction() 回查，不能直接重发。
     reaction_attach_idempotent = False
@@ -175,14 +204,17 @@ class FeishuAdapter:
         token_provider: FeishuTokenProvider | None = None,
         client_factory: Callable[[], httpx.Client] | None = None,
     ):
+        """初始化适配器，可注入 token provider 与 httpx 客户端工厂以便测试。"""
         self._client_factory = client_factory or (lambda: httpx.Client(timeout=15.0))
         self._tokens = token_provider or FeishuTokenProvider(client_factory=self._client_factory)
 
     def normalize(self, raw: dict[str, Any]):
-        return None
+        """飞书入站消息由独立长连接进程解析，适配器侧固定返回 None。"""
+        return
 
     @staticmethod
     def _uuid(idempotency_key: str, chunk_index: int) -> str:
+        """由幂等键与分片序号派生 40 位稳定 uuid，保证重试不重复投递。"""
         return hashlib.sha256(
             f"{idempotency_key}:{chunk_index}".encode("utf-8")
         ).hexdigest()[:40]
@@ -196,6 +228,11 @@ class FeishuAdapter:
         params: dict[str, str] | None,
         body: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        """带 token 刷新重试的统一飞书 HTTP 请求，返回解析后的响应体。
+
+        401 或 token 失效码时失效缓存并重试一次；429/5xx 抛暂时错误，其余 4xx
+        与永久消息码抛永久错误；DELETE 收到 404 视为已删除，返回空字典。
+        """
         force_refresh = False
         for attempt in range(2):
             token = self._tokens.get(binding, force_refresh=force_refresh)
@@ -252,6 +289,7 @@ class FeishuAdapter:
         params: dict[str, str] | None,
         body: dict[str, Any],
     ) -> dict[str, Any]:
+        """以 POST 语义调用 _request，显式透传 params 与 body。"""
         return self._request(binding, "POST", url, params=params, body=body)
 
     def add_reaction(
@@ -260,6 +298,11 @@ class FeishuAdapter:
         target: dict[str, Any],
         emoji_type: str = FEISHU_REACTION_TOKEN,
     ) -> str:
+        """给目标消息挂上表情 reaction，返回飞书侧的 reaction_id。
+
+        message_id 与 emoji_type 缺失时抛永久错误；响应缺少 reaction_id 视为
+        暂时错误，交给上层重试。
+        """
         message_id = str((target or {}).get("message_id") or "").strip()
         emoji_type = str(emoji_type or "").strip()
         if not message_id or not emoji_type:
@@ -281,6 +324,11 @@ class FeishuAdapter:
         target: dict[str, Any],
         emoji_type: str = FEISHU_REACTION_TOKEN,
     ) -> str | None:
+        """回查本应用在目标消息上已挂的同款 reaction，返回 reaction_id 或 None。
+
+        飞书挂 reaction 不幂等，重试前必须先用本方法确认是否已挂过；按
+        page_token 翻页至多 20 页，分页信息异常时抛暂时错误。
+        """
         message_id = str((target or {}).get("message_id") or "").strip()
         emoji_type = str(emoji_type or "").strip()
         app_id = str((binding.config_json or {}).get("app_id") or "").strip()
@@ -323,6 +371,7 @@ class FeishuAdapter:
         target: dict[str, Any],
         reaction_id: str,
     ) -> None:
+        """删除消息上的指定 reaction；message_id 或 reaction_id 缺失时抛永久错误。"""
         message_id = str(target.get("message_id") or "").strip()
         reaction_id = str(reaction_id or "").strip()
         if not message_id or not reaction_id:
@@ -535,6 +584,12 @@ class FeishuAdapter:
         *,
         idempotency_key: str | None = None,
     ) -> str | None:
+        """向目标会话投递文本，返回最后一个分片的飞书 message_id。
+
+        有 message_id 时走 reply（可带 reply_in_thread），否则按 receive_id 投递；
+        文本按渠道长度上限分片，开启富文本时把 markdown 渲染成 post 消息。
+        每条分片的 uuid 由幂等键派生，保证重试不重复发送。
+        """
         key = str(idempotency_key or "").strip()
         if not str(text or "").strip():
             raise FeishuPermanentError("飞书投递文本不能为空")
@@ -590,11 +645,13 @@ class FeishuAdapter:
         return created_message_id
 
     def start_ingress(self, binding_id: str) -> None:
+        """启动该绑定的飞书长连接接入进程。"""
         from app.channels import get_feishu_process_manager
 
         get_feishu_process_manager().ensure_binding(binding_id)
 
     def stop_ingress(self, binding_id: str) -> None:
+        """停止该绑定的飞书长连接接入进程。"""
         from app.channels import get_feishu_process_manager
 
         get_feishu_process_manager().stop_binding(binding_id)

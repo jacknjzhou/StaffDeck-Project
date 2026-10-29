@@ -20,6 +20,13 @@ type ModelConfigDropdownProps = {
   placeholder?: string;
 };
 
+/**
+ * 模型配置下拉选择器。
+ *
+ * @param value 当前选中的模型 id，未匹配到时显示 placeholder。
+ * @param models 为空时按钮禁用并展示"暂无可用模型"。
+ * @param align 菜单对齐方式，默认 end。
+ */
 export function ModelConfigDropdown({
   models,
   value,

@@ -88,6 +88,7 @@ const SYSTEM_NAV: NavItem[] = [
   { route: EnterpriseRoute.RuntimeSettings, label: '运行设置', Icon: IconSettings },
 ];
 
+/** 组装主导航项：管理员在常规导航后追加系统设置分组，普通用户仅返回常规导航。 */
 function primaryNavItems(isAdmin: boolean): NavItem[] {
   return isAdmin ? [...PRIMARY_NAV, ...SYSTEM_NAV] : PRIMARY_NAV;
 }
@@ -110,13 +111,13 @@ export type ChatSessionFilterOption = { value: string; label: string };
 
 export type AppSidebarChatProps = {
   variant: 'chat';
-  /** Sessions already filtered for the sidebar list. */
+  /** 已按侧边栏筛选条件过滤后的会话列表。 */
   sessions: ChatSession[];
-  /** Whether the initial session list is still loading. */
+  /** 首次会话列表是否仍在加载。 */
   sessionsLoading?: boolean;
-  /** Full agent roster, used to resolve per-session avatars/roles. */
+  /** 完整数字员工名册，用于解析每个会话的头像与角色。 */
   agents: AgentProfileRead[];
-  /** Team roster, used to mark the team leader (TL) in team session rows. */
+  /** 团队名册，用于在团队会话行中标记团队负责人（TL）。 */
   scopeTeams?: TeamRead[];
   activeSessionId?: string;
   sessionFilter: string;
@@ -126,7 +127,7 @@ export type AppSidebarChatProps = {
   onOpenSession: (id: string) => void;
   onNewConversation?: () => void;
   onOpenGallery: () => void;
-  /** Highlights the 数字员工广场 entry as the active menu (chat gallery route). */
+  /** 是否将「数字员工广场」入口高亮为当前菜单（对话端广场路由）。 */
   galleryActive?: boolean;
   handoffCount?: number;
   onOpenHandoffs?: () => void;
@@ -141,6 +142,7 @@ export type AppSidebarProps = AppSidebarManagementProps | AppSidebarChatProps;
 const SIDEBAR_SHELL_CLASS =
   'overflow-hidden border-r border-sidebar-border bg-sidebar backdrop-blur-[9.5px] **:data-[slot=sidebar-inner]:bg-sidebar';
 
+/** 一级主导航按钮：按 selected 判定选中态，attention 为真时展示待处理提示。 */
 function PrimaryNavButton({
   item,
   selected,
@@ -177,6 +179,7 @@ function PrimaryNavButton({
   );
 }
 
+/** 卡片式导航按钮：紧凑尺寸，用于员工资料与员工能力分组的二级入口。 */
 function CardNavButton({
   item,
   selected,
@@ -207,6 +210,7 @@ function CardNavButton({
   );
 }
 
+/** 分组小标题：渲染导航卡片内的分组名称，边栏收起为图标时自动隐藏。 */
 function GroupLabel({ children }: { children: string }) {
   return (
     <span className="px-[8px] pt-[6px] pb-[2px] text-[10px] leading-none text-[#464c5e] group-data-[collapsible=icon]:hidden">
@@ -215,6 +219,7 @@ function GroupLabel({ children }: { children: string }) {
   );
 }
 
+/** 员工切换下拉中的「团队」分组：列出团队作用域项，选中后以团队作为当前作用域。 */
 function TeamScopeItems({
   scopeTeams,
   selectedAgentId,
@@ -251,6 +256,11 @@ function TeamScopeItems({
   );
 }
 
+/**
+ * 当前员工/团队切换器（展开态）。
+ *
+ * 头部展示当前选中对象的头像与名称，下拉列表包含非汇总员工与团队作用域选项。
+ */
 function AgentSwitcher({
   sidebarAgent,
   scopeAgents,
@@ -337,6 +347,7 @@ function AgentSwitcher({
   );
 }
 
+/** 管理端底部操作区：提供「对话端」主按钮与切换对话端的图标按钮，均回调 onOpenChat。 */
 function SidebarFooterActions({ onOpenChat }: { onOpenChat: () => void }) {
   return (
     <div
@@ -371,6 +382,7 @@ function SidebarFooterActions({ onOpenChat }: { onOpenChat: () => void }) {
   );
 }
 
+/** 收起态分组标题：以纯文本渲染分组名，供折叠侧边栏使用。 */
 function CollapsedGroupLabel({ children }: { children: string }) {
   return (
     <span className="text-[10px] leading-none text-[#464c5e]">
@@ -379,6 +391,11 @@ function CollapsedGroupLabel({ children }: { children: string }) {
   );
 }
 
+/**
+ * 收起态导航按钮：只展示图标，悬停时通过 Tooltip 显示名称。
+ *
+ * radius 控制图标容器圆角、iconSize 控制图标边长，attention 为真时追加提示圆点。
+ */
 function CollapsedNavButton({
   item,
   selected,
@@ -423,6 +440,11 @@ function CollapsedNavButton({
   );
 }
 
+/**
+ * 收起态的员工/团队切换器。
+ *
+ * 只显示头像与换行名称，下拉内容与展开态一致，复用 TeamScopeItems 渲染团队分组。
+ */
 function CollapsedAgentSwitcher({
   sidebarAgent,
   scopeAgents,
@@ -485,6 +507,12 @@ function CollapsedAgentSwitcher({
   );
 }
 
+/**
+ * 收起态（图标模式）管理侧边栏。
+ *
+ * 仅保留品牌标记、展开按钮、主导航图标、员工切换器以及资料/能力图标入口；
+ * 展开动作通过 onToggle 回调交还给父组件。
+ */
 function CollapsedSidebar({
   selected,
   onNavigate,
@@ -614,6 +642,12 @@ function CollapsedSidebar({
   );
 }
 
+/**
+ * 管理端侧边栏（默认变体）。
+ *
+ * 依据 useSidebar 的折叠状态在折叠布局与完整布局之间切换，
+ * 主导航项由 primaryNavItems 按管理员身份缓存计算。
+ */
 function ManagementSidebar({
   selected,
   onNavigate,
@@ -734,21 +768,29 @@ function ManagementSidebar({
 // while swapping the body for the "员工会话" session list.
 // ---------------------------------------------------------------------------
 
+/** 在员工名册中按会话的 agent_id 查找数字员工，缺失或无匹配时返回 null。 */
 function sessionAgentFor(session: ChatSession, agents: AgentProfileRead[]): AgentProfileRead | null {
   if (!session.agent_id) return null;
   return agents.find((agent) => agent.id === session.agent_id) || null;
 }
 
+/** 计算会话标题：优先使用会话标题，缺失时回退到会话 ID 或「新对话」。 */
 function sessionTitleFor(session: ChatSession, _agent: AgentProfileRead | null): string {
   if (session.title) return staffdeckDisplayText(session.title);
   return session.id || '新对话';
 }
 
+/** 计算会话副标题：取最近回复或摘要并去掉「最近回复：」前缀，为空时回退「新对话」。 */
 function sessionSubtitleFor(session: ChatSession, _agent: AgentProfileRead | null): string {
   const recent = (session.last_agent_question || session.summary || '').replace(/^最近回复[:：]\s*/, '');
   return recent ? staffdeckDisplayText(recent) : '新对话';
 }
 
+/**
+ * 团队群聊头像：用 2×2 宫格展示最多 4 位成员头像，无成员时回退为团队图标。
+ *
+ * size 控制整体尺寸，成员头像尺寸与圆角按 size 分档调整。
+ */
 function TeamGroupAvatar({
   team,
   agents,
@@ -781,6 +823,11 @@ function TeamGroupAvatar({
   );
 }
 
+/**
+ * 会话筛选下拉：按「名称 · 数量」格式解析选项文案，collapsed 为真时只渲染图标按钮。
+ *
+ * 选中值由外部 sessionFilter 控制，切换时回调 onSessionFilterChange。
+ */
 function ChatSessionFilter({
   sessionFilter,
   sessionFilterOptions,
@@ -874,6 +921,11 @@ function ChatSessionFilter({
   );
 }
 
+/**
+ * 「待回答」入口：有未处理交接时显示红色角标，数量超过 99 显示 99+。
+ *
+ * onOpen 未提供时返回 null；collapsed 为真时以带 Tooltip 的图标按钮呈现。
+ */
 function ChatHandoffButton({
   count = 0,
   onOpen,
@@ -930,6 +982,12 @@ function ChatHandoffButton({
   );
 }
 
+/**
+ * 单个会话列表行。
+ *
+ * 团队会话展示团队名与成员数，普通会话展示员工头像与最近回复；
+ * 支持 Enter/空格键打开，悬停时出现重命名与删除按钮。
+ */
 function ChatSessionRow({
   session,
   agent,
@@ -1048,6 +1106,7 @@ function ChatSessionRow({
   );
 }
 
+/** 会话行骨架屏：会话列表首次加载时占位，避免列表出现时布局跳动。 */
 function ChatSessionRowSkeleton() {
   return (
     <div className="flex w-full animate-pulse items-center gap-[6px] rounded-[14px] border-[0.5px] border-transparent px-[8px] py-[6px]">
@@ -1060,6 +1119,7 @@ function ChatSessionRowSkeleton() {
   );
 }
 
+/** 会话骨架列表：按 rows 数量渲染若干个骨架行，默认 5 行。 */
 function ChatSessionSkeletonList({ rows = 5 }: { rows?: number }) {
   return (
     <div className="flex flex-col gap-[2px]">
@@ -1070,6 +1130,7 @@ function ChatSessionSkeletonList({ rows = 5 }: { rows?: number }) {
   );
 }
 
+/** 对话端底部操作区：提供「管理端」主按钮与切换管理端的图标按钮，均回调 onOpenAdmin。 */
 function ChatFooterActions({ onOpenAdmin }: { onOpenAdmin: () => void }) {
   return (
     <div className="flex items-center justify-center gap-[10px] pb-[20px]">
@@ -1095,6 +1156,12 @@ function ChatFooterActions({ onOpenAdmin }: { onOpenAdmin: () => void }) {
   );
 }
 
+/**
+ * 收起态的对话端侧边栏。
+ *
+ * 仅保留图标入口：广场、待回答、会话筛选、新建对话与会话头像列表；
+ * sessionsLoading 为真时以骨架占位，未读状态由 isSessionUnread 判定。
+ */
 function CollapsedChatSidebar({
   sessions,
   sessionsLoading = false,
@@ -1265,6 +1332,12 @@ function CollapsedChatSidebar({
   );
 }
 
+/**
+ * 对话端侧边栏变体。
+ *
+ * 依据 useSidebar 的折叠状态在 CollapsedChatSidebar 与完整会话列表之间切换；
+ * teamById 预建团队索引，便于会话行快速解析所属团队。
+ */
 function ChatSidebarVariant({
   sessions,
   sessionsLoading = false,
@@ -1409,6 +1482,7 @@ function ChatSidebarVariant({
   );
 }
 
+/** 应用侧边栏入口：按 variant 分发到对话端或管理端实现，未指定时使用管理端。 */
 export default function AppSidebar(props: AppSidebarProps) {
   if (props.variant === 'chat') {
     return <ChatSidebarVariant {...props} />;

@@ -32,6 +32,7 @@ _TERMINAL = {"completed", "failed", "canceled", "rejected", "input-required"}
 
 @router.get("/.well-known/agent-card.json")
 def codex_agent_card(request: Request) -> dict[str, Any]:
+    """返回 A2A agent card，声明 Codex CLI 的端点、能力与鉴权方式。"""
     settings = _enabled_settings()
     endpoint = str(request.base_url).rstrip("/") + "/api/a2a/codex"
     return {
@@ -64,6 +65,10 @@ def codex_a2a_rpc(
     authorization: str | None = Header(default=None),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> Response:
+    """处理 A2A JSON-RPC 请求，按 method 分发提交、查询、取消、订阅与列表操作。
+
+    未知方法返回 -32601；未预期异常统一包装为 -32000 错误响应。
+    """
     settings = _enabled_settings()
     _authorize(settings.codex_a2a_token, authorization)
     request_id = payload.get("id")
@@ -110,6 +115,7 @@ def codex_a2a_artifact(
     artifact_path: str,
     authorization: str | None = Header(default=None),
 ) -> FileResponse:
+    """按任务工作区下载产物文件，路径越界或文件不存在时返回 404。"""
     settings = _enabled_settings()
     _authorize(settings.codex_a2a_token, authorization)
     task = _require_task(task_id)
@@ -121,6 +127,7 @@ def codex_a2a_artifact(
 
 
 def recover_codex_a2a_tasks() -> None:
+    """启动时重新拉起仍处于 submitted/working 的服务端任务，实现断点恢复。"""
     settings = get_settings()
     if not settings.codex_a2a_enabled:
         return
@@ -140,7 +147,7 @@ def recover_codex_a2a_tasks() -> None:
 
 
 def stop_codex_a2a_tasks() -> None:
-    """Stop CLI children while leaving durable tasks eligible for recovery."""
+    """服务停止时终止 CLI 子进程，但保留任务状态以便下次启动恢复。"""
 
     _shutting_down.set()
     with _process_lock:
@@ -158,6 +165,7 @@ def stop_codex_a2a_tasks() -> None:
 
 
 def _submit_message(params: dict[str, Any], *, request: Request) -> tuple[A2ATaskRun, int]:
+    """串行化提交入口，避免同一 messageId 的并发请求重复建任务。"""
     with _submission_lock:
         return _submit_message_locked(params, request=request)
 
@@ -165,6 +173,10 @@ def _submit_message(params: dict[str, Any], *, request: Request) -> tuple[A2ATas
 def _submit_message_locked(
     params: dict[str, Any], *, request: Request
 ) -> tuple[A2ATaskRun, int]:
+    """在提交锁内创建新任务或延续已有任务，返回任务与可续传的事件序号。
+
+    messageId 重复时直接返回已有任务；taskId 指向的任务尚未终结则拒绝继续。
+    """
     message = params.get("message") if isinstance(params.get("message"), dict) else {}
     prompt = _message_text(message)
     if not prompt:
@@ -255,6 +267,7 @@ def _submit_message_locked(
 
 
 def _launch(task_id: str, *, recovery: bool = False) -> None:
+    """起一个后台线程执行任务，不阻塞请求线程。"""
     thread = threading.Thread(
         target=_run_codex_task,
         args=(task_id,),
@@ -266,6 +279,11 @@ def _launch(task_id: str, *, recovery: bool = False) -> None:
 
 
 def _run_codex_task(task_id: str, *, recovery: bool = False) -> None:
+    """执行一次 Codex CLI 调用，并把输出事件、会话 id 与产物写回数据库。
+
+    超时、取消或子进程非零退出都会把任务标记为 canceled/failed；
+    服务停止时保留任务状态，等待下次启动恢复。
+    """
     settings = get_settings()
     with Session(engine) as db:
         task = db.get(A2ATaskRun, task_id)
@@ -327,6 +345,7 @@ def _run_codex_task(task_id: str, *, recovery: bool = False) -> None:
         output_queue: queue.Queue[str | None] = queue.Queue()
 
         def read_output() -> None:
+            """把子进程 stdout 逐行送入队列，读到 EOF 时投递 None 作哨兵。"""
             assert process.stdout is not None
             for output_line in process.stdout:
                 output_queue.put(output_line)
@@ -449,7 +468,9 @@ def _stream_task(
     request_id: Any,
     after_event_id: str | None,
 ) -> StreamingResponse:
+    """把任务事件表转成 SSE 流，支持 Last-Event-ID 续传，空闲时发送心跳。"""
     def generate() -> Iterator[str]:
+        """持续轮询新事件并逐条 yield SSE 帧，任务终结且无新事件时结束。"""
         after = _event_sequence(after_event_id)
         last_heartbeat = time.monotonic()
         while True:
@@ -482,7 +503,9 @@ def _stream_task(
 
 
 def _latest_event_sequence(task_id: str, *, db: Session | None = None) -> int:
+    """返回任务当前最大的事件序号，没有事件时为 0。"""
     def find(session: Session) -> int:
+        """在给定 session 中查询任务的最大事件序号。"""
         event = session.exec(
             select(A2ATaskEvent)
             .where(A2ATaskEvent.run_id == task_id)
@@ -497,6 +520,7 @@ def _latest_event_sequence(task_id: str, *, db: Session | None = None) -> int:
 
 
 def _cancel(task_id: str) -> None:
+    """把任务标记为 canceled 并追加事件，随后终止仍在运行的 CLI 子进程。"""
     with Session(engine) as db:
         task = db.get(A2ATaskRun, task_id)
         if task is None:
@@ -515,6 +539,7 @@ def _cancel(task_id: str) -> None:
 
 
 def _require_task(task_public_id: str) -> A2ATaskRun:
+    """按对外 task id 查询服务端任务，不存在时抛 404。"""
     with Session(engine) as db:
         task = db.exec(
             select(A2ATaskRun).where(
@@ -529,6 +554,7 @@ def _require_task(task_public_id: str) -> A2ATaskRun:
 
 
 def _task_for_message_id(message_id: str) -> A2ATaskRun | None:
+    """按 messageId 找到已存在的任务用于幂等去重；找不到返回 None。"""
     with Session(engine) as db:
         event = db.exec(
             select(A2ATaskEvent).where(A2ATaskEvent.external_event_id == message_id)
@@ -554,6 +580,7 @@ def _append_event(
     *,
     external_event_id: str | None = None,
 ) -> None:
+    """为任务追加一条顺序递增的事件并立即提交。"""
     previous = db.exec(
         select(A2ATaskEvent)
         .where(A2ATaskEvent.run_id == task.id)
@@ -573,6 +600,7 @@ def _append_event(
 
 
 def _task_payload(task: A2ATaskRun, *, request: Request | None = None) -> dict[str, Any]:
+    """把任务行转换成 A2A 任务结构，包含状态消息与可下载产物链接。"""
     state = task.status
     message_text = str(task.result_json.get("text") or task.error_json.get("message") or "")
     status: dict[str, Any] = {"state": state}
@@ -613,6 +641,7 @@ def _task_payload(task: A2ATaskRun, *, request: Request | None = None) -> dict[s
 
 
 def _status_update(task: A2ATaskRun, state: str) -> dict[str, Any]:
+    """构造 statusUpdate 事件体，并标记该状态是否为终态。"""
     return {
         "statusUpdate": {
             "taskId": task.remote_task_id,
@@ -624,6 +653,7 @@ def _status_update(task: A2ATaskRun, state: str) -> dict[str, Any]:
 
 
 def _message_text(message: dict[str, Any]) -> str:
+    """拼接消息所有文本 part 并去除首尾空白。"""
     texts = [
         str(part.get("text"))
         for part in message.get("parts") or []
@@ -633,6 +663,10 @@ def _message_text(message: dict[str, Any]) -> str:
 
 
 def _materialize_message_files(message: dict[str, Any], workspace: Path) -> list[str]:
+    """把消息里的 base64 文件 part 落盘到工作区 attachments 目录，返回相对路径列表。
+
+    文件名会清洗并自动去重，非法 base64 视为错误。
+    """
     import base64
 
     written: list[str] = []
@@ -661,12 +695,14 @@ def _materialize_message_files(message: dict[str, Any], workspace: Path) -> list
 
 
 def _codex_session_id(event: dict[str, Any]) -> str | None:
+    """从 Codex JSON 事件中取 session/thread id，非会话开始事件返回 None。"""
     if str(event.get("type") or "") in {"thread.started", "session.started"}:
         return str(event.get("thread_id") or event.get("session_id") or event.get("id") or "") or None
     return None
 
 
 def _codex_text(event: dict[str, Any]) -> str:
+    """从 Codex JSON 事件中提取助手文本，无法识别时返回空串。"""
     item = event.get("item")
     if isinstance(item, dict) and str(item.get("type") or "") in {"agent_message", "message"}:
         return str(item.get("text") or item.get("content") or "")
@@ -676,6 +712,7 @@ def _codex_text(event: dict[str, Any]) -> str:
 
 
 def _workspace_snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    """记录工作区现有文件的大小与 mtime，用于事后识别新增或改动的产物。"""
     return {
         path.relative_to(root).as_posix(): (path.stat().st_size, path.stat().st_mtime_ns)
         for path in root.rglob("*")
@@ -684,6 +721,7 @@ def _workspace_snapshot(root: Path) -> dict[str, tuple[int, int]]:
 
 
 def _collect_artifacts(root: Path, before: dict[str, tuple[int, int]]) -> list[dict[str, Any]]:
+    """对比运行前快照，收集新增或变更的文件并生成产物元数据。"""
     artifacts: list[dict[str, Any]] = []
     for path in root.rglob("*"):
         if not path.is_file() or ".git" in path.parts:
@@ -705,10 +743,12 @@ def _collect_artifacts(root: Path, before: dict[str, tuple[int, int]]) -> list[d
 
 
 def _mime_type(path: Path) -> str:
+    """按文件名猜测 MIME 类型，猜不到时回退到 application/octet-stream。"""
     return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
 
 def _safe_name(value: str) -> str:
+    """把文件名清洗成只含字母数字与 -_. 的安全名称，并限制长度。"""
     cleaned = "".join(
         character if character.isalnum() or character in {"-", "_", "."} else "-"
         for character in Path(value.replace("\\", "/")).name
@@ -717,6 +757,7 @@ def _safe_name(value: str) -> str:
 
 
 def _artifact_base_url(task: A2ATaskRun, *, request: Request | None) -> str:
+    """推导产物下载地址前缀：优先用当前请求，其次用任务记录的端点。"""
     if request is not None:
         return str(request.base_url).rstrip("/")
     parsed = urlsplit(task.endpoint_url)
@@ -726,6 +767,7 @@ def _artifact_base_url(task: A2ATaskRun, *, request: Request | None) -> str:
 
 
 def _list_tasks(params: dict[str, Any], *, request: Request) -> dict[str, Any]:
+    """按可选 contextId 列出服务端任务，pageSize 限制在 1-100 之间。"""
     requested_context = str(params.get("contextId") or "").strip()
     limit = min(max(int(params.get("pageSize") or 50), 1), 100)
     with Session(engine) as db:
@@ -737,6 +779,7 @@ def _list_tasks(params: dict[str, Any], *, request: Request) -> dict[str, Any]:
 
 
 def _event_sequence(value: str | None) -> int:
+    """把 SSE 事件 id 解析为非负整数，非法或缺失时视为 0。"""
     try:
         return max(int(value or 0), 0)
     except ValueError:
@@ -744,14 +787,17 @@ def _event_sequence(value: str | None) -> int:
 
 
 def _envelope(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
+    """构造 JSON-RPC 成功响应信封。"""
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
 def _error_envelope(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    """构造 JSON-RPC 错误响应信封。"""
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
 def _enabled_settings():
+    """取配置并在适配器未启用时抛 404，供各端点前置校验。"""
     settings = get_settings()
     if not settings.codex_a2a_enabled:
         raise HTTPException(status_code=404, detail="Codex A2A adapter is disabled")
@@ -759,5 +805,6 @@ def _enabled_settings():
 
 
 def _authorize(expected: str, authorization: str | None) -> None:
+    """校验 Bearer 凭证；未配置 token 时放行，配置了则要求完全匹配。"""
     if expected and authorization != f"Bearer {expected}":
         raise HTTPException(status_code=401, detail="Invalid A2A adapter credential")

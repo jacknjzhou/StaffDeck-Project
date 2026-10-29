@@ -23,6 +23,8 @@ callback_router = APIRouter(
 
 
 class ExternalTaskCallback(BaseModel):
+    """外部业务系统回调的请求体：事件标识、状态、结果/错误与附加数据。"""
+
     event_id: str = Field(min_length=1, max_length=200)
     event_type: str = Field(default="status", max_length=100)
     status: Literal[
@@ -36,6 +38,7 @@ class ExternalTaskCallback(BaseModel):
 
 
 def task_read(task: ExternalBusinessTask, db: Session) -> dict[str, Any]:
+    """把任务实体及其事件流水组装成接口返回字典，时间字段统一转 ISO 字符串。"""
     events = db.exec(
         select(ExternalBusinessTaskEvent)
         .where(ExternalBusinessTaskEvent.task_id == task.id)
@@ -77,6 +80,10 @@ def get_external_business_task(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
+    """查询当前用户的外部业务任务详情。
+
+    可用内部 id 或 external_task_id 匹配；命中多条时须带 tool_id 消歧，否则返回 409。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     statement = select(ExternalBusinessTask).where(
         ExternalBusinessTask.tenant_id == tenant_id,
@@ -103,6 +110,10 @@ def external_business_task_callback(
     callback_token: str = Header(default="", alias="X-StaffDeck-Callback-Token"),
     db: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    """处理外部业务系统的回调投递。
+
+    先校验回调令牌；事件按 event_id 幂等写入，重复投递只返回 duplicate=true。
+    """
     task = db.get(ExternalBusinessTask, task_id)
     if task is None or not verify_callback_token(task, callback_token):
         raise HTTPException(status_code=401, detail="Invalid callback credential")

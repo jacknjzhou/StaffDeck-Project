@@ -19,6 +19,7 @@ export function computeBidHp(bids: TeamTaskBidRead[]): number {
   return Math.max(0, Math.min(BID_HP_MAX, hp));
 }
 
+/** 按剩余 HP 返回血条颜色：满血为绿，血量下降依次转橙、红，归零后转灰。 */
 function hpBarClass(hp: number): string {
   if (hp <= 0) return 'bg-[#c3c8d4]';
   if (hp < 30) return 'bg-[#f5483b]';
@@ -34,6 +35,7 @@ const BUBBLE_STYLES = [
   'bg-[#e6f6f7]',
 ];
 
+/** 把竞标类型映射为中文标签，未知类型原样返回。 */
 function bidKindLabel(kind: string): string {
   if (kind === 'rebuttal') return '反驳';
   if (kind === 'statement') return '陈述';
@@ -50,6 +52,12 @@ type BiddingArenaProps = {
   resolveName?: (agentId: string) => string;
 };
 
+/**
+ * 竞标竞技场：按候选人分栏展示每轮竞标发言、得分与剩余 HP。
+ *
+ * - 候选人顺序取其首次出现的先后顺序，每栏 HP 由 computeBidHp 汇总得分扣减得出。
+ * - winnerId 命中时展示「胜者为王」徽章；HP 归零的候选人置灰并标记「淘汰」。
+ */
 export default function BiddingArena({
   bids,
   winnerId = null,
@@ -70,6 +78,7 @@ export default function BiddingArena({
 
   const rounds = [...new Set(bids.map((bid) => bid.round))].sort((a, b) => a - b);
 
+  /** 解析候选人展示名，优先级为 bid.agent_name > resolveName 回调 > agent_id。 */
   function candidateName(bid: TeamTaskBidRead | undefined, agentId: string): string {
     return bid?.agent_name || resolveName?.(agentId) || agentId;
   }

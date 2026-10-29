@@ -2,16 +2,16 @@ import { cn } from '@/lib/utils';
 import logoMark from '../assets/LOGO.svg';
 
 export type BrandLogoProps = {
-  /** Hide the "OpenBMB / StaffDeck" wordmark and only render the logo mark. */
+  /** 仅渲染 Logo 图形，隐藏 OpenBMB / StaffDeck 文字标识。 */
   markOnly?: boolean;
-  /** Size of the square logo mark in pixels. */
+  /** Logo 图形的边长（像素）。 */
   markSize?: number;
   className?: string;
-  /** Extra classes applied to the wordmark wrapper (e.g. to hide it responsively). */
+  /** 文字标识容器上的额外类名（例如用于按断点隐藏文字）。 */
   wordmarkClassName?: string;
 };
 
-/** Brand logo lockup (logo mark + "OpenBMB" / "StaffDeck" wordmark). Figma node 504:7137. */
+/** 品牌 Logo 组合（图形标识 + OpenBMB / StaffDeck 文字标识）。Figma 节点 504:7137。 */
 export default function BrandLogo({
   markOnly = false,
   markSize = 28,

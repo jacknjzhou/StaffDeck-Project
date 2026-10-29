@@ -22,7 +22,8 @@ from app.tools.mcp_builtin import (
 
 
 class MCPClientError(RuntimeError):
-    pass
+    """MCP 连接、握手或调用失败时抛出的统一异常，调用方据此提示连接或协议问题。"""
+
 
 
 MCP_APPS_EXTENSION_ID = "io.modelcontextprotocol/ui"
@@ -84,10 +85,10 @@ def execute_mcp_tool_result(
     timeout_seconds: float = 10,
     tool_name: str | None = None,
 ) -> dict[str, Any]:
-    """Call an MCP tool while preserving Apps and structured-result metadata.
+    """调用 MCP 工具，并保留 Apps 与结构化结果相关的元数据。
 
-    ``execute_mcp_tool`` remains the compatibility entry point and still returns
-    only the previously extracted payload. Apps-aware callers use this envelope.
+    ``execute_mcp_tool`` 仍是兼容入口，只返回原先提取的 payload；
+    需要 Apps 信息的调用方改用本函数返回的信封。
     """
 
     normalized = dict(config or {})
@@ -133,7 +134,7 @@ def discover_mcp_server(
     config: dict[str, Any],
     timeout_seconds: float = 10,
 ) -> dict[str, Any]:
-    """Discover tools and retain the server initialize response capabilities."""
+    """发现工具列表，并保留 initialize 响应里的服务端 capabilities。"""
 
     normalized = dict(config or {})
     transport = normalize_transport(normalized)
@@ -176,6 +177,10 @@ def read_mcp_resource(
     uri: str,
     timeout_seconds: float = 10,
 ) -> dict[str, Any]:
+    """读取 MCP App 声明的资源内容（resources/read）。
+
+    内置演示 transport 不提供资源，调用即抛 MCPClientError。
+    """
     normalized = dict(config or {})
     transport = normalize_transport(normalized)
     if transport == "builtin":
@@ -192,6 +197,10 @@ def read_mcp_resource(
 
 
 def _resolve_tool_name(config: dict[str, Any], override: str | None) -> str:
+    """确定本次调用的工具名：显式 override 优先，其次取 config 里的 tool、tool_name 或 name。
+
+    都为空时抛 MCPClientError，避免向服务端发出无名调用。
+    """
     name = str(override or config.get("tool") or config.get("tool_name") or config.get("name") or "").strip()
     if not name:
         raise MCPClientError("MCP 调用缺少 tool 名称。")
@@ -199,6 +208,10 @@ def _resolve_tool_name(config: dict[str, Any], override: str | None) -> str:
 
 
 def _normalize_tool_definition(item: dict[str, Any]) -> dict[str, Any]:
+    """把原始 tools/list 条目归一化为内部统一的工具定义结构。
+
+    同时从 _meta.ui 提取 app 字段（resource_uri 与 visibility），缺失或类型不符时回退默认值。
+    """
     input_schema = item.get("inputSchema") or item.get("input_schema") or {}
     output_schema = item.get("outputSchema") or item.get("output_schema") or {}
     meta = item.get("_meta") if isinstance(item.get("_meta"), dict) else {}
@@ -241,14 +254,17 @@ class _MCPSession:
     """
 
     def __init__(self, config: dict[str, Any], timeout_seconds: float) -> None:
+        """保存连接配置与超时时间，initialize 结果留待握手时回填。"""
         self.config = config
         self.timeout_seconds = timeout_seconds
         self.initialize_result: dict[str, Any] = {}
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        """调用工具并只返回 data，兼容不关心 Apps 元数据的调用方。"""
         return self.call_tool_envelope(name, arguments)["data"]
 
     def call_tool_envelope(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """在会话生命周期内完成握手与 tools/call，返回带 Apps 元数据的结果信封。"""
         with self:
             self._initialize()
             result = self._request(
@@ -258,22 +274,22 @@ class _MCPSession:
             return _tool_result_envelope(result)
 
     def list_tools(self) -> list[dict[str, Any]]:
+        """发现工具列表，丢弃握手时拿到的服务端 capabilities。"""
         tools, _ = self.list_tools_with_capabilities()
         return tools
 
     def list_tools_with_capabilities(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """发现工具列表，并一并返回 initialize 得到的服务端 capabilities。"""
         with self:
             self._initialize()
             tools = self._list_all_pages("tools/list", "tools")
             return tools, dict(self.initialize_result)
 
     def _list_all_pages(self, method: str, result_key: str) -> list[dict[str, Any]]:
-        """Collect a cursor-paginated MCP list result.
+        """按 nextCursor 翻页收集 MCP 列表结果。
 
-        MCP servers may paginate ``tools/list`` even when the first version of a
-        server returned every tool in one response.  Discovery must therefore
-        follow ``nextCursor`` on every refresh; otherwise tools added later can
-        remain permanently invisible once they move beyond the first page.
+        服务端可能早期一次返回全部工具、之后才启用分页，所以每次发现都要跟随游标，
+        否则新增工具一旦落到第一页之外就永远不可见；游标重复时抛错，避免死循环。
         """
 
         items: list[dict[str, Any]] = []
@@ -303,6 +319,7 @@ class _MCPSession:
             cursor = next_cursor
 
     def read_resource(self, uri: str) -> dict[str, Any]:
+        """在会话内读取指定 uri 的资源，返回 resources/read 的原始结果。"""
         with self:
             self._initialize()
             result = self._request("resources/read", {"uri": uri})
@@ -311,21 +328,26 @@ class _MCPSession:
             return result
 
     def _initialize(self) -> None:
+        """完成 initialize 握手、记录服务端能力，并补发 initialized 通知。"""
         result = self._request("initialize", _initialize_params(self.config))
         self.initialize_result = dict(result) if isinstance(result, dict) else {}
         self._notify("notifications/initialized", {})
 
     # 子类实现 ---------------------------------------------------------------
     def __enter__(self) -> "_MCPSession":
+        """默认上下文入口，子类可在此建立连接。"""
         return self
 
     def __exit__(self, *exc: Any) -> None:  # pragma: no cover - default no-op
-        return None
+        """默认上下文出口，不做清理；需要释放资源的子类自行覆盖。"""
+        return
 
     def _request(self, method: str, params: dict[str, Any]) -> Any:
+        """子类必须实现的单次 JSON-RPC 请求/响应交互。"""
         raise NotImplementedError
 
     def _notify(self, method: str, params: dict[str, Any]) -> None:
+        """子类必须实现的 JSON-RPC 通知发送。"""
         raise NotImplementedError
 
 
@@ -334,9 +356,10 @@ class _MCPSession:
 # --------------------------------------------------------------------------- #
 
 class _PipeReader:
-    """Read a text pipe without relying on select(), which rejects pipes on Windows."""
+    """按行读取文本管道，不依赖 select()，因为 Windows 上的 select() 不接受管道。"""
 
     def __init__(self, stream: TextIO, max_line_size: int = 4 * 1024 * 1024) -> None:
+        """启动后台读线程，把 stdout 的 line/error/eof 事件投递到有界队列。"""
         self._stream = stream
         self._max_line_size = max_line_size
         self._events: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=128)
@@ -345,6 +368,7 @@ class _PipeReader:
         self._thread.start()
 
     def _run(self) -> None:
+        """读线程主体：逐行读取，超长行直接报错，退出时统一投递 eof 事件。"""
         try:
             while not self._stopped.is_set():
                 line = self._stream.readline(self._max_line_size + 1)
@@ -368,6 +392,7 @@ class _PipeReader:
             self._put(("eof", None))
 
     def _put(self, event: tuple[str, object]) -> None:
+        """向有界队列投递事件；队列满时轮询重试，读取器关闭后放弃。"""
         while not self._stopped.is_set():
             try:
                 self._events.put(event, timeout=0.1)
@@ -376,12 +401,14 @@ class _PipeReader:
                 continue
 
     def next_event(self, timeout: float) -> tuple[str, object]:
+        """取下一个读取事件；超时未取到抛 TimeoutError，由调用方转成业务错误。"""
         try:
             return self._events.get(timeout=max(timeout, 0))
         except queue.Empty as exc:
             raise TimeoutError from exc
 
     def close(self) -> None:
+        """停止读线程并关闭流，最多等待 0.2 秒，避免退出被阻塞。"""
         self._stopped.set()
         with suppress(OSError, ValueError):
             self._stream.close()
@@ -389,7 +416,10 @@ class _PipeReader:
 
 
 class _StderrCollector:
+    """后台收集子进程 stderr 的有限长度文本，在超时或异常时补充诊断信息。"""
+
     def __init__(self, stream: TextIO, limit: int = 1000) -> None:
+        """启动后台收集线程，最多保留 limit 个字符的 stderr。"""
         self._stream = stream
         self._limit = limit
         self._parts: list[str] = []
@@ -399,6 +429,7 @@ class _StderrCollector:
         self._thread.start()
 
     def _run(self) -> None:
+        """收集线程主体：逐行累积 stderr，达到上限后丢弃多余内容。"""
         try:
             while chunk := self._stream.readline(256):
                 with self._lock:
@@ -410,21 +441,27 @@ class _StderrCollector:
             return
 
     def text(self) -> str:
+        """返回已收集的 stderr 文本；为空返回空串，否则带上 stderr 前缀。"""
         with self._lock:
             value = "".join(self._parts).strip()
         return f" stderr: {value}" if value else ""
 
     def wait(self, timeout: float = 0.1) -> None:
+        """最多等待 timeout 秒，让进程退出前写入的 stderr 有机会被读完。"""
         self._thread.join(timeout)
 
     def close(self) -> None:
+        """关闭 stderr 流并回收收集线程。"""
         with suppress(OSError, ValueError):
             self._stream.close()
         self._thread.join(timeout=0.2)
 
 
 class _StdioSession(_MCPSession):
+    """stdio transport 会话：拉起子进程，用换行分隔的 JSON-RPC 消息通信。"""
+
     def __init__(self, config: dict[str, Any], timeout_seconds: float) -> None:
+        """初始化占位字段；子进程要等上下文进入时才真正启动。"""
         super().__init__(config, timeout_seconds)
         self._proc: subprocess.Popen[str] | None = None
         self._managed_process: ManagedProcess | None = None
@@ -433,6 +470,10 @@ class _StdioSession(_MCPSession):
         self._next_id = 0
 
     def __enter__(self) -> "_StdioSession":
+        """按配置拉起受控子进程，并挂上 stdout/stderr 读取器。
+
+        启动失败会区分工作目录不存在、命令缺失、权限不足等情况，统一抛 MCPClientError。
+        """
         command = _stdio_command(self.config)
         env = os.environ.copy()
         raw_env = self.config.get("env")
@@ -476,6 +517,7 @@ class _StdioSession(_MCPSession):
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """关闭受控子进程并回收读写线程，重复调用安全。"""
         if self._managed_process is not None:
             self._managed_process.close()
             self._managed_process = None
@@ -488,6 +530,7 @@ class _StdioSession(_MCPSession):
         self._stderr_collector = None
 
     def _request(self, method: str, params: dict[str, Any]) -> Any:
+        """发送一条 JSON-RPC 请求，等待同 id 的响应并返回其中的 result。"""
         proc = self._require_proc()
         self._next_id += 1
         request_id = self._next_id
@@ -509,6 +552,7 @@ class _StdioSession(_MCPSession):
         return response.get("result")
 
     def _notify(self, method: str, params: dict[str, Any]) -> None:
+        """发送不带 id 的 JSON-RPC 通知，不等待响应。"""
         proc = self._require_proc()
         _send_json(
             proc,
@@ -517,17 +561,23 @@ class _StdioSession(_MCPSession):
         )
 
     def _require_proc(self) -> subprocess.Popen[str]:
+        """返回已启动的子进程；会话未启动时抛 MCPClientError。"""
         if self._proc is None:
             raise MCPClientError("MCP stdio 会话未启动。")
         return self._proc
 
     def _require_stdout_reader(self) -> _PipeReader:
+        """返回 stdout 读取器；不可用时抛 MCPClientError。"""
         if self._stdout_reader is None:
             raise MCPClientError("MCP stdio stdout 不可用。")
         return self._stdout_reader
 
 
 def _stdio_command(config: dict[str, Any]) -> list[str]:
+    """从配置拼出 stdio 启动命令（command 加 args）。
+
+    command 支持字符串或数组；缺失 command 或 args 不是数组时抛 MCPClientError。
+    """
     command = config.get("command")
     args = config.get("args") or []
     if isinstance(command, list):
@@ -542,6 +592,10 @@ def _stdio_command(config: dict[str, Any]) -> list[str]:
 
 
 def _validate_stdio_launch(command: list[str], cwd: str | None) -> None:
+    """启动前校验工作目录与脚本入口，尽早给出可读错误。
+
+    仅当命令是 node/bun/deno 且首个非选项参数是脚本时，才检查该入口文件是否存在。
+    """
     workdir = Path(cwd).expanduser() if cwd else Path.cwd()
     if cwd and not workdir.is_dir():
         raise MCPClientError(f"MCP stdio 工作目录不存在：{workdir}")
@@ -565,29 +619,36 @@ def _validate_stdio_launch(command: list[str], cwd: str | None) -> None:
 # --------------------------------------------------------------------------- #
 
 class _HttpSession(_MCPSession):
+    """streamable HTTP transport 会话：每次请求独立 POST，并透传 Mcp-Session-Id。"""
+
     def __init__(self, config: dict[str, Any], timeout_seconds: float) -> None:
+        """初始化 HTTP 客户端、请求自增 id 与 Mcp-Session-Id 缓存。"""
         super().__init__(config, timeout_seconds)
         self._client: httpx.Client | None = None
         self._next_id = 0
         self._session_id: str | None = None
 
     def __enter__(self) -> "_HttpSession":
+        """创建带超时的 httpx 客户端。"""
         self._client = httpx.Client(timeout=self.timeout_seconds)
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """关闭 httpx 客户端，忽略关闭过程中的异常。"""
         if self._client is not None:
             with suppress(Exception):
                 self._client.close()
             self._client = None
 
     def _endpoint(self) -> str:
+        """返回配置里的 url 或 endpoint；缺失时抛 MCPClientError。"""
         url = str(self.config.get("url") or self.config.get("endpoint") or "").strip()
         if not url:
             raise MCPClientError("HTTP MCP 连接缺少 url/endpoint。")
         return url
 
     def _headers(self) -> dict[str, str]:
+        """构造请求头：默认 JSON 与 SSE 双 Accept，透传自定义头与会话 id。"""
         raw = self.config.get("headers") if isinstance(self.config.get("headers"), dict) else {}
         headers = {
             "Accept": "application/json, text/event-stream",
@@ -599,6 +660,7 @@ class _HttpSession(_MCPSession):
         return headers
 
     def _request(self, method: str, params: dict[str, Any]) -> Any:
+        """POST 一条 JSON-RPC 请求并解析响应，顺带缓存服务端下发的 session id。"""
         client = self._require_client()
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
@@ -619,12 +681,14 @@ class _HttpSession(_MCPSession):
         return body.get("result")
 
     def _notify(self, method: str, params: dict[str, Any]) -> None:
+        """尽力发送 JSON-RPC 通知，失败静默忽略，不影响主流程。"""
         client = self._require_client()
         payload = {"jsonrpc": "2.0", "method": method, "params": params}
         with suppress(Exception):
             client.post(self._endpoint(), headers=self._headers(), json=payload)
 
     def _require_client(self) -> httpx.Client:
+        """返回已创建的 httpx 客户端；会话未启动时抛 MCPClientError。"""
         if self._client is None:
             raise MCPClientError("HTTP MCP 会话未启动。")
         return self._client
@@ -657,6 +721,7 @@ class _SseSession(_MCPSession):
     """
 
     def __init__(self, config: dict[str, Any], timeout_seconds: float) -> None:
+        """初始化 SSE 流上下文、事件迭代器与消息端点。"""
         super().__init__(config, timeout_seconds)
         self._client: httpx.Client | None = None
         self._stream_ctx: Any = None
@@ -665,6 +730,7 @@ class _SseSession(_MCPSession):
         self._next_id = 0
 
     def __enter__(self) -> "_SseSession":
+        """建立 SSE 长连接，从 endpoint 事件拿到消息端点后返回。"""
         self._client = httpx.Client(timeout=httpx.Timeout(self.timeout_seconds, read=None))
         url = str(self.config.get("url") or self.config.get("endpoint") or "").strip()
         if not url:
@@ -679,6 +745,7 @@ class _SseSession(_MCPSession):
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """退出 SSE 流上下文并关闭客户端。"""
         if self._stream_ctx is not None:
             with suppress(Exception):
                 self._stream_ctx.__exit__(*exc)
@@ -689,6 +756,7 @@ class _SseSession(_MCPSession):
             self._client = None
 
     def _await_endpoint(self, base_url: str) -> str:
+        """等待 endpoint 事件并解析出消息端点；超时或流结束抛 MCPClientError。"""
         deadline = time.monotonic() + max(self.timeout_seconds, 0.1)
         for event, data in self._events:
             if event == "endpoint":
@@ -698,10 +766,12 @@ class _SseSession(_MCPSession):
         raise MCPClientError("SSE MCP 未返回 endpoint 事件。")
 
     def _post_headers(self) -> dict[str, str]:
+        """构造向消息端点 POST 的请求头（JSON 内容类型加自定义头）。"""
         raw = self.config.get("headers") if isinstance(self.config.get("headers"), dict) else {}
         return {"Content-Type": "application/json", **{str(k): str(v) for k, v in raw.items()}}
 
     def _request(self, method: str, params: dict[str, Any]) -> Any:
+        """把 JSON-RPC 请求 POST 到消息端点，再从 SSE 流里按 id 取回响应。"""
         client = self._require_client()
         self._next_id += 1
         request_id = self._next_id
@@ -718,12 +788,14 @@ class _SseSession(_MCPSession):
         return body.get("result")
 
     def _notify(self, method: str, params: dict[str, Any]) -> None:
+        """尽力发送 JSON-RPC 通知，失败静默忽略。"""
         client = self._require_client()
         payload = {"jsonrpc": "2.0", "method": method, "params": params}
         with suppress(Exception):
             client.post(str(self._message_url), headers=self._post_headers(), json=payload)
 
     def _await_response(self, expected_id: int) -> dict[str, Any]:
+        """在 SSE 流里等待指定 id 的响应报文，超时抛 MCPClientError。"""
         deadline = time.monotonic() + max(self.timeout_seconds, 0.1)
         for event, data in self._events:
             if event in {"message", ""}:
@@ -736,6 +808,7 @@ class _SseSession(_MCPSession):
         raise MCPClientError(f"SSE MCP 等待响应超时：id={expected_id}")
 
     def _require_client(self) -> httpx.Client:
+        """返回客户端与消息端点都已就绪的会话；否则抛 MCPClientError。"""
         if self._client is None or self._message_url is None:
             raise MCPClientError("SSE MCP 会话未启动。")
         return self._client
@@ -762,6 +835,7 @@ def _iter_sse_events(response: httpx.Response):
 
 
 def _resolve_endpoint(base_url: str, endpoint: str) -> str:
+    """把 endpoint 事件的值解析成绝对地址：已是绝对 URL 就原样返回，否则基于流地址拼接。"""
     if endpoint.startswith("http://") or endpoint.startswith("https://"):
         return endpoint
     from urllib.parse import urljoin
@@ -770,6 +844,7 @@ def _resolve_endpoint(base_url: str, endpoint: str) -> str:
 
 
 def _last_sse_json(text: str) -> Any:
+    """从 SSE 响应文本里倒序寻找最后一条可解析的 data: JSON，找不到返回 None。"""
     for line in reversed(text.splitlines()):
         line = line.strip()
         if line.startswith("data:"):
@@ -784,6 +859,7 @@ def _last_sse_json(text: str) -> Any:
 # --------------------------------------------------------------------------- #
 
 def _initialize_params(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """构造 initialize 请求参数；apps_mode 为 auto 时声明 MCP Apps 扩展能力。"""
     capabilities: dict[str, Any] = {}
     if str((config or {}).get("apps_mode") or "disabled") == "auto":
         capabilities["extensions"] = {MCP_APPS_EXTENSION_ID: {}}
@@ -799,11 +875,16 @@ def _send_json(
     payload: dict[str, Any],
     timeout_seconds: float | None = None,
 ) -> None:
+    """把一条 JSON-RPC 消息写入子进程 stdin，用写线程加超时避免调用方阻塞。
+
+    写入失败或超时抛 MCPClientError，并在消息里带上进程退出码。
+    """
     if proc.stdin is None:
         raise MCPClientError("MCP stdio stdin 不可用。")
     outcome: queue.Queue[BaseException | None] = queue.Queue(maxsize=1)
 
     def write() -> None:
+        """写线程主体：写入并 flush stdin，异常交给 outcome 队列统一上报。"""
         try:
             assert proc.stdin is not None
             proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -831,6 +912,10 @@ def _read_response(
     timeout_seconds: float,
     stderr: _StderrCollector | None = None,
 ) -> dict[str, Any]:
+    """在 stdout 读取器上等待指定 id 的 JSON-RPC 响应。
+
+    跳过非 JSON 或 id 不匹配的行；超时、读取失败、进程提前退出都转为 MCPClientError，并附 stderr 摘要。
+    """
     deadline = time.monotonic() + max(timeout_seconds, 0)
     while True:
         remaining = deadline - time.monotonic()
@@ -862,6 +947,7 @@ def _read_response(
 
 
 def _raise_json_rpc_error(payload: dict[str, Any]) -> None:
+    """响应带 error 字段时抛 MCPClientError，优先使用服务端给出的 message。"""
     if "error" not in payload:
         return
     error = payload.get("error") or {}
@@ -873,10 +959,16 @@ def _raise_json_rpc_error(payload: dict[str, Any]) -> None:
 
 
 def _extract_tool_result(result: Any) -> Any:
+    """兼容入口：只返回 tools/call 结果信封里的 data 部分。"""
     return _tool_result_envelope(result)["data"]
 
 
 def _tool_result_envelope(result: Any) -> dict[str, Any]:
+    """把 tools/call 的原始结果包装成统一信封。
+
+    isError 为真时直接抛错；content 中的 text 片段会尝试按 JSON 解析，
+    有 structuredContent 时优先作为 data，多个片段则以列表返回。
+    """
     if not isinstance(result, dict):
         return {
             "data": result,
@@ -925,6 +1017,7 @@ def _tool_result_envelope(result: Any) -> dict[str, Any]:
 
 
 def _parse_text_content(text: str) -> Any:
+    """尝试把 text 内容解析为 JSON；空串返回空字符串，解析失败则原样返回文本。"""
     stripped = text.strip()
     if not stripped:
         return ""
@@ -934,6 +1027,7 @@ def _parse_text_content(text: str) -> Any:
 
 
 def _content_text(content: Any) -> str:
+    """拼接 content 数组中所有 text 片段的文本，非 text 项忽略。"""
     if not isinstance(content, list):
         return ""
     parts: list[str] = []
@@ -944,4 +1038,5 @@ def _content_text(content: Any) -> str:
 
 
 def _stderr_text(collector: _StderrCollector | None) -> str:
+    """返回可拼进错误信息的 stderr 摘要；没有收集器时返回空串。"""
     return collector.text() if collector is not None else ""

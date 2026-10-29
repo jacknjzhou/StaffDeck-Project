@@ -740,6 +740,7 @@ MOCK_MCP_STDIO_SERVER = paths.resource_dir() / "mock_servers" / "mcp_stdio_serve
 
 
 def _stdio_mcp_python() -> str:
+    """选出运行 stdio MCP mock server 的解释器:打包态优先用随包附带的 Python,否则用当前解释器。"""
     # 打包态 sys.executable 指向 ultrarag 引导器，需用附带 Python
     if paths.is_frozen():
         from app.general_skills.runtime_env import _bundled_python
@@ -914,6 +915,11 @@ def _seed_mcp_servers(session: Session) -> None:
 
 
 def seed_demo_data(session: Session) -> None:
+    """幂等写入 demo 租户的种子数据:租户、人设、演示/管理员账号、示例技能与工具、默认模型。
+
+    每条记录按业务主键查重,存在则就地更新而不是重建,便于重复启动时追平配置差异;
+    本地 MCP 与通用技能由子流程补种,函数末尾统一 commit。
+    """
     settings = get_settings()
     if not session.get(Tenant, "tenant_demo"):
         session.add(Tenant(id="tenant_demo", name="Demo Enterprise"))
@@ -1058,6 +1064,11 @@ def seed_demo_data(session: Session) -> None:
 
 
 def _publish_seeded_system_resources(session: Session) -> None:
+    """把种子技能、工具与天气通用技能挂到开放画廊,统一归属 admin。
+
+    绑定状态跟随资源自身状态(published/启用为 active,否则 inactive);整体智能体与天气技能
+    顺带回填系统种子的归属元数据。调用方负责提交事务。
+    """
     tenant_id = "tenant_demo"
     creator_metadata = _system_seed_metadata()
 
@@ -1122,6 +1133,7 @@ def _publish_seeded_system_resources(session: Session) -> None:
 
 
 def _ensure_seed_agents(session: Session) -> None:
+    """确保 demo 租户存在整体智能体 agent_<tenant>_overall,已存在则原样保留不覆盖。"""
     tenant_id = "tenant_demo"
     for agent_id, name, description, is_overall in (
         (f"agent_{tenant_id}_overall", "整体智能体", "全局资源池", True),
@@ -1142,6 +1154,11 @@ def _ensure_seed_agents(session: Session) -> None:
 
 
 def _archive_seed_default_agent(session: Session, tenant_id: str) -> None:
+    """归档遗留的默认员工智能体 agent_<tenant>_default,避免它在员工列表中重复出现。
+
+    仅当 metadata 为空或记录归属 admin/系统种子时才收编,其他归属的默认智能体原样保留;
+    归档时补齐 is_default_employee、hidden_from_staffdeck 标记并把状态改为 archived。
+    """
     default_agent = session.get(AgentProfile, f"agent_{tenant_id}_default")
     if not default_agent:
         return
@@ -1166,6 +1183,7 @@ def _archive_seed_default_agent(session: Session, tenant_id: str) -> None:
 
 
 def _system_seed_metadata(extra: dict[str, object] | None = None) -> dict[str, object]:
+    """在 extra 之上叠加系统种子的归属字段(owner/created_by 一律为 admin),返回新的字典。"""
     metadata = dict(extra or {})
     metadata.update(
         {
@@ -1183,12 +1201,14 @@ def _system_seed_metadata(extra: dict[str, object] | None = None) -> dict[str, o
 
 
 def _tool_config_with_base_url(tool_config: dict, base_url: str) -> dict:
+    """复制工具配置并为其 url 拼上 base_url,避免改动共享的模块级常量。"""
     config = dict(tool_config)
     config["url"] = _tool_url_with_base(config["url"], base_url)
     return config
 
 
 def _tool_url_with_base(url: str, base_url: str) -> str:
+    """把以 / 开头的相对工具地址补全成绝对地址;已是绝对地址或空串时只做去空白。"""
     stripped = url.strip()
     if stripped.startswith("/"):
         return f"{base_url}{stripped}"
@@ -1196,6 +1216,11 @@ def _tool_url_with_base(url: str, base_url: str) -> str:
 
 
 def _seed_weather_general_skill(session: Session) -> None:
+    """导入 weather-zh 通用技能,已存在时按需追平 markdown、文件包与发布态。
+
+    本地源目录或 SKILL.md 缺失、不可读或内容为空时静默跳过;已存在记录只在内容或状态不一致
+    时才写回,并补齐默认主页、网络/python 权限与 bash 运行时配置。
+    """
     folder_source = Path("/Users/hm/Downloads/maomao-weather-1.0.2")
     file_source = Path("/Users/hm/Downloads/SKILL.md")
     package_files = _collect_general_skill_folder(folder_source) if folder_source.exists() else []
@@ -1263,6 +1288,10 @@ def _seed_weather_general_skill(session: Session) -> None:
 
 
 def _collect_general_skill_folder(folder: Path) -> list[dict[str, object]]:
+    """把技能目录打包成 skill_files_json:逐文件记录相对路径、文本内容、字节数与 MIME 类型。
+
+    目录下没有 SKILL.md 时返回空列表;跳过隐藏文件以及无法按 UTF-8 解码或读取失败的文件。
+    """
     skill_file = folder / "SKILL.md"
     if not skill_file.exists():
         return []
@@ -1289,6 +1318,11 @@ def _collect_general_skill_folder(folder: Path) -> list[dict[str, object]]:
 
 
 def _sync_demo_skill_if_stale(existing: Skill, desired: dict) -> None:
+    """用期望内容就地刷新已存在的 demo 技能,只补差量、保留用户改动。
+
+    节点按 node_id 合并:缺失节点整条补入,空白 instruction 才回填,其余字段以期望值覆盖;
+    期望未引用的旧节点追加在末尾。仅当内容确有变化时才写回 content_json 与 updated_at。
+    """
     content = _skill_content_graph(dict(existing.content_json or {}))
     desired = _skill_content_graph(desired)
     changed = False
@@ -1375,6 +1409,10 @@ def _sync_demo_skill_if_stale(existing: Skill, desired: dict) -> None:
 
 
 def _skill_content_graph(content: dict) -> dict:
+    """补全技能内容的图结构字段,返回浅拷贝后的新字典,已有字段一律不覆盖。
+
+    nodes 为空时给出空图;否则按节点顺序推导 start_node_id、terminal_node_ids 与串行 edges。
+    """
     next_content = dict(content or {})
     nodes = next_content.get("nodes") if isinstance(next_content.get("nodes"), list) else []
     node_ids = [str(node.get("node_id") or "") for node in nodes if isinstance(node, dict)]
@@ -1404,6 +1442,10 @@ def _skill_content_graph(content: dict) -> dict:
 
 
 def _merge_slot_filling_policy(current: object, desired: dict) -> dict:
+    """合并槽位填充策略:desired 覆盖同名字段,target_info 取并集并排序。
+
+    current 不是字典时按空策略处理,因此对历史脏数据也能安全调用。
+    """
     current_policy = dict(current) if isinstance(current, dict) else {}
     merged = {**current_policy, **desired}
     target_info = {str(item) for item in current_policy.get("target_info", []) if str(item).strip()}
@@ -1413,6 +1455,7 @@ def _merge_slot_filling_policy(current: object, desired: dict) -> dict:
 
 
 def _append_missing_rules(current: object, desired: list[str]) -> list[str]:
+    """把 desired 中尚未出现的回复规则按序追加到现有列表末尾,保留既有顺序与去重结果。"""
     rules = [str(item) for item in current] if isinstance(current, list) else []
     for rule in desired:
         if rule not in rules:

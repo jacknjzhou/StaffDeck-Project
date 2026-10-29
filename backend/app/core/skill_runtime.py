@@ -22,7 +22,16 @@ TASK_IDENTITY_FIELDS = {
 
 
 class SkillRuntime:
+    """把路由决策落到会话状态：维护活跃技能、待办任务帧与槽位，供 Harness v2 读取。
+
+    任务帧统一存在 pending_tasks_json；awaiting_input 里的 task_id 标记当前活跃任务。
+    """
+
     def apply_decision(self, session: ChatSession, decision: RouterDecision) -> ChatSession:
+        """应用一次路由决策并返回更新后的会话（调用方负责提交）。
+
+        先清洗槽位与任务帧，再按 decision 类型激活/移除任务；不做数据库读写。
+        """
         _sanitize_decision_slots(decision)
         session.slots_json = strip_router_generated_message_slots(session.slots_json)
         session.pending_tasks_json = _sanitize_task_frames(session.pending_tasks_json)
@@ -62,6 +71,7 @@ class SkillRuntime:
         return session
 
     def complete_current_skill(self, session: ChatSession) -> ChatSession:
+        """结束当前技能：移除其任务帧与等价帧，并清空技能栈、槽位和待输入状态。"""
         active_task_id = _active_task_id(session)
         completed_frame = _current_frame(session, status="completed")
         if active_task_id:
@@ -84,6 +94,10 @@ class SkillRuntime:
     def suspend_current_skill(
         self, session: ChatSession, *, enqueue: bool = False
     ) -> dict[str, Any] | None:
+        """把当前技能挂起成待恢复的任务帧，返回该帧；无活跃技能时返回 None。
+
+        enqueue 为真时同时压入待办队列；挂起会清空活跃技能、步骤、槽位与提问缓存。
+        """
         frame = _current_frame(session, status="pending", resume_policy="resume_after_turn_tasks")
         if not frame:
             return None
@@ -101,6 +115,7 @@ class SkillRuntime:
         return frame
 
     def restore_task_frame(self, session: ChatSession, frame: dict[str, Any]) -> ChatSession:
+        """把已保存的任务帧重新激活为会话当前状态，并恢复其中的待输入上下文。"""
         _activate_frame(session, frame)
         awaiting_input = frame.get("awaiting_input")
         if isinstance(awaiting_input, dict):
@@ -109,6 +124,7 @@ class SkillRuntime:
         return session
 
     def enqueue_task_frame(self, session: ChatSession, frame: dict[str, Any]) -> None:
+        """把任务帧标记为 pending 后追加到待办队列；同 task_id 已存在时忽略，避免重复。"""
         next_frame = dict(frame)
         next_frame["status"] = "pending"
         frames = list(session.pending_tasks_json or [])
@@ -122,6 +138,7 @@ class SkillRuntime:
         session.pending_tasks_json = frames
 
     def enqueue_pending_task(self, session: ChatSession, task: PendingTask) -> None:
+        """把路由器给出的 PendingTask 转成任务帧并入队，重复帧按等价规则合并。"""
         self._append_pending_tasks(session, [task])
 
     def _activate_decision_target(
@@ -130,6 +147,10 @@ class SkillRuntime:
         decision: RouterDecision,
         selected_frame: dict[str, Any] | None,
     ) -> None:
+        """按决策类型切换会话的活跃技能与步骤；优先复用已取出的任务帧。
+
+        continue_active 命中同一技能时保留当前步骤，避免路由把用户拉回旧步骤。
+        """
         if selected_frame:
             _activate_frame(session, selected_frame)
             return
@@ -160,6 +181,7 @@ class SkillRuntime:
             session.active_step_id = decision.target_step_id
 
     def _append_pending_tasks(self, session: ChatSession, tasks: list[PendingTask]) -> None:
+        """批量并入待办任务：同 task_id 去重，等价帧合并字段而不是新增一条。"""
         if not tasks:
             return
         frames = list(session.pending_tasks_json or [])
@@ -182,6 +204,7 @@ class SkillRuntime:
         session.pending_tasks_json = frames
 
     def _apply_task_updates(self, session: ChatSession, updates: list[TaskUpdate]) -> None:
+        """按 task_id 更新待办任务帧；标记移除或已完成的状态会直接丢弃该帧。"""
         if not updates:
             return
         pending = list(session.pending_tasks_json or [])
@@ -214,6 +237,7 @@ class SkillRuntime:
         session.pending_tasks_json = pending
 
     def _take_task_frame(self, session: ChatSession, task_id: str | None) -> dict[str, Any] | None:
+        """从待办队列取出并移除指定任务帧；task_id 为空或未命中时返回 None。"""
         if not task_id:
             return None
         frame, pending = _pop_task_frame(session.pending_tasks_json, task_id)
@@ -223,12 +247,14 @@ class SkillRuntime:
         return None
 
     def _remove_task_frame(self, session: ChatSession, task_id: str | None) -> None:
+        """从待办队列剔除指定任务帧；task_id 为空时不做任何事。"""
         if not task_id:
             return
         session.pending_tasks_json = _without_task_or_skill(session.pending_tasks_json, task_id=task_id)
 
 
 def _sanitize_decision_slots(decision: RouterDecision) -> None:
+    """就地清掉决策里所有槽位中的路由生成话术字段，避免污染业务槽位。"""
     decision.slot_hints = strip_router_generated_message_slots(decision.slot_hints)
     for task in [*decision.task_frames, *decision.pending_tasks, *decision.created_tasks]:
         task.slot_hints = strip_router_generated_message_slots(task.slot_hints)
@@ -237,6 +263,7 @@ def _sanitize_decision_slots(decision: RouterDecision) -> None:
 
 
 def _sanitize_task_frames(frames_json: list[dict] | None) -> list[dict]:
+    """清洗已有任务帧的槽位：非字典帧丢弃，无有效槽位时移除 slots/slot_hints。"""
     frames: list[dict] = []
     for frame in list(frames_json or []):
         if not isinstance(frame, dict):
@@ -256,6 +283,10 @@ def _sanitize_task_frames(frames_json: list[dict] | None) -> list[dict]:
 
 
 def _task_frame_from_pending(task: PendingTask) -> dict[str, Any]:
+    """把 PendingTask 转成标准任务帧字典；缺 task_id 时自动生成一个。
+
+    skill_id/step_id 同时写平铺字段与 target_* 别名，兼容新旧读取方。
+    """
     now = utc_now().isoformat()
     task_id = task.task_id or new_id("task")
     skill_id = task.target_skill_id
@@ -288,6 +319,7 @@ def _current_frame(
     status: str,
     resume_policy: str | None = None,
 ) -> dict[str, Any] | None:
+    """按会话当前技能快照出一个任务帧；无活跃技能时返回 None。"""
     if not session.active_skill_id:
         return None
     now = utc_now().isoformat()
@@ -314,12 +346,14 @@ def _current_frame(
 
 
 def _active_task_id(session: ChatSession) -> str | None:
+    """从 awaiting_input 元数据里读当前活跃任务 id；没有则返回 None。"""
     metadata = session.awaiting_input_json if isinstance(session.awaiting_input_json, dict) else {}
     task_id = metadata.get("task_id") if isinstance(metadata, dict) else None
     return str(task_id) if task_id else None
 
 
 def _set_active_task_id(session: ChatSession, task_id: str | None) -> None:
+    """写入或清除 awaiting_input 里的活跃 task_id；清空后无其他字段则置 None。"""
     if not task_id:
         if isinstance(session.awaiting_input_json, dict) and "task_id" in session.awaiting_input_json:
             data = dict(session.awaiting_input_json)
@@ -332,6 +366,7 @@ def _set_active_task_id(session: ChatSession, task_id: str | None) -> None:
 
 
 def _activate_frame(session: ChatSession, frame: dict[str, Any]) -> None:
+    """把任务帧的内容写回会话：技能、步骤、槽位、摘要、待输入与活跃任务 id。"""
     session.active_skill_id = frame.get("skill_id") or frame.get("target_skill_id")
     session.active_step_id = frame.get("step_id") or frame.get("target_step_id")
     slots = frame.get("slots") if isinstance(frame.get("slots"), dict) else frame.get("slot_hints")
@@ -347,6 +382,7 @@ def _pop_last_skill_frame(
     stack_json: list[dict] | None,
     skill_id: str | None,
 ) -> tuple[dict | None, list[dict]]:
+    """从技能栈自顶向下找该技能的帧并弹出，返回 (命中的帧, 剩余栈)；无 skill_id 时原样返回。"""
     stack = list(stack_json or [])
     if not skill_id:
         return None, stack
@@ -358,6 +394,7 @@ def _pop_last_skill_frame(
 
 
 def _pop_task_frame(frames_json: list[dict] | None, task_id: str) -> tuple[dict | None, list[dict]]:
+    """按 task_id 取出任务帧并返回剩余列表；未命中时返回 (None, 原列表副本)。"""
     frames = list(frames_json or [])
     for index, frame in enumerate(frames):
         if isinstance(frame, dict) and str(frame.get("task_id") or "") == task_id:
@@ -370,6 +407,7 @@ def _without_task_or_skill(
     task_id: str | None = None,
     skill_id: str | None = None,
 ) -> list[dict]:
+    """过滤掉匹配 task_id 或 skill_id 的任务帧，返回新列表；两个条件可单独或同时生效。"""
     frames = []
     for frame in list(frames_json or []):
         if task_id and str(frame.get("task_id") or "") == task_id:
@@ -381,6 +419,7 @@ def _without_task_or_skill(
 
 
 def _find_equivalent_task_frame_index(frames: list[dict], target: dict[str, Any]) -> int | None:
+    """在任务帧列表里找与 target 等价的第一帧下标，找不到返回 None。"""
     for index, frame in enumerate(frames):
         if isinstance(frame, dict) and _task_frames_equivalent(frame, target):
             return index
@@ -392,6 +431,7 @@ def _without_equivalent_task_frames(
     completed_frame: dict[str, Any],
     exclude_task_id: str | None = None,
 ) -> list[dict]:
+    """移除与已完成帧等价的任务帧（可额外排除指定 task_id），避免重复冒出同一任务。"""
     frames: list[dict] = []
     for frame in list(frames_json or []):
         if not isinstance(frame, dict):
@@ -405,6 +445,10 @@ def _without_equivalent_task_frames(
 
 
 def _task_frames_equivalent(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """判断两帧是否同一任务：技能相同且身份类槽位重叠部分取值一致。
+
+    任一帧没有身份槽位、或身份键完全不重叠时视为不同任务，避免误合并。
+    """
     if _frame_skill_id(left) != _frame_skill_id(right):
         return False
     left_identity = _task_identity_slots(left)
@@ -418,6 +462,7 @@ def _task_frames_equivalent(left: dict[str, Any], right: dict[str, Any]) -> bool
 
 
 def _merge_task_frames(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """把等价的新帧合并进已有帧：槽位取并集，非空字段覆盖，保留原 task_id 与创建时间。"""
     merged = dict(existing)
     existing_slots = strip_router_generated_message_slots(
         existing.get("slots") if isinstance(existing.get("slots"), dict) else {}
@@ -446,11 +491,13 @@ def _merge_task_frames(existing: dict[str, Any], incoming: dict[str, Any]) -> di
 
 
 def _frame_skill_id(frame: dict[str, Any]) -> str | None:
+    """读取任务帧的技能 id，兼容 skill_id 与 target_skill_id 两种写法。"""
     value = frame.get("skill_id") or frame.get("target_skill_id")
     return str(value) if value else None
 
 
 def _task_identity_slots(frame: dict[str, Any]) -> dict[str, str]:
+    """抽取用于判定任务同一性的槽位：只取 TASK_IDENTITY_FIELDS，值统一转小写去空白。"""
     slots = frame.get("slots") if isinstance(frame.get("slots"), dict) else frame.get("slot_hints")
     if not isinstance(slots, dict):
         return {}
@@ -465,6 +512,7 @@ def _task_identity_slots(frame: dict[str, Any]) -> dict[str, str]:
 
 
 def _patch_task_frame(frames_json: list[dict] | None, task_id: str, patch: dict[str, Any]) -> list[dict]:
+    """对匹配 task_id 的帧浅合并 patch，其余帧原样保留；未命中时列表不变。"""
     frames = []
     for frame in list(frames_json or []):
         if isinstance(frame, dict) and str(frame.get("task_id") or "") == task_id:
@@ -475,6 +523,7 @@ def _patch_task_frame(frames_json: list[dict] | None, task_id: str, patch: dict[
 
 
 def _upsert_frame(frames_json: list[dict] | None, frame: dict[str, Any]) -> list[dict]:
+    """同 task_id 的帧原地替换，否则追加到末尾，返回新列表。"""
     task_id = str(frame.get("task_id") or "")
     frames = []
     replaced = False
@@ -491,6 +540,7 @@ def _upsert_frame(frames_json: list[dict] | None, frame: dict[str, Any]) -> list
 
 
 def _frame_with_slot_hints(frame: dict[str, Any] | None, slot_hints: dict | None) -> dict[str, Any] | None:
+    """把决策的槽位提示并入任务帧槽位并刷新 updated_at；帧或提示为空时原样返回。"""
     if not frame or not slot_hints:
         return frame
     next_frame = dict(frame)

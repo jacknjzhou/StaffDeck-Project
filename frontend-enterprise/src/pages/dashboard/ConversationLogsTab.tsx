@@ -86,6 +86,12 @@ const FILTER_TABS: UnderlineTabItem<ConversationLogFilter>[] = [
 const MOBILE_CARD_CLASS =
   'min-w-0 rounded-[8px] border border-[#eceef1] bg-white p-[14px]';
 
+/**
+ * 数字员工对话日志 Tab：按员工、反馈标签与对话用户筛选并展示会话记录。
+ *
+ * - 会话、好评/差评反馈、反馈汇总与员工列表并行加载，单个接口失败不会清空整页。
+ * - 支持单条/批量导出 JSON、查看对话详情，以及为失败的分析重新发起分析。
+ */
 export default function ConversationLogsTab() {
   const [searchParams] = useSearchParams();
   const [scopedAgentId, setScopedAgentId] = useState(readEmployeeScope);
@@ -113,6 +119,7 @@ export default function ConversationLogsTab() {
     return () => window.removeEventListener('ultrarag-enterprise-agent-scope-change', onScopeChange);
   }, []);
 
+  /** 并行拉取会话、好评/差评反馈、反馈汇总与员工列表，并提示失败信息。 */
   const load = async () => {
     setLoading(true);
     const agentQuery = agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
@@ -162,12 +169,14 @@ export default function ConversationLogsTab() {
 
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
 
+  /** 按员工 ID 解析数字员工展示名，找不到时回退为原始 ID。 */
   const agentLabelFromId = (rowAgentId?: string | null): string => {
     if (!rowAgentId) return '-';
     const agent = agentsById.get(rowAgentId);
     return agent ? employeeDisplayNameWithCreator(agent) : rowAgentId;
   };
 
+  /** 读取会话行所属数字员工的展示名。 */
   const agentLabel = (row: ConversationLogRow): string => agentLabelFromId(row.agent_id);
 
   const logFilterRows = useMemo(
@@ -219,6 +228,7 @@ export default function ConversationLogsTab() {
     ? filteredRows.filter((row) => selectedSessionIds.has(row.id))
     : filteredRows;
 
+  /** 勾选或取消单个会话，更新导出用的选中集合。 */
   const toggleSessionSelection = (sessionId: string, selected: boolean) => {
     setSelectedSessionIds((current) => {
       const next = new Set(current);
@@ -228,6 +238,7 @@ export default function ConversationLogsTab() {
     });
   };
 
+  /** 全选或取消当前页的会话。 */
   const togglePageSelection = (selected: boolean) => {
     setSelectedSessionIds((current) => {
       const next = new Set(current);
@@ -239,6 +250,7 @@ export default function ConversationLogsTab() {
     });
   };
 
+  /** 导出单条会话的 JSON 文件，导出期间按钮显示加载状态。 */
   const exportSingleSession = async (row: ConversationLogRow) => {
     setExportingKey(row.id);
     try {
@@ -254,6 +266,11 @@ export default function ConversationLogsTab() {
     }
   };
 
+  /**
+   * 批量导出当前筛选结果：已勾选时只导出勾选行，否则导出全部筛选行。
+   *
+   * - 单次最多 500 条，超出时提示缩小筛选范围并直接返回。
+   */
   const exportBatch = async () => {
     const sessionIds = batchRows.map((row) => row.id);
     if (sessionIds.length === 0) return;
@@ -276,6 +293,7 @@ export default function ConversationLogsTab() {
     }
   };
 
+  /** 拉取并打开指定会话的详情，包含消息、反馈、事件、Trace 与工具调用。 */
   const openDetail = async (row: ConversationLogRow) => {
     setDetailLoading(true);
     try {
@@ -297,6 +315,7 @@ export default function ConversationLogsTab() {
     }
   };
 
+  /** 重新拉取当前详情弹窗对应的会话；没有可用会话 ID 时不做任何事。 */
   const reloadCurrentDetail = async () => {
     const sessionId = String(detail?.session?.id || detail?.session?.session_id || '');
     if (!sessionId) return;
@@ -304,6 +323,7 @@ export default function ConversationLogsTab() {
     if (row) await openDetail(row);
   };
 
+  /** 提交单条反馈的重新分析，成功后刷新详情与列表。 */
   const reanalyzeFeedback = async (feedbackId: string) => {
     setReanalyzingId(feedbackId);
     try {
@@ -444,6 +464,7 @@ export default function ConversationLogsTab() {
     },
   ];
 
+  /** 移动端卡片渲染：展示会话摘要、状态、来源与操作入口。 */
   const renderMobileCard = (row: ConversationLogRow) => (
     <article className={MOBILE_CARD_CLASS} key={row.id}>
       <div className="flex min-w-0 items-start justify-between gap-[10px]">
@@ -637,6 +658,12 @@ export default function ConversationLogsTab() {
   );
 }
 
+/**
+ * 对话日志详情弹窗：展示会话基础信息、消息流、模型调用日志与原始 JSON。
+ *
+ * - detail 为 null 时弹窗关闭，关闭动作交给 onClose 处理。
+ * - 没有消息但存在 Trace 时，改为按 Trace 逐条渲染执行记录。
+ */
 function FeedbackDetailDialog({
   detail,
   agentLabelFromId,
@@ -775,6 +802,7 @@ type ModelCallLog = {
   terminal?: SessionEvent;
 };
 
+/** 模型调用审计区：按 span 列出每次模型调用的完整输入与原始输出。 */
 function ModelCallLogSection({ events }: { events: SessionEvent[] }) {
   const calls = modelCallLogs(events);
   if (calls.length === 0) return null;
@@ -863,6 +891,7 @@ function ModelCallLogSection({ events }: { events: SessionEvent[] }) {
   );
 }
 
+/** 以 JSON 代码块展示一段模型输入或输出。 */
 function ModelExchangePayload({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="min-w-0">
@@ -874,6 +903,12 @@ function ModelExchangePayload({ title, value }: { title: string; value: unknown 
   );
 }
 
+/**
+ * 从事件流中归并模型调用记录。
+ *
+ * - 按 span_id（缺失时用事件 id）聚合同一次调用的 started/terminal 事件。
+ * - 结果按开始时间升序返回，便于顺序展示。
+ */
 function modelCallLogs(events: SessionEvent[]): ModelCallLog[] {
   const calls = new Map<string, ModelCallLog>();
   events.forEach((event) => {
@@ -893,6 +928,7 @@ function modelCallLogs(events: SessionEvent[]): ModelCallLog[] {
   });
 }
 
+/** 单条消息气泡：展示角色、时间、反馈标签、执行记录与失败重分析入口。 */
 function FeedbackMessage({
   item,
   trace,
@@ -970,6 +1006,12 @@ function FeedbackMessage({
   );
 }
 
+/**
+ * 将消息与 Trace 配对后按原顺序返回。
+ *
+ * - 以最近一条 user 消息为锚点，为随后的 assistant 消息挂上对应 Trace。
+ * - 优先按 user_message_id 匹配，匹配不到时回退到 turn_id。
+ */
 function conversationItems(
   detail: ConversationDetail,
 ): Array<{ message: FeedbackMessageRead; trace?: TurnTraceRead }> {
@@ -994,6 +1036,7 @@ function conversationItems(
   });
 }
 
+/** 执行记录块：展示单轮 Trace 的耗时、模型信息和逐行执行明细。 */
 function FeedbackTraceBlock({ trace }: { trace: TurnTraceRead }) {
   const lines = traceDetails(trace.lines);
   if (lines.length === 0) return null;
@@ -1056,6 +1099,12 @@ function FeedbackTraceBlock({ trace }: { trace: TurnTraceRead }) {
   );
 }
 
+/**
+ * 过滤 Trace 明细中无信息量的行。
+ *
+ * - 非失败状态的「思考」行不展示。
+ * - 仅有占位文案、且没有详情/代码/输出的行不展示。
+ */
 function traceDetails(lines: TraceLineRead[]): TraceLineRead[] {
   const hiddenPlaceholders = new Set(['正在思考', '已完成思考', '正在执行', '执行记录']);
   return lines.filter((line) => {
@@ -1065,6 +1114,7 @@ function traceDetails(lines: TraceLineRead[]): TraceLineRead[] {
   });
 }
 
+/** 按 Trace 行类型返回对应图标（技能/工具/知识/默认流程）。 */
 function traceLineIcon(kind: TraceLineRead['kind']) {
   if (kind === 'skill') return <GitBranch className="size-[13px]" />;
   if (kind === 'tool') return <Wrench className="size-[13px]" />;
@@ -1072,6 +1122,7 @@ function traceLineIcon(kind: TraceLineRead['kind']) {
   return <Workflow className="size-[13px]" />;
 }
 
+/** 读取会话中的用户展示名，缺失时返回「未知用户」。 */
 function displayUser(session: Record<string, unknown>): string {
   return String(
     session.session_display_name ||
@@ -1082,6 +1133,16 @@ function displayUser(session: Record<string, unknown>): string {
   );
 }
 
+/**
+ * 拼接「总耗时 · 模型 · 模型耗时 · 调用次数」的展示文案。
+ *
+ * @param durationMs 总耗时（毫秒），非数字时省略
+ * @param modelDurationMs 模型耗时（毫秒），非数字时省略
+ * @param modelCallCount 模型调用次数，大于 0 时才展示
+ * @param modelNames 涉及的模型名称，超过两个时折叠为「等 N 个模型」
+ * @param showMissingModel 为 true 且缺少模型数据时补充「模型调用未记录」
+ * @returns 以「 · 」连接的各段文案，无内容时返回空串
+ */
 function timingText(
   durationMs?: number | null,
   modelDurationMs?: number | null,
@@ -1104,6 +1165,7 @@ function timingText(
   return parts.join(' · ');
 }
 
+/** 将毫秒数格式化为 ms / s 的可读文本，小于 1ms 时返回「<1ms」。 */
 function formatDuration(durationMs: number): string {
   if (durationMs < 1) return '<1ms';
   if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
@@ -1111,12 +1173,14 @@ function formatDuration(durationMs: number): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+/** 渠道徽标：微信显示绿色，其它渠道显示蓝色，缺失时按网页处理。 */
 function ChannelBadge({ channel }: { channel?: string | null }) {
   if (channel === 'wechat') return <StatusBadge tone="green">微信</StatusBadge>;
   if (channel) return <StatusBadge tone="blue">{channel}</StatusBadge>;
   return <StatusBadge tone="gray">网页</StatusBadge>;
 }
 
+/** 将反馈归因分类映射为徽标色调，未知分类回退为灰色。 */
 function bucketTone(bucket?: string): BadgeTone {
   if (bucket === 'model_issue') return 'red';
   if (bucket === 'skill_issue') return 'orange';
@@ -1126,6 +1190,7 @@ function bucketTone(bucket?: string): BadgeTone {
   return 'gray';
 }
 
+/** 将反馈分析状态码翻译为中文文案，未知状态原样返回。 */
 function analysisStatusLabel(status?: string): string {
   if (status === 'pending') return '等待分析';
   if (status === 'analyzed') return '已完成';
@@ -1134,6 +1199,7 @@ function analysisStatusLabel(status?: string): string {
   return status || '未知';
 }
 
+/** 通过临时 <a> 触发浏览器下载，完成后释放对象 URL。 */
 function downloadBlob(blob: Blob, filename: string): void {
   const objectUrl = window.URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -1145,10 +1211,12 @@ function downloadBlob(blob: Blob, filename: string): void {
   window.URL.revokeObjectURL(objectUrl);
 }
 
+/** 把 ID 净化为可安全用于文件名的片段，为空时回退为「session」。 */
 function safeFilenamePart(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'session';
 }
 
+/** 生成导出文件名使用的时间戳，格式为 YYYYMMDD-HHmmss。 */
 function filenameTimestamp(): string {
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, '0');

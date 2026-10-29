@@ -8,6 +8,8 @@ from app.capability_scope import CapabilityScope
 
 
 class GeneralSkillFile(BaseModel):
+    """技能包内的单个文件条目：相对路径、文本内容与可选的字节数和 MIME 类型。"""
+
     path: str
     content: str
     size: Optional[int] = None
@@ -15,6 +17,8 @@ class GeneralSkillFile(BaseModel):
 
 
 class GeneralSkillImportRequest(BaseModel):
+    """导入技能的请求体：可直接给 markdown，也可携带文件与目录清单。"""
+
     tenant_id: str
     agent_id: Optional[str] = None
     name: Optional[str] = None
@@ -30,6 +34,8 @@ class GeneralSkillImportRequest(BaseModel):
 
 
 class GeneralSkillClawHubImportRequest(BaseModel):
+    """从 ClawHub 导入技能的请求体：来源地址、落库元信息与能力作用域。"""
+
     tenant_id: str
     agent_id: Optional[str] = None
     source: str
@@ -42,6 +48,8 @@ class GeneralSkillClawHubImportRequest(BaseModel):
 
 
 class GeneralSkillPackageUploadRequest(BaseModel):
+    """以 base64 上传技能压缩包的请求体，由服务端解包后落库为技能。"""
+
     tenant_id: str
     agent_id: Optional[str] = None
     filename: str
@@ -55,6 +63,8 @@ class GeneralSkillPackageUploadRequest(BaseModel):
 
 
 class GeneralSkillRead(BaseModel):
+    """技能读取视图：元信息、正文、文件与目录清单、权限及运行时配置。"""
+
     id: str
     tenant_id: str
     slug: str
@@ -76,6 +86,8 @@ class GeneralSkillRead(BaseModel):
 
 
 class GeneralSkillRunRequest(BaseModel):
+    """运行技能的请求：查询语句、read/execute 操作、可选会话与模型及最大尝试次数。"""
+
     tenant_id: str
     agent_id: Optional[str] = None
     user_id: str = ""
@@ -87,6 +99,8 @@ class GeneralSkillRunRequest(BaseModel):
 
 
 class GeneralSkillRunResponse(BaseModel):
+    """技能运行结果：执行轨迹、生成代码、标准输出/错误、结构化产物与回复文本。"""
+
     skill_slug: str
     operation: Literal["read", "execute"] = "execute"
     execution_trace: list[dict[str, Any]] = Field(default_factory=list)
@@ -99,6 +113,8 @@ class GeneralSkillRunResponse(BaseModel):
 
 
 class GeneralSkillSelection(BaseModel):
+    """技能选择结果：是否启用技能、选中的 slug、操作类型、知识查询与置信度。"""
+
     use_general_skill: bool = False
     selected_slug: Optional[str] = None
     operation: Literal["read", "execute"] = "execute"
@@ -109,6 +125,8 @@ class GeneralSkillSelection(BaseModel):
 
 
 class GeneralSkillExecutionPlan(BaseModel):
+    """一次技能执行的计划：待运行代码、运行时类型与预期产出说明。"""
+
     code: str
     runtime: str = "python"
     rationale: Optional[str] = None
@@ -116,6 +134,8 @@ class GeneralSkillExecutionPlan(BaseModel):
 
 
 class GeneralSkillExecutionReview(BaseModel):
+    """执行结果评审：是否充分、是否需要重试、是否终止及修复提示。"""
+
     result_sufficient: bool = False
     needs_retry: bool = False
     terminal: bool = False
@@ -124,4 +144,6 @@ class GeneralSkillExecutionReview(BaseModel):
 
 
 class GeneralSkillReply(BaseModel):
+    """技能链路的最终回复文本。"""
+
     reply: str

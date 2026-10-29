@@ -17,6 +17,7 @@ def test_malicious_attachment_identifiers_remain_inside_storage_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证含路径穿越的标识会被哈希归一化，附件仍落在存储根内并可正确回读。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     raw = b"attachment data"
     attachment = ChatAttachmentRead(
@@ -76,6 +77,7 @@ def test_attachment_directory_rejects_intermediate_symlink_escape(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证中间目录被换成指向外部的符号链接时，路径解析会拒绝越出存储根。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     root = paths.user_data_dir().resolve() / "harness_uploads"
     root.mkdir(parents=True)

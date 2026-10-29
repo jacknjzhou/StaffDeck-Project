@@ -27,6 +27,7 @@ DEFAULT_PORT_RANGE_END = 5199
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
+    """把环境变量解析为布尔开关，未设置时回退默认值。"""
     raw = os.environ.get(name)
     if raw is None:
         return default
@@ -34,14 +35,17 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _pid_file(name: str) -> Path:
+    """返回指定服务的 pid 文件路径。"""
     return RUN_DIR / f"{name}.pid"
 
 
 def _app_port_file() -> Path:
+    """返回记录单端口应用实际端口的文件路径。"""
     return RUN_DIR / "app.port"
 
 
 def _read_pid(name: str) -> int | None:
+    """读取 pid 文件并转为整数，缺失或非法时返回 None。"""
     try:
         raw = _pid_file(name).read_text(encoding="utf-8").strip()
     except OSError:
@@ -50,6 +54,7 @@ def _read_pid(name: str) -> int | None:
 
 
 def _terminate_pid(pid: int) -> None:
+    """先礼后兵地终止进程组，超时后升级为 SIGKILL。"""
     if sys.platform == "win32":
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -79,6 +84,7 @@ def _terminate_pid(pid: int) -> None:
 
 
 def stop_services(verbose: bool = True) -> None:
+    """按记录停止全部开发服务并清理 pid 与端口文件。"""
     for name in SERVICE_NAMES:
         pid = _read_pid(name)
         _pid_file(name).unlink(missing_ok=True)
@@ -94,6 +100,7 @@ def stop_services(verbose: bool = True) -> None:
 
 
 def _listening_pids(port: int) -> list[int]:
+    """按平台查询占用指定端口的进程号列表。"""
     if sys.platform == "win32":
         result = subprocess.run(
             ["netstat", "-ano", "-p", "tcp"],
@@ -122,6 +129,7 @@ def _listening_pids(port: int) -> list[int]:
 
 
 def _port_available(host: str, port: int) -> bool:
+    """以绑定探测判断端口是否可监听，兼容 TIME_WAIT 残留。"""
     bind_host = "0.0.0.0" if host == "0.0.0.0" else host
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         try:
@@ -135,6 +143,7 @@ def _port_available(host: str, port: int) -> bool:
 
 
 def _ensure_port_available(host: str, port: int, force: bool) -> None:
+    """端口被占时按 FORCE_PORTS 决定强杀占用者还是报错。"""
     if _port_available(host, port):
         return
     pids = _listening_pids(port)
@@ -152,6 +161,7 @@ def _ensure_port_available(host: str, port: int, force: bool) -> None:
 
 
 def _env_int(name: str, default: int) -> int:
+    """读取整数环境变量，非法值直接报错而非静默回退。"""
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
@@ -162,6 +172,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _port_candidates(preferred: int) -> list[int]:
+    """生成首选端口加区间内其余候选端口的有序列表。"""
     start = _env_int("ULTRARAG_PORT_RANGE_START", DEFAULT_PORT_RANGE_START)
     end = _env_int("ULTRARAG_PORT_RANGE_END", DEFAULT_PORT_RANGE_END)
     if start > end:
@@ -170,6 +181,7 @@ def _port_candidates(preferred: int) -> list[int]:
 
 
 def _select_available_port(host: str, preferred: int) -> int:
+    """在候选端口里挑第一个可用端口，全部占用则报错。"""
     candidates = _port_candidates(preferred)
     for port in candidates:
         if _port_available(host, port):
@@ -178,6 +190,7 @@ def _select_available_port(host: str, preferred: int) -> int:
 
 
 def _restore_runtime_port() -> None:
+    """未显式设置 APP_PORT 时从端口文件恢复上次实际端口。"""
     if "APP_PORT" in os.environ:
         return
     try:
@@ -189,6 +202,7 @@ def _restore_runtime_port() -> None:
 
 
 def _npm_executable() -> str:
+    """定位可用的 npm 可执行文件，缺失时提示安装 Node.js。"""
     names = ("npm.cmd", "npm") if sys.platform == "win32" else ("npm",)
     for name in names:
         executable = shutil.which(name)
@@ -198,6 +212,7 @@ def _npm_executable() -> str:
 
 
 def _build_frontend() -> None:
+    """构建单端口应用所需的前端产物。"""
     print("Building frontend bundle for single-port app...")
     subprocess.run(
         [_npm_executable(), "--prefix", str(ROOT_DIR / "frontend-enterprise"), "run", "build"],
@@ -207,7 +222,7 @@ def _build_frontend() -> None:
 
 
 def _ensure_frontend_dependencies() -> None:
-    """Refresh node_modules after a pull adds or changes direct dependencies."""
+    """拉取代码后依赖清单有变化时刷新前端 node_modules。"""
     frontend_dir = ROOT_DIR / "frontend-enterprise"
     npm = _npm_executable()
     dependency_check = subprocess.run(
@@ -228,6 +243,7 @@ def _ensure_frontend_dependencies() -> None:
 
 
 def _installed_distribution_version(name: str) -> str | None:
+    """查询已安装发行版版本，未安装时返回 None。"""
     try:
         from importlib.metadata import PackageNotFoundError, version
 
@@ -237,7 +253,7 @@ def _installed_distribution_version(name: str) -> str | None:
 
 
 def _backend_dependencies_complete() -> bool:
-    """Check current pyproject runtime requirements against the active venv."""
+    """校验当前 venv 是否满足 pyproject 声明的运行时依赖。"""
     try:
         import tomllib
 
@@ -267,7 +283,7 @@ def _backend_dependencies_complete() -> bool:
 
 
 def _ensure_backend_dependencies() -> None:
-    """Refresh the editable backend install after a pull changes dependencies."""
+    """后端依赖不完整时以可编辑模式重装 backend 包。"""
     if _backend_dependencies_complete():
         return
     print("Backend dependencies changed or are incomplete; refreshing the active environment...")
@@ -286,6 +302,7 @@ def _ensure_backend_dependencies() -> None:
 
 
 def _ensure_sandbox_runtime() -> None:
+    """校验沙箱运行时补丁标记，缺失时重新拉取运行时。"""
     runtime = ROOT_DIR / "packaging" / "sandbox_runtime"
     cli = runtime / "node_modules" / "@anthropic-ai" / "sandbox-runtime" / "dist" / "cli.js"
     node = runtime / "bin" / ("node.exe" if sys.platform == "win32" else "node")
@@ -309,6 +326,7 @@ def _ensure_sandbox_runtime() -> None:
 
 
 def _url_ready(url: str) -> bool:
+    """探测 URL 是否返回非 5xx 响应，并确保连接被关闭。"""
     response = None
     try:
         response = urllib.request.urlopen(url, timeout=2)
@@ -326,6 +344,7 @@ def _url_ready(url: str) -> bool:
 
 
 def _wait_for_url(label: str, url: str, log_file: Path) -> None:
+    """轮询等待服务就绪，超时则打印日志尾部并报错。"""
     deadline = time.monotonic() + _env_int("DEV_STARTUP_TIMEOUT", 180)
     while time.monotonic() < deadline:
         if _url_ready(url):
@@ -339,12 +358,14 @@ def _wait_for_url(label: str, url: str, log_file: Path) -> None:
 
 
 def _load_supervisor():
+    """延迟导入开发守护脚本，避免启动前加载过重依赖。"""
     import dev_supervisor
 
     return dev_supervisor
 
 
 def _service_ports(supervisor) -> list[tuple[str, int]]:
+    """返回当前单端口或双端口模式下需要检查的地址列表。"""
     if supervisor.SINGLE_PORT:
         return [(supervisor.APP_HOST, int(supervisor.APP_PORT))]
     return [
@@ -354,6 +375,7 @@ def _service_ports(supervisor) -> list[tuple[str, int]]:
 
 
 def _start_detached(supervisor) -> int:
+    """以脱离当前会话的方式拉起守护进程并返回其 pid。"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stdout = (LOG_DIR / "supervisor.log").open("ab", buffering=0)
     stderr = (LOG_DIR / "supervisor.err.log").open("ab", buffering=0)
@@ -375,6 +397,7 @@ def _start_detached(supervisor) -> int:
 
 
 def command_up(detach_flag: bool) -> int:
+    """启动开发服务：准备依赖、选端口，并按需前台或后台运行。"""
     detach = detach_flag or _env_flag("DETACH")
     os.environ.setdefault("AUTO_RESTART", "1" if detach else "0")
     _ensure_backend_dependencies()
@@ -430,6 +453,7 @@ def command_up(detach_flag: bool) -> int:
 
 
 def command_status() -> int:
+    """打印进程、端口与健康检查状态，便于排查本地环境。"""
     _restore_runtime_port()
     supervisor = _load_supervisor()
     names = ("supervisor", "app") if supervisor.SINGLE_PORT else ("supervisor", "backend", "enterprise")
@@ -451,6 +475,7 @@ def command_status() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """解析子命令并分派到 up/down/status，统一收敛错误码。"""
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     up_parser = subparsers.add_parser("up", help="build and start development services")

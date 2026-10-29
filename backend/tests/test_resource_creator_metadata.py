@@ -25,6 +25,7 @@ from app.tools.tool_schema import ToolCreateRequest, ToolUpdateRequest
 
 
 def test_user_created_resource_metadata_is_bound_to_current_user() -> None:
+    """验证各类资源的创建者元数据绑定创建用户，后续由他人编辑也不会被覆盖。"""
     with _test_session() as db:
         user = _seed_user_and_agent(db)
         agent = db.get(AgentProfile, "agent_owner")
@@ -147,6 +148,7 @@ def test_user_created_resource_metadata_is_bound_to_current_user() -> None:
 
 
 def _seed_user_and_agent(db: Session) -> User:
+    """创建租户、创建者用户及其名下员工，构造资源归属关系。"""
     user = User(
         id="user_alice",
         tenant_id="tenant_demo",
@@ -176,6 +178,7 @@ def _seed_user_and_agent(db: Session) -> User:
 
 
 def _skill_card() -> SkillCard:
+    """构造最小技能卡，供创建技能用例使用。"""
     return SkillCard(
         skill_id="skill_user_creator",
         name="用户 SOP",
@@ -200,6 +203,7 @@ def _binding(
     resource_type: str,
     resource_id: str,
 ) -> AgentResourceBinding:
+    """按租户、员工与资源定位绑定行，未找到时直接失败。"""
     row = db.exec(
         select(AgentResourceBinding).where(
             AgentResourceBinding.tenant_id == "tenant_demo",
@@ -214,6 +218,7 @@ def _binding(
 
 @contextmanager
 def _test_session() -> Iterator[Session]:
+    """提供共享同一连接的会话上下文，供用例分步操作。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

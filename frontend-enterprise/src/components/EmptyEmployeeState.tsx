@@ -3,6 +3,7 @@ import IconAccount from '../assets/icons/sys-accounts.svg?react';
 import IconAdd from '../assets/icons/add.svg?react';
 import IconGlobe from '../assets/icons/globe.svg?react';
 
+/** 数字员工列表空状态：展示引导文案与新建/浏览开放广场入口，说明文案随管理员身份切换。 */
 export default function EmptyEmployeeState({
   isAdmin,
   onCreate,

@@ -25,33 +25,43 @@ from app.db.models import ChannelBinding, ChannelDelivery, Tenant, utc_now
 
 
 class FakeClient:
+    """以可调用 handler 伪造 httpx 客户端，便于断言请求地址与参数。"""
     def __init__(self, handler):
+        """保存请求处理器，供测试按 URL 分支返回响应。"""
         self.handler = handler
 
     def __enter__(self):
+        """支持 with 语法，返回自身。"""
         return self
 
     def __exit__(self, *_args):
-        return None
+        """with 退出时不做清理，仅返回 None。"""
+        return
 
     def post(self, url, **kwargs):
+        """以 POST 语义把请求交给处理器。"""
         return self.handler(url, kwargs)
 
     def get(self, url, **kwargs):
+        """以 GET 语义把请求交给处理器，并标记方法。"""
         return self.handler(url, {**kwargs, "_method": "GET"})
 
     def patch(self, url, **kwargs):
+        """以 PATCH 语义把请求交给处理器，并标记方法。"""
         return self.handler(url, {**kwargs, "_method": "PATCH"})
 
     def delete(self, url, **kwargs):
+        """以 DELETE 语义把请求交给处理器，并标记方法。"""
         return self.handler(url, {**kwargs, "_method": "DELETE"})
 
 
 def _response(status: int, payload: dict, url: str) -> httpx.Response:
+    """构造带 JSON 载荷与请求对象的 httpx 响应。"""
     return httpx.Response(status, json=payload, request=httpx.Request("POST", url))
 
 
 def _binding() -> ChannelBinding:
+    """构造带加密凭据与配置版本的飞书渠道绑定。"""
     return ChannelBinding(
         id="chan_feishu",
         tenant_id="tenant_a",
@@ -67,15 +77,18 @@ def _binding() -> ChannelBinding:
 
 
 def test_reply_uses_cached_token_and_stable_per_chunk_uuid() -> None:
+    """验证回复复用缓存 token，且分块 uuid 在同一次投递内保持稳定。"""
     calls = []
 
     def handler(url, kwargs):
+        """记录请求并对鉴权与回复接口返回成功响应。"""
         calls.append((url, kwargs))
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token-a", "expire": 7200}, url)
         return _response(200, {"code": 0, "msg": "success"}, url)
 
     def factory():
+        """返回绑定该 handler 的假客户端。"""
         return FakeClient(handler)
     adapter = FeishuAdapter(
         token_provider=FeishuTokenProvider(client_factory=factory),
@@ -97,15 +110,18 @@ def test_reply_uses_cached_token_and_stable_per_chunk_uuid() -> None:
 
 
 def test_create_message_uses_receive_id_query() -> None:
+    """验证新建消息把 receive_id_type 放查询参数、receive_id 放请求体。"""
     calls = []
 
     def handler(url, kwargs):
+        """记录请求并对鉴权与新消息接口返回成功响应。"""
         calls.append((url, kwargs))
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token-a", "expire": 7200}, url)
         return _response(200, {"code": 0}, url)
 
     def factory():
+        """返回绑定该 handler 的假客户端。"""
         return FakeClient(handler)
     adapter = FeishuAdapter(client_factory=factory)
     adapter.send(
@@ -120,9 +136,11 @@ def test_create_message_uses_receive_id_query() -> None:
 
 
 def test_reaction_add_and_remove_use_message_reaction_api() -> None:
+    """验证查询、添加、删除表情反应使用正确的消息反应接口。"""
     calls = []
 
     def handler(url, kwargs):
+        """按方法区分反应列表、创建与删除，并记录非鉴权请求。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         calls.append((url, kwargs))
@@ -167,7 +185,9 @@ def test_reaction_add_and_remove_use_message_reaction_api() -> None:
 
 
 def test_reaction_remove_treats_404_as_idempotent_success() -> None:
+    """验证删除不存在的表情反应返回 404 时按幂等成功处理。"""
     def handler(url, kwargs):
+        """对鉴权返回成功，对其余请求返回 404。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         return _response(404, {"code": 231003}, url)
@@ -177,10 +197,12 @@ def test_reaction_remove_treats_404_as_idempotent_success() -> None:
 
 
 def test_401_refreshes_token_exactly_once() -> None:
+    """验证首次 401 后只刷新一次 token 并重试成功。"""
     tokens = iter(["token-old", "token-new"])
     send_count = 0
 
     def handler(url, kwargs):
+        """第一次发送返回 401，重试时校验已换用新 token。"""
         nonlocal send_count
         if "/auth/" in url:
             return _response(
@@ -195,6 +217,7 @@ def test_401_refreshes_token_exactly_once() -> None:
         return _response(200, {"code": 0}, url)
 
     def factory():
+        """返回绑定该 handler 的假客户端。"""
         return FakeClient(handler)
     adapter = FeishuAdapter(client_factory=factory)
     adapter.send(_binding(), {"message_id": "om_source"}, "ok", idempotency_key="delivery")
@@ -202,9 +225,11 @@ def test_401_refreshes_token_exactly_once() -> None:
 
 
 def test_second_token_invalid_business_response_is_permanent() -> None:
+    """验证刷新后 token 仍无效时抛永久错误且只刷新一次。"""
     token_counter = 0
 
     def handler(url, _kwargs):
+        """每次鉴权返回新 token，业务响应始终报 token 无效。"""
         nonlocal token_counter
         if "/auth/" in url:
             token_counter += 1
@@ -223,7 +248,9 @@ def test_second_token_invalid_business_response_is_permanent() -> None:
 
 @pytest.mark.parametrize("failure_url", ["token", "bot"])
 def test_credential_validation_classifies_provider_outage_as_transient(failure_url) -> None:
+    """验证凭据校验把 429/503 服务端故障归类为可重试的暂时错误。"""
     def handler(url, _kwargs):
+        """按参数让鉴权或凭证接口返回服务端故障。"""
         if "/auth/" in url:
             if failure_url == "token":
                 return _response(429, {"code": 1}, url)
@@ -239,7 +266,9 @@ def test_credential_validation_classifies_provider_outage_as_transient(failure_u
 
 
 def test_http_200_business_error_is_permanent() -> None:
+    """验证 HTTP 200 但业务码非 0 时抛永久错误并带上错误码。"""
     def handler(url, _kwargs):
+        """鉴权成功，发送返回业务错误码。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         return _response(200, {"code": 230001, "msg": "invalid target"}, url)
@@ -250,11 +279,13 @@ def test_http_200_business_error_is_permanent() -> None:
 
 
 def test_token_fetch_is_single_flight_for_same_binding() -> None:
+    """验证同一绑定的并发取 token 只发起一次请求。"""
     entered = threading.Event()
     release = threading.Event()
     calls = 0
 
     def handler(url, _kwargs):
+        """阻塞鉴权请求以制造并发窗口，并统计调用次数。"""
         nonlocal calls
         calls += 1
         entered.set()
@@ -273,9 +304,11 @@ def test_token_fetch_is_single_flight_for_same_binding() -> None:
 
 
 def test_long_message_chunks_use_distinct_stable_uuids() -> None:
+    """验证长消息分块 uuid 互不相同且重发时保持稳定。"""
     calls = []
 
     def handler(url, kwargs):
+        """记录每次发送的 uuid 并返回成功。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         calls.append(kwargs["json"]["uuid"])
@@ -292,6 +325,7 @@ def test_long_message_chunks_use_distinct_stable_uuids() -> None:
 
 
 def test_empty_text_is_permanent_error() -> None:
+    """验证空白文本无法发送并抛永久错误。"""
     adapter = FeishuAdapter(client_factory=lambda: FakeClient(lambda *_args: None))
     with pytest.raises(FeishuPermanentError, match="不能为空"):
         adapter.send(_binding(), {"message_id": "om_source"}, "  ", idempotency_key="d")
@@ -312,6 +346,7 @@ def test_empty_text_is_permanent_error() -> None:
     ],
 )
 def test_production_normalizer_ack_drops_missing_nested_objects(event) -> None:
+    """验证事件缺少嵌套字段时归一化返回 None 并静默应答。"""
     assert _normalize_event(event, bot_open_id="ou_bot") is None
 
 
@@ -322,6 +357,7 @@ def _group_event(
     thread_id: str = "",
     root_id: str = "",
 ):
+    """构造带可选 @机器人、话题与根消息的群聊事件。"""
     mentions = []
     if include_bot_mention:
         mentions.append(
@@ -354,6 +390,7 @@ def _group_event(
 
 
 def test_group_normalizer_requires_bot_mention_and_preserves_group_target() -> None:
+    """验证群聊必须 @机器人，且回复目标保留 chat_id 与消息 ID。"""
     event = _group_event("@_user_1 hello")
 
     inbound, target = _normalize_event(event, bot_open_id="ou_bot")
@@ -378,6 +415,7 @@ def test_group_normalizer_requires_bot_mention_and_preserves_group_target() -> N
 
 
 def test_ordinary_group_reply_root_id_does_not_create_topic() -> None:
+    """验证仅有 root_id 的普通群回复不会被误判为话题。"""
     inbound, target = _normalize_event(
         _group_event("@_user_1 follow up", root_id="om_root"),
         bot_open_id="ou_bot",
@@ -388,6 +426,7 @@ def test_ordinary_group_reply_root_id_does_not_create_topic() -> None:
 
 
 def test_group_topic_uses_thread_id_for_session_and_reply() -> None:
+    """验证话题消息用 thread_id 生成会话标识并以线程方式回复。"""
     inbound, target = _normalize_event(
         _group_event(
             "@_user_1 topic reply",
@@ -410,6 +449,7 @@ def test_group_topic_uses_thread_id_for_session_and_reply() -> None:
     ],
 )
 def test_subscribed_lifecycle_events_are_acknowledged_as_noop(event_type: str) -> None:
+    """验证机器人进出群等生命周期事件被空操作应答。"""
     from lark_channel import EventDispatcherHandler
 
     dispatcher = _build_event_dispatcher(EventDispatcherHandler, lambda _event: None)
@@ -425,6 +465,7 @@ def test_subscribed_lifecycle_events_are_acknowledged_as_noop(event_type: str) -
 
 
 def test_old_sending_delivery_is_not_replayed_outside_uuid_window(tmp_path) -> None:
+    """验证超出 uuid 窗口的 sending 投递标记远端状态未知而不重发。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'outbox.db'}")
     SQLModel.metadata.create_all(engine)
     with Session(engine) as db:
@@ -457,6 +498,7 @@ def test_old_sending_delivery_is_not_replayed_outside_uuid_window(tmp_path) -> N
 
 
 def test_old_pending_retry_is_not_replayed_outside_uuid_window(tmp_path) -> None:
+    """验证超出 uuid 窗口的 pending 重试同样标记失败而不重发。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'pending-outbox.db'}")
     SQLModel.metadata.create_all(engine)
     with Session(engine) as db:
@@ -512,6 +554,7 @@ def _p2p_event(*, message_type: str, content: dict, chat_type: str = "p2p"):
 
 
 def _group_attachment_event(message_type: str, content: dict) -> object:
+    """构造带 @机器人与附件的群聊事件，用于附件归一化测试。"""
     message = SimpleNamespace(
         message_id="om_group_att",
         chat_id="oc_group",
@@ -541,6 +584,7 @@ def _group_attachment_event(message_type: str, content: dict) -> object:
 
 
 def test_normalize_image_message_extracts_attachment() -> None:
+    """验证图片消息提取图片附件，且不硬编码扩展名与内容类型。"""
     from app.channels.adapters.base import ChannelInboundAttachment
 
     event = _p2p_event(
@@ -567,6 +611,7 @@ def test_normalize_image_message_extracts_attachment() -> None:
 
 
 def test_normalize_file_message_extracts_attachment_with_filename() -> None:
+    """验证文件消息提取附件并保留原始文件名。"""
     event = _p2p_event(
         message_type="file",
         content={"file_key": "file_v3_001", "file_name": "report.pdf"},
@@ -632,6 +677,7 @@ def test_normalize_group_attachment_without_mention_is_accepted() -> None:
 
 
 def _binary_response(status: int, content: bytes, url: str) -> httpx.Response:
+    """构造携带二进制内容的 httpx 响应，用于附件下载测试。"""
     return httpx.Response(
         status,
         content=content,
@@ -640,9 +686,11 @@ def _binary_response(status: int, content: bytes, url: str) -> httpx.Response:
 
 
 def test_download_media_calls_resources_endpoint_with_bearer_token() -> None:
+    """验证附件下载走消息资源接口并携带 Bearer token。"""
     calls = []
 
     def handler(url, kwargs):
+        """记录请求并校验资源下载的地址、参数与鉴权头。"""
         calls.append((url, kwargs))
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token-a", "expire": 7200}, url)
@@ -653,6 +701,7 @@ def test_download_media_calls_resources_endpoint_with_bearer_token() -> None:
         return _binary_response(200, b"PNG-bytes", url)
 
     def factory():
+        """返回绑定该 handler 的假客户端。"""
         return FakeClient(handler)
 
     adapter = FeishuAdapter(client_factory=factory)
@@ -675,6 +724,7 @@ def test_download_media_calls_resources_endpoint_with_bearer_token() -> None:
 
 
 def test_download_media_missing_params_is_permanent_error() -> None:
+    """验证下载参数缺少 type 或 message_id 时抛永久错误。"""
     adapter = FeishuAdapter(client_factory=lambda: FakeClient(lambda *_args: None))
     from app.channels.adapters.base import ChannelInboundAttachment
 
@@ -688,10 +738,12 @@ def test_download_media_missing_params_is_permanent_error() -> None:
 
 
 def test_download_media_refreshes_token_on_401() -> None:
+    """验证下载遇到 401 时刷新 token 并重试成功。"""
     tokens = iter(["token-old", "token-new"])
     resource_count = 0
 
     def handler(url, kwargs):
+        """首次下载用旧 token 返回 401，重试校验新 token。"""
         if "/auth/" in url:
             return _response(
                 200,
@@ -707,6 +759,7 @@ def test_download_media_refreshes_token_on_401() -> None:
         return _binary_response(200, b"PNG-bytes", url)
 
     def factory():
+        """返回绑定该 handler 的假客户端。"""
         return FakeClient(handler)
 
     adapter = FeishuAdapter(client_factory=factory)
@@ -727,7 +780,9 @@ def test_download_media_refreshes_token_on_401() -> None:
 
 
 def test_download_media_5xx_is_transient() -> None:
+    """验证下载遇到 5xx 时归类为可重试的暂时错误。"""
     def handler(url, _kwargs):
+        """鉴权成功，下载返回 503。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         return _binary_response(503, b"", url)
@@ -952,7 +1007,9 @@ def test_normalize_post_message_without_locale_wrapper() -> None:
 
 
 def _rich_handler(calls):
+    """构造记录发送请求并忽略鉴权的假客户端 handler。"""
     def handler(url, kwargs):
+        """记录非鉴权请求并返回成功响应。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         calls.append((url, kwargs))
@@ -961,6 +1018,7 @@ def _rich_handler(calls):
 
 
 def test_rich_post_render_for_markdown_text() -> None:
+    """验证 markdown 文本渲染为 post，标题加粗且链接转为 a 标签。"""
     calls = []
     adapter = FeishuAdapter(client_factory=lambda: FakeClient(_rich_handler(calls)))
     adapter.send(
@@ -981,6 +1039,7 @@ def test_rich_post_render_for_markdown_text() -> None:
 
 
 def test_rich_post_code_block_tag() -> None:
+    """验证围栏代码块渲染为带语言与正文的 code_block 标签。"""
     calls = []
     adapter = FeishuAdapter(client_factory=lambda: FakeClient(_rich_handler(calls)))
     adapter.send(
@@ -997,6 +1056,7 @@ def test_rich_post_code_block_tag() -> None:
 
 
 def test_plain_text_still_uses_text_msg_type() -> None:
+    """验证纯文本仍以 text 类型发送且内容保持原样。"""
     calls = []
     adapter = FeishuAdapter(client_factory=lambda: FakeClient(_rich_handler(calls)))
     adapter.send(_binding(), {"message_id": "om_source"}, "hello", idempotency_key="t1")
@@ -1005,6 +1065,7 @@ def test_plain_text_still_uses_text_msg_type() -> None:
 
 
 def test_rich_render_disabled_falls_back_to_text(monkeypatch) -> None:
+    """验证关闭富文本渲染后 markdown 退化为纯文本发送。"""
     from app.config import get_settings
     settings = get_settings().model_copy(update={"channel_rich_render_enabled": False})
     monkeypatch.setattr("app.channels.adapters.feishu.get_settings", lambda: settings)
@@ -1021,9 +1082,11 @@ def test_rich_render_disabled_falls_back_to_text(monkeypatch) -> None:
 
 
 def test_rich_long_markdown_chunks_use_distinct_stable_uuids() -> None:
+    """验证超长 markdown 分块 uuid 互不相同、全部走 post，且重发稳定。"""
     calls = []
 
     def handler(url, kwargs):
+        """记录每次发送的请求体并返回成功。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         calls.append(kwargs["json"])
@@ -1046,10 +1109,12 @@ def test_rich_long_markdown_chunks_use_distinct_stable_uuids() -> None:
 
 
 def test_rich_render_path_refreshes_token_on_401() -> None:
+    """验证富文本发送遇 401 时刷新 token 并重试一次。"""
     tokens = iter(["token-old", "token-new"])
     send_count = 0
 
     def handler(url, kwargs):
+        """首次发送返回 401，重试时校验新 token。"""
         nonlocal send_count
         if "/auth/" in url:
             return _response(
@@ -1064,6 +1129,7 @@ def test_rich_render_path_refreshes_token_on_401() -> None:
         return _response(200, {"code": 0}, url)
 
     def factory():
+        """返回绑定该 handler 的假客户端。"""
         return FakeClient(handler)
     adapter = FeishuAdapter(client_factory=factory)
     adapter.send(
@@ -1076,6 +1142,7 @@ def test_rich_render_path_refreshes_token_on_401() -> None:
 
 
 def test_rich_create_message_uses_receive_id() -> None:
+    """验证富文本新建消息同样使用 receive_id 并指定 post 类型。"""
     calls = []
     adapter = FeishuAdapter(client_factory=lambda: FakeClient(_rich_handler(calls)))
     adapter.send(
@@ -1124,9 +1191,11 @@ def test_rich_overlong_fenced_code_block_each_chunk_has_code_block() -> None:
 
 
 def test_create_card_reply_returns_message_id() -> None:
+    """验证卡片回复返回新消息 ID，uuid 由幂等键派生且类型为 interactive。"""
     calls = []
 
     def handler(url, kwargs):
+        """记录请求并返回新卡片消息 ID。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         calls.append((url, kwargs))
@@ -1153,9 +1222,11 @@ def test_create_card_reply_returns_message_id() -> None:
 
 
 def test_create_card_with_receive_id() -> None:
+    """验证按 receive_id 新建卡片消息并透传接收者类型。"""
     calls = []
 
     def handler(url, kwargs):
+        """记录请求并返回新卡片消息 ID。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         calls.append((url, kwargs))
@@ -1176,13 +1247,16 @@ def test_create_card_with_receive_id() -> None:
 
 
 def test_create_card_missing_idempotency_key_raises() -> None:
+    """验证缺少幂等键时创建卡片抛永久错误。"""
     adapter = FeishuAdapter(client_factory=lambda: FakeClient(lambda *_a, **_kw: None))
     with pytest.raises(FeishuPermanentError, match="幂等键"):
         adapter.create_card(_binding(), {"message_id": "om"}, {}, idempotency_key="")
 
 
 def test_create_card_missing_response_message_id_raises_transient() -> None:
+    """验证响应缺少 message_id 时创建卡片抛暂时错误。"""
     def handler(url, _kwargs):
+        """鉴权成功但卡片响应缺少 message_id。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         return _response(200, {"code": 0, "data": {}}, url)
@@ -1193,9 +1267,11 @@ def test_create_card_missing_response_message_id_raises_transient() -> None:
 
 
 def test_update_card_sends_patch_request() -> None:
+    """验证更新卡片发送 PATCH 请求且内容为 JSON 字符串。"""
     calls = []
 
     def handler(url, kwargs):
+        """记录请求并返回成功响应。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         calls.append((url, kwargs))
@@ -1212,13 +1288,16 @@ def test_update_card_sends_patch_request() -> None:
 
 
 def test_update_card_missing_message_id_raises() -> None:
+    """验证缺少 message_id 时更新卡片抛永久错误。"""
     adapter = FeishuAdapter(client_factory=lambda: FakeClient(lambda *_a, **_kw: None))
     with pytest.raises(FeishuPermanentError, match="message_id"):
         adapter.update_card(_binding(), "", {})
 
 
 def test_update_card_429_is_transient() -> None:
+    """验证更新卡片遇到 429 时归类为可重试的暂时错误。"""
     def handler(url, _kwargs):
+        """鉴权成功，更新返回 429。"""
         if "/auth/" in url:
             return _response(200, {"code": 0, "tenant_access_token": "token", "expire": 7200}, url)
         return _response(429, {"code": 1}, url)

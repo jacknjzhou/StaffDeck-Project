@@ -13,6 +13,11 @@ _KNOWLEDGE_SYNC_FLAG = "deepchat_sync_enabled"
 
 
 def describe_knowledge_search() -> dict[str, Any]:
+    """返回内置知识检索工具 knowledge_search 的 MCP 描述。
+
+    包含带命名空间的工具名、中文说明与 inputSchema（query 必填，可按知识库与返回
+    片段数限制）。
+    """
     return {
         "name": KNOWLEDGE_SEARCH_TOOL,
         "description": "在数字员工已同步的知识库中做带引用的检索，返回命中的片段与 citations。",
@@ -33,7 +38,11 @@ def describe_knowledge_search() -> dict[str, Any]:
 
 
 def _has_synced_knowledge(db: Session, tenant_id: str, agent_id: str) -> bool:
-    """Sync is opt-out: only a version explicitly flagged False is excluded."""
+    """判断该员工是否存在可同步的知识库版本。
+
+    同步默认开启（opt-out）：只有 metadata 中 deepchat_sync_enabled 显式为 False
+    的版本才被排除。
+    """
     versions = visible_knowledge_base_versions(db, tenant_id, agent_id)
     return any(
         (version.metadata_json or {}).get(_KNOWLEDGE_SYNC_FLAG) is not False
@@ -42,11 +51,10 @@ def _has_synced_knowledge(db: Session, tenant_id: str, agent_id: str) -> bool:
 
 
 def tool_name_map(db: Session, tenant_id: str, agent_id: str) -> dict[str, str]:
-    """Namespaced name -> the raw ``Tool.name`` it was derived from.
+    """构建「命名空间名 -> 原始 Tool.name」的映射，仅含可见且已启用的工具。
 
-    Normalisation is lossy (``expense.submit`` and ``expense_submit`` cannot both
-    keep a plain readable name), so the reverse direction always goes through
-    this map rather than string surgery on the name.
+    命名归一化是有损的（expense.submit 与 expense_submit 无法同时保留可读名称），
+    因此反向解析必须走这张表，不能靠字符串还原。
     """
     return {
         namespaced_tool_name(row.name): row.name
@@ -56,12 +64,11 @@ def tool_name_map(db: Session, tenant_id: str, agent_id: str) -> dict[str, str]:
 
 
 def build_tool_catalog(db: Session, tenant_id: str, agent_id: str) -> list[dict[str, Any]]:
-    """The MCP-visible tool set for one employee.
+    """构建该员工对 MCP 可见的工具目录，按工具名排序。
 
-    Only the three protocol fields are emitted: ``Tool`` carries the URL and the
-    credentials, and none of that may leave the server. The names are byte-equal
-    to the ``tools[]`` entries in the distribution payload, which is what keeps
-    deepchat's session-level allowlist matching.
+    只输出 name/description/inputSchema 三个协议字段：Tool 上还挂着 URL 与凭据，
+    不得离开服务端。名称与分发包的 tools[] 完全一致，以保证 DeepChat 会话级
+    白名单能匹配。存在可同步知识库时追加 knowledge_search。
     """
     catalog: list[dict[str, Any]] = []
     for row in visible_tool_rows(db, tenant_id, agent_id, include_inactive=False):
@@ -80,7 +87,10 @@ def build_tool_catalog(db: Session, tenant_id: str, agent_id: str) -> list[dict[
 
 
 def resolve_tool_name(db: Session, tenant_id: str, agent_id: str, name: str) -> str:
-    """Strip the namespace and prove the tool is actually exposed to this agent."""
+    """剥离命名空间并校验该工具确实暴露给此员工，返回原始 Tool.name。
+
+    名称缺少工具命名空间前缀，或不在该员工的可见工具映射中时，抛 INVALID_PARAMS。
+    """
     if not name.startswith(TOOL_PREFIX):
         raise RpcError(INVALID_PARAMS, f"Tool names must start with {TOOL_PREFIX!r}.")
     bare = tool_name_map(db, tenant_id, agent_id).get(name)

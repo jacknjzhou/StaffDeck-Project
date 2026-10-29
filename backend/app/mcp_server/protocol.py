@@ -15,9 +15,13 @@ DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 
 
 class RpcError(Exception):
-    """A JSON-RPC level failure, carried out to the transport unchanged."""
+    """JSON-RPC 层的错误，原样透传给传输层。
+
+    携带 `code`、`message` 与可选的 `data`，由 `error_response` 序列化成响应体。
+    """
 
     def __init__(self, code: int, message: str, data: Any = None) -> None:
+        """记录错误码、错误消息与可选的附加数据。"""
         super().__init__(message)
         self.code = code
         self.message = message
@@ -25,10 +29,10 @@ class RpcError(Exception):
 
 
 def parse_request(payload: Any) -> tuple[Any, str, dict[str, Any], bool]:
-    """Validate a JSON-RPC envelope.
+    """校验 JSON-RPC 信封，拆出处理请求所需的字段。
 
-    Returns ``(id, method, params, is_notification)``. A missing ``id`` means the
-    client is notifying, and per JSON-RPC 2.0 the server must not answer.
+    返回 `(id, method, params, is_notification)`；缺少 `id` 表示客户端在发
+    通知，按 JSON-RPC 2.0 的约定服务端不应回包。信封不合法时抛 `RpcError`。
     """
     if not isinstance(payload, dict):
         raise RpcError(INVALID_REQUEST, "A JSON-RPC request must be an object.")
@@ -45,10 +49,12 @@ def parse_request(payload: Any) -> tuple[Any, str, dict[str, Any], bool]:
 
 
 def success_response(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
+    """构造带 `result` 的成功响应信封，原样带回请求 `id`。"""
     return {"jsonrpc": JSONRPC_VERSION, "id": request_id, "result": result}
 
 
 def error_response(request_id: Any, error: RpcError) -> dict[str, Any]:
+    """把 `RpcError` 序列化成错误响应信封，仅在有 `data` 时附带该字段。"""
     body: dict[str, Any] = {
         "jsonrpc": JSONRPC_VERSION,
         "id": request_id,
@@ -60,7 +66,7 @@ def error_response(request_id: Any, error: RpcError) -> dict[str, Any]:
 
 
 def negotiate_protocol_version(requested: str | None) -> str:
-    """Echo a supported version; fall back rather than refuse the handshake."""
+    """在请求版本受支持时回显，否则回退到默认版本而不拒绝握手。"""
     if requested and requested in SUPPORTED_PROTOCOL_VERSIONS:
         return requested
     return DEFAULT_PROTOCOL_VERSION

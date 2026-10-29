@@ -28,6 +28,7 @@ from app.teams.service import delete_team
 
 
 def _test_engine():
+    """创建共享内存 SQLite 引擎并建表，供各清理用例独立使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -44,6 +45,7 @@ def _add_harness_records(
     session_id: str,
     suffix: str,
 ) -> tuple[str, str, str]:
+    """为指定租户/会话写入整套 Harness 记录，返回用于断言的记录 ID。"""
     task_frame = HarnessTaskFrameRecord(
         id=f"htask_{suffix}",
         tenant_id=tenant_id,
@@ -94,6 +96,7 @@ def _add_harness_records(
 
 
 def test_stage_harness_record_deletion_is_tenant_and_session_scoped() -> None:
+    """验证只删除目标租户与目标会话的 Harness 记录，单条件匹配不误删。"""
     engine = _test_engine()
     with Session(engine) as db:
         target_ids = _add_harness_records(
@@ -141,6 +144,7 @@ def test_workspace_cleanup_uses_invoker_segment_and_removes_only_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证工作区清理使用安全路径片段，且只删除目标会话目录。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     segments = {
         harness_path_segment(value)
@@ -174,6 +178,7 @@ def test_workspace_cleanup_unlinks_exact_symlink_without_following_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证清理符号链接时只解除链接本身，不跟随并删除外部目标内容。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     target = harness_session_workspace_path(
         tenant_id="tenant_demo",
@@ -197,6 +202,7 @@ def test_delete_chat_session_cleans_harness_state_and_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证删除聊天会话会同时清理其 Harness 状态和工作区，不影响其他会话。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     with Session(engine) as db:
@@ -259,6 +265,7 @@ def test_delete_team_cleans_team_session_harness_state_and_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证删除团队会清理团队会话的 Harness 状态与工作区。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     engine = _test_engine()
     with Session(engine) as db:

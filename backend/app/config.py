@@ -5,6 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """应用运行时配置，各项可由同名环境变量或 .env 文件覆盖，未知项忽略。"""
+
     app_name: str = "Skill Agent Loop Service"
     database_url: str = "sqlite:///./skill_agent_loop.db"
     app_secret: str = "change-me-in-development"
@@ -93,17 +95,21 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
+        """把逗号分隔的 cors_origins 拆成去掉空白与空项的来源列表。"""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
     def normalized_tool_base_url(self) -> str:
+        """去掉 tool_base_url 末尾斜杠，方便后续直接拼接接口路径。"""
         return self.tool_base_url.rstrip("/")
 
     @property
     def general_skill_runtime_package_list(self) -> list[str]:
+        """把逗号分隔的 general_skill_runtime_packages 拆成去空白的包名列表。"""
         return [item.strip() for item in self.general_skill_runtime_packages.split(",") if item.strip()]
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """返回进程内缓存的 Settings 实例，避免重复解析环境变量与 .env。"""
     return Settings()

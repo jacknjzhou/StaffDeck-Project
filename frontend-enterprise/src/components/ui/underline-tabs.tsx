@@ -9,8 +9,8 @@ export type UnderlineTabItem<T extends string = string> = {
 };
 
 /**
- * `dot`  – short centered rounded indicator under the active label (SD1 node 38:6404).
- * `line` – full-tab-width 2px active bar over a full-width bottom divider (SD1 node 281:1935).
+ * `dot`  – 激活标签下方居中的短圆角指示条（SD1 节点 38:6404）。
+ * `line` – 整宽底部分割线之上、与标签等宽的 2px 激活线（SD1 节点 281:1935）。
  */
 export type UnderlineTabsVariant = 'dot' | 'line';
 
@@ -20,15 +20,17 @@ export type UnderlineTabsProps<T extends string = string> = {
   onChange: (value: T) => void;
   variant?: UnderlineTabsVariant;
   className?: string;
-  /** Extra classes for each tab button (e.g. override the default fixed width). */
+  /** 每个标签按钮的额外类名（例如覆盖默认的固定宽度）。 */
   tabClassName?: string;
   'aria-label'?: string;
 };
 
 /**
- * Global underline tab bar.
- * Use `variant="dot"` (default) for the short rounded indicator, or `variant="line"`
- * for the full-width divider with a full-tab-width active bar.
+ * 全局下划线标签栏。
+ *
+ * - 受控组件：选中项完全由 `value` 决定，点击非禁用标签时回调 `onChange`。
+ * - 默认 `variant="dot"` 渲染短圆角指示条，`variant="line"` 渲染整宽分割线与等宽激活线。
+ * - 标签宽度默认固定 120px，可用 `tabClassName` 覆盖；禁用项不触发回调。
  */
 export function UnderlineTabs<T extends string = string>({
   items,

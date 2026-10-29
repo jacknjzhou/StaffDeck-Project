@@ -39,7 +39,7 @@ SCHEMA_REPAIR_ATTEMPTS = 1
 
 
 class TurnPlanner:
-    """Single scene/SOP intent planner for the Harness v2 execution path."""
+    """Harness v2 执行路径上唯一的场景/SOP 意图规划器。"""
 
     def plan(
         self,
@@ -53,6 +53,11 @@ class TurnPlanner:
         interaction_mode: str = "normal",
         team_context: TeamPlannerContext | None = None,
     ) -> TurnPlan:
+        """调用 LLM 产出并归一化本轮 TurnPlan。
+
+        会话快照与 SOP 候选会先拼成 payload；模型输出经 schema 校验后再按已知任务帧
+        重写 id、依赖与执行目标。任何失败都统一抛 LLMError，便于上游按模型故障处理。
+        """
         payload = stage_payload(
             phase="TurnPlanner",
             user_message=message,
@@ -104,6 +109,10 @@ class TurnPlanner:
         system_prompt: str,
         payload: dict[str, Any],
     ) -> TurnPlan:
+        """生成并校验 TurnPlan；字段类型不合法时带压缩错误信息重试一次。
+
+        schema 修复使用的 payload 始终从首次请求的副本重建，避免重试请求层层累积。
+        """
         base_payload = deepcopy(payload)
         next_payload = payload
         max_attempts = SCHEMA_REPAIR_ATTEMPTS + 1
@@ -143,6 +152,12 @@ class TurnPlanner:
         interaction_mode: str = "normal",
         team_context: TeamPlannerContext | None = None,
     ) -> TurnPlan:
+        """把模型给出的计划归一化为可执行任务帧。
+
+        SOP 帧必须命中已安装的 SOP，否则整帧丢弃；随后按已知任务帧与 active 状态
+        重写 task_id、decision 与依赖，再校正执行目标。一帧不剩时按 decision 补出
+        兜底会话帧或继续当前 SOP 的帧，保证下游总能拿到至少一个任务帧。
+        """
         skills = {skill.skill_id: skill for skill in available_skills}
         known_frames = _known_task_frames(session, task_frame_state)
         frames: list[PlannedTaskFrame] = []
@@ -373,6 +388,7 @@ class TurnPlanner:
 
 
 def _compact_validation_errors(exc: ValidationError) -> list[dict[str, str]]:
+    """把 pydantic 校验错误压平成 path/type/message 三元组，供 schema 修复轮使用。"""
     compact: list[dict[str, str]] = []
     for error in exc.errors(include_url=False, include_input=False):
         location = error.get("loc") or ()
@@ -392,7 +408,11 @@ def _normalize_execution_targets(
     interaction_mode: str,
     team_context: TeamPlannerContext | None,
 ) -> list[PlannedTaskFrame]:
-    """Validate planner-selected assignees without guessing team membership."""
+    """校验规划器选定的执行目标，不猜测团队成员身份。
+
+    非法的 team_member 指派一律回落为 self 并清空 activation_condition；远程任务
+    只允许依赖同批次发布的远程任务，否则同样改为本地执行，避免依赖不可解析而永久阻塞。
+    """
     leader_id = team_context.leader_agent_id if team_context is not None else ""
     member_ids = {
         member.agent_id
@@ -446,6 +466,11 @@ def _normalize_execution_targets(
 
 
 def turn_plan_router_decision(plan: TurnPlan) -> RouterDecision:
+    """把 TurnPlan 投影成兼容旧下游的 RouterDecision，只保留 SOP 任务帧。
+
+    首个 SOP 帧存在时以其 decision 与目标为准，否则退回计划级 decision 并收敛到
+    answer_only、clarify、handoff_human、complete_task 这几个允许值。
+    """
     first = plan.task_frames[0] if plan.task_frames else None
     first_sop = first if first and first.kind == "sop" else None
     sop_frames = [
@@ -488,6 +513,7 @@ def turn_plan_router_decision(plan: TurnPlan) -> RouterDecision:
 
 
 def _first_node_id(skill: Skill) -> str | None:
+    """取 SOP 的起始节点：优先 start_node_id，缺失时用第一个带 node_id 的节点。"""
     content = skill.content_json or {}
     start = str(content.get("start_node_id") or "").strip()
     if start:
@@ -516,6 +542,10 @@ def _known_task_frames(
     session: ChatSession,
     task_frame_state: list[dict[str, Any]] | None,
 ) -> dict[str, dict[str, Any]]:
+    """合并本轮任务帧状态与会话持久化的 pending_tasks，按 task_id 建索引。
+
+    每条记录都会补齐 kind、skill_id、step_id 与 requirements，后写入的同 id 记录覆盖先前的。
+    """
     known: dict[str, dict[str, Any]] = {}
     for raw in [
         *(task_frame_state or []),
@@ -556,6 +586,7 @@ def _sanitize_task_updates(
     plan: TurnPlan,
     known_frames: dict[str, dict[str, Any]],
 ) -> list[TaskUpdate]:
+    """过滤模型提交的任务更新：丢弃未知任务 id 与重复项，并清洗其中的槽位提示。"""
     updates: list[TaskUpdate] = []
     seen: set[str] = set()
     for raw in plan.task_updates:
@@ -583,6 +614,7 @@ def _session_payload(
     *,
     task_frame_state: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """组装送入 TurnPlanner 的当前会话快照，并剔除空字段以压缩 prompt。"""
     return _without_empty(
         {
             "active_skill_id": session.active_skill_id,
@@ -597,6 +629,7 @@ def _session_payload(
 
 
 def _sop_payload(skill: Skill) -> dict[str, Any]:
+    """提取单个 SOP 的 prompt 视图；数据库模型仍叫 Skill，故只暴露路由所需字段。"""
     content = skill.content_json or {}
     return _without_empty(
         {
@@ -609,6 +642,7 @@ def _sop_payload(skill: Skill) -> dict[str, Any]:
 
 
 def _unique_task_id(value: str | None, seen: set[str]) -> str:
+    """返回本轮计划内唯一的 task_id；候选为空或已被占用时新建 task id。"""
     candidate = str(value or "").strip()
     if candidate and candidate not in seen:
         return candidate
@@ -619,6 +653,7 @@ def _unique_task_id(value: str | None, seen: set[str]) -> str:
 
 
 def _requirements(values: list[str], fallback: str) -> list[str]:
+    """整理任务需求：去重单行化，全空时用兜底文本，仍为空则给出默认描述。"""
     requirements = _unique_text(values)
     fallback_text = _one_line(fallback)
     if not requirements and fallback_text:
@@ -627,6 +662,7 @@ def _requirements(values: list[str], fallback: str) -> list[str]:
 
 
 def _unique_text(values: list[str]) -> list[str]:
+    """把文本列表逐项压成单行并去重，丢弃空项，保持原始顺序。"""
     result: list[str] = []
     for value in values:
         text = _one_line(value)
@@ -636,10 +672,12 @@ def _unique_text(values: list[str]) -> list[str]:
 
 
 def _one_line(value: object) -> str:
+    """把任意值折叠成单行文本：空白序列压成空格，再去除首尾空白。"""
     return " ".join(str(value or "").split()).strip()
 
 
 def _without_empty(value: dict[str, Any]) -> dict[str, Any]:
+    """剔除值为 None、空串、空列表或空字典的键，用于精简下发的 payload。"""
     return {
         key: item
         for key, item in value.items()

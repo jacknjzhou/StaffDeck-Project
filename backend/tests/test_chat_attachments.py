@@ -17,6 +17,7 @@ from app.session.session_schema import (
 
 
 def test_text_attachment_extracts_preview_and_python_summary() -> None:
+    """验证文本附件会提取正文、生成预览与 Python 解析摘要。"""
     attachment = parse_chat_attachment(
         "notes.txt",
         "text/plain",
@@ -31,6 +32,7 @@ def test_text_attachment_extracts_preview_and_python_summary() -> None:
 
 
 def test_user_message_metadata_keeps_attachments() -> None:
+    """验证用户消息元数据保留附件的文件名与类型。"""
     attachment = parse_chat_attachment("readme.md", "text/markdown", b"# Title")
     metadata = _user_message_metadata(
         ChatTurnRequest(
@@ -46,6 +48,7 @@ def test_user_message_metadata_keeps_attachments() -> None:
 
 
 def test_image_attachment_uses_supported_extension_and_builds_image_payload() -> None:
+    """验证大写扩展名的图片附件识别为 png，并生成 image_url 载荷。"""
     image = b"\x89PNG\r\n\x1a\nimage-bytes"
     attachment = parse_chat_attachment("screen.PNG", "application/octet-stream", image)
 
@@ -64,6 +67,7 @@ def test_image_attachment_uses_supported_extension_and_builds_image_payload() ->
 
 
 def test_historical_image_payload_rejects_invalid_image_signature() -> None:
+    """验证历史图片附件签名非法时不生成图片载荷。"""
     attachment = parse_chat_attachment("screen.jpg", "image/jpeg", b"encrypted-bytes")
 
     assert attachment.kind == "image"
@@ -71,6 +75,7 @@ def test_historical_image_payload_rejects_invalid_image_signature() -> None:
 
 
 def test_jpeg_with_trailing_channel_bytes_is_normalized() -> None:
+    """验证带尾部通道字节的 JPEG 被裁剪为合法数据并识别为 jpg。"""
     jpeg = b"\xff\xd8\xffjpeg-data\xff\xd9"
 
     normalized = normalize_image_media(jpeg + b"\x00channel-trailer")
@@ -79,6 +84,7 @@ def test_jpeg_with_trailing_channel_bytes_is_normalized() -> None:
 
 
 def test_message_context_uses_sandbox_path_without_inlining_text() -> None:
+    """验证带 sandbox_path 的附件只注入路径提示，不内联文本内容。"""
     attachment = parse_chat_attachment("readme.md", "text/markdown", b"# Title\ncontent")
     attachment = attachment.model_copy(update={"sandbox_path": "/workspace/attachments/readme.md"})
     context = message_content_with_attachment_context(
@@ -95,6 +101,7 @@ def test_message_context_uses_sandbox_path_without_inlining_text() -> None:
 
 
 def test_document_attachment_context_routes_binary_to_extractor() -> None:
+    """验证二进制文档附件提示先调用 extract_document_text 而非直接读文件。"""
     attachment = ChatAttachmentRead(
         id="contract-docx",
         filename="contract.docx",
@@ -117,6 +124,7 @@ def test_document_attachment_context_routes_binary_to_extractor() -> None:
 
 
 def test_path_only_attachment_skips_text_extraction() -> None:
+    """验证 extract_text=False 时附件不带正文，预览也不泄露内容。"""
     attachment = parse_chat_attachment(
         "readme.md",
         "text/markdown",
@@ -130,6 +138,7 @@ def test_path_only_attachment_skips_text_extraction() -> None:
 
 
 def test_turn_attachment_round_trip_enforces_count_and_size_limits() -> None:
+    """验证会话附件校验按数量与字节上限抛出对应错误。"""
     attachment = ChatAttachmentRead(
         id="file-1",
         filename="notes.txt",
@@ -154,6 +163,7 @@ def test_turn_attachment_round_trip_enforces_count_and_size_limits() -> None:
 
 
 def test_turn_attachment_round_trip_recomputes_untrusted_summary() -> None:
+    """验证不可信摘要被重算，文件名被清洗且正文不随轮次回传。"""
     normalized = validate_chat_turn_attachments(
         [
             ChatAttachmentRead(
@@ -177,6 +187,7 @@ def test_turn_attachment_round_trip_recomputes_untrusted_summary() -> None:
 
 
 def test_turn_attachment_round_trip_rejects_tampered_image_payload() -> None:
+    """验证图片附件解码后大小与声明不符时被拒绝。"""
     encoded = base64.b64encode(b"img").decode("ascii")
     attachment = ChatAttachmentRead(
         id="file-image",

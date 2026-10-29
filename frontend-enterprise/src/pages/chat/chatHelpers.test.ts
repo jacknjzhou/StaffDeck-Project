@@ -18,6 +18,7 @@ import {
   stripTrailingCitationSummary,
 } from './chatHelpers';
 
+/** 构造一条助手聊天消息，便于用例按需覆盖字段。 */
 function message(patch: Partial<ChatMessage> = {}): ChatMessage {
   return {
     id: 'msg-assistant-1',
@@ -30,6 +31,7 @@ function message(patch: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 describe('chat history consumer contract', () => {
+  /** 验证保留正文内联引用并移除重复的尾部参考来源段落。 */
   it('keeps inline citations but removes duplicate trailing citation summaries', () => {
     const content = [
       '请假制度按员工手册执行[1]，办公用品按行政手册执行[5]。',
@@ -47,17 +49,20 @@ describe('chat history consumer contract', () => {
     );
   });
 
+  /** 验证移除尾部“参考资料”脚注但正文引用保持不变。 */
   it('removes a trailing citation-label footer without changing the answer', () => {
     expect(stripTrailingCitationSummary('正文保留[1]。\n\n参考资料：[1] [2]')).toBe(
       '正文保留[1]。',
     );
   });
 
+  /** 验证仅提到来源字样的普通正文不会被误删。 */
   it('preserves ordinary prose that mentions a source', () => {
     const content = '参考来源：员工手册，具体以最新制度为准。';
     expect(stripTrailingCitationSummary(content)).toBe(content);
   });
 
+  /** 验证跨空行与项目符号明细时，顶层流程编号仍连续递增。 */
   it('continues top-level process numbering across blank lines and bullet details', () => {
     const rendered = renderToStaticMarkup(
       createElement(MarkdownMessage, {
@@ -88,6 +93,7 @@ describe('chat history consumer contract', () => {
     ]);
   });
 
+  /** 验证普通正文段落之后有序列表编号重新从 1 开始。 */
   it('restarts an ordered list after regular paragraph content', () => {
     const rendered = renderToStaticMarkup(
       createElement(MarkdownMessage, {
@@ -98,6 +104,7 @@ describe('chat history consumer contract', () => {
     expect(rendered.match(/<ol(?: start="\d+")?>/g)).toEqual(['<ol>', '<ol>']);
   });
 
+  /** 验证裸 HTTP 链接转为可点击链接，且不改动既有 Markdown 链接与行内代码。 */
   it('renders bare HTTP links without changing existing Markdown links or inline code', () => {
     const rendered = renderToStaticMarkup(
       createElement(
@@ -120,6 +127,7 @@ describe('chat history consumer contract', () => {
     expect(rendered.match(/href=/g)).toHaveLength(2);
   });
 
+  /** 验证 www 开头的裸链接补全 HTTPS 协议后变为可点击链接。 */
   it('makes www links clickable by adding a safe HTTPS target', () => {
     const rendered = renderToStaticMarkup(
       createElement(
@@ -134,6 +142,7 @@ describe('chat history consumer contract', () => {
     );
   });
 
+  /** 验证不安全或格式错误的 Markdown 链接目标不会渲染为外链。 */
   it('does not turn unsafe or malformed Markdown targets into external links', () => {
     const rendered = renderToStaticMarkup(
       createElement(
@@ -153,6 +162,7 @@ describe('chat history consumer contract', () => {
     );
   });
 
+  /** 验证安全图片正常渲染，危险协议的图片目标退化为文本。 */
   it('renders safe Markdown images and keeps unsafe image targets as text', () => {
     const rendered = renderToStaticMarkup(
       createElement(MarkdownMessage, {
@@ -173,6 +183,7 @@ describe('chat history consumer contract', () => {
     expect(rendered).not.toContain('src="javascript:');
   });
 
+  /** 验证优先采用内联引用、按内容去重，并在无内联标记时回退到来源元数据。 */
   it('prefers inline citations, deduplicates content, and falls back to source metadata', () => {
     const item = message({
       metadata: {
@@ -196,6 +207,7 @@ describe('chat history consumer contract', () => {
     ]);
   });
 
+  /** 验证展示标题相同的不同引用分片仍分别保留。 */
   it('keeps separately cited chunks even when their display titles match', () => {
     const item = message({
       metadata: {
@@ -212,6 +224,7 @@ describe('chat history consumer contract', () => {
     ]);
   });
 
+  /** 验证可从持久化元数据恢复定时任务草稿与附件列表。 */
   it('restores scheduled drafts and attachments from persisted metadata', () => {
     const draft = {
       should_create: true,
@@ -243,6 +256,7 @@ describe('chat history consumer contract', () => {
     expect(messageAttachments(item)).toEqual([attachment]);
   });
 
+  /** 验证仅保留持久化元数据中合法且去重的工作区产物。 */
   it('keeps only valid, unique workspace artifacts from persisted metadata', () => {
     const item = message({
       metadata: {
@@ -283,6 +297,7 @@ describe('chat history consumer contract', () => {
     ]);
   });
 
+  /** 验证仅已提交的助手消息允许评价。 */
   it('allows feedback only for committed assistant messages', () => {
     expect(canRateMessage(message())).toBe(true);
     expect(canRateMessage(message({ isStreaming: true }))).toBe(false);
@@ -291,6 +306,7 @@ describe('chat history consumer contract', () => {
     expect(canRateMessage(message({ role: 'user' }))).toBe(false);
   });
 
+  /** 验证前端保持既有流式终止事件词表不变。 */
   it('locks the legacy frontend terminal vocabulary', () => {
     expect([...STREAM_TERMINAL_EVENTS].sort()).toEqual([
       'complete',
@@ -303,6 +319,7 @@ describe('chat history consumer contract', () => {
     ]);
   });
 
+  /** 验证旧实时流仍占用回合时，持久化的助手消息与终止事件照常重放。 */
   it('replays persisted assistant and terminal events even when an old live stream owns the turn', () => {
     expect(shouldDeferPersistedEventToLiveStream('stream_delta', true)).toBe(true);
     expect(shouldDeferPersistedEventToLiveStream('assistant_message_created', true)).toBe(false);
@@ -311,6 +328,7 @@ describe('chat history consumer contract', () => {
     expect(shouldDeferPersistedEventToLiveStream('stream_delta', false)).toBe(false);
   });
 
+  /** 验证 Harness 生命周期事件转换为可合并的执行记录行。 */
   it('turns the Harness lifecycle into mergeable execution-record lines', () => {
     const started = harnessEventTraceLine('task_frame_started', {
       task_frame_id: 'task-weather',
@@ -380,6 +398,7 @@ describe('chat history consumer contract', () => {
     });
   });
 
+  /** 验证切换到 SOP 后等待用户输入期间，该执行记录仍保持可见。 */
   it('keeps a switched SOP visible while it waits for user input', () => {
     const started = harnessEventTraceLine('task_frame_started', {
       task_frame_id: 'task-purchase',

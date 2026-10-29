@@ -9,6 +9,7 @@ import {
   withoutSkillEdgeAt,
 } from './skillFlowModel';
 
+/** 构造包含三个节点与两条连线的技能卡片测试数据。 */
 function fixture(): SkillCard {
   return {
     skill_id: 'demo',
@@ -35,7 +36,9 @@ function fixture(): SkillCard {
   };
 }
 
+/** 验证技能流程编辑器的坐标、连线与画布交互模型。 */
 describe('skill flow editor model', () => {
+  /** 验证保存节点坐标时不影响图结构与原有元数据。 */
   it('persists visual node coordinates without changing graph semantics', () => {
     const original = fixture();
     const next = withSkillNodeFlowPosition(original, 0, { x: 421.6, y: 238.2 });
@@ -46,6 +49,7 @@ describe('skill flow editor model', () => {
     expect(original.nodes[0].metadata).toEqual({ retained: true });
   });
 
+  /** 验证删除连线只移除指定的一条且不修改原对象。 */
   it('removes only the selected transition', () => {
     const original = fixture();
     const next = withoutSkillEdgeAt(original, 0);
@@ -56,12 +60,14 @@ describe('skill flow editor model', () => {
     expect(original.edges).toHaveLength(2);
   });
 
+  /** 验证不同滚动单位会被归一化为画布平移像素。 */
   it('normalizes wheel units before panning the infinite canvas', () => {
     expect(normalizeSkillFlowWheelDelta(3, 0, 900)).toBe(3);
     expect(normalizeSkillFlowWheelDelta(3, 1, 900)).toBe(48);
     expect(normalizeSkillFlowWheelDelta(1, 2, 900)).toBe(900);
   });
 
+  /** 验证画布视口变化后会重新锚定进行中的连线。 */
   it('reanchors an active connection after the canvas viewport changes', () => {
     const connection = {
       sourceNodeId: 'node1',

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def _text_content(message) -> str:
+    """解析 text 消息的 content JSON 取 text 字段并去空白，解析失败返回空串。"""
     try:
         parsed = json.loads(str(message.content or "{}"))
     except (TypeError, ValueError):
@@ -160,6 +161,11 @@ def _extract_feishu_attachments(message) -> list[ChannelInboundAttachment]:
 
 
 def _normalize_event(event, *, bot_open_id: str) -> tuple[ChannelInbound, dict] | None:
+    """把飞书事件规整成统一的 ChannelInbound 与回复目标。
+
+    只接受 text/image/file/post 且 header、sender 完整的消息，并跳过机器人自身发送的事件；
+    群聊要求 @ 机器人或带附件。无需处理的事件返回 None，群聊话题用 chat_id:thread:id 作会话键。
+    """
     header = getattr(event, "header", None)
     body = getattr(event, "event", None)
     message = getattr(body, "message", None)
@@ -265,8 +271,10 @@ def _normalize_event(event, *, bot_open_id: str) -> tuple[ChannelInbound, dict] 
 
 
 def _build_event_dispatcher(handler_class, receive):
+    """构造只订阅消息接收的事件分发器，其余生命周期事件统一忽略。"""
     def ignore_lifecycle_event(_event) -> None:
-        return None
+        """忽略不参与处理的生命周期事件，仅用于满足 SDK 的注册要求。"""
+        return
 
     return (
         handler_class.builder("", "")
@@ -282,6 +290,11 @@ def _build_event_dispatcher(handler_class, receive):
 
 
 def run_feishu_runtime(spec, control, watchdog) -> None:
+    """在独立事件循环中运行飞书长连接 worker，直到收到停止信号。
+
+    启动前校验 lark-channel-sdk 契约版本与绑定的启动栅栏（状态、配置版本、凭据）；
+    收到消息即写入收件箱，NACK 时抛错让 SDK 重投，STAGED 时上报事件主键。
+    """
     if importlib.metadata.version("lark-channel-sdk") != SDK_CONTRACT_VERSION:
         raise RuntimeError(f"lark-channel-sdk must be exactly {SDK_CONTRACT_VERSION}")
     database_path = Path(spec.database_path).expanduser().resolve()
@@ -312,6 +325,7 @@ def run_feishu_runtime(spec, control, watchdog) -> None:
     from lark_channel.ws.const import HEADER_MESSAGE_ID, HEADER_TRACE_ID
 
     def receive(event) -> None:
+        """收到飞书事件后规整并写入收件箱，NACK 直接抛错以触发 SDK 重投。"""
         normalized = _normalize_event(event, bot_open_id=bot_open_id)
         if normalized is None:
             return
@@ -333,11 +347,14 @@ def run_feishu_runtime(spec, control, watchdog) -> None:
     dispatcher = _build_event_dispatcher(EventDispatcherHandler, receive)
 
     class ProductionClient(WsClient):
+        """生产环境 WebSocket 客户端：向控制面广播连接状态，并用看门狗跟踪数据帧。"""
         async def _connect(self) -> None:
+            """建立连接后向控制面上报 CONNECTED。"""
             await super()._connect()
             control.emit("CONNECTED")
 
         async def _handle_data_frame(self, frame) -> None:
+            """处理数据帧前后用 message_id + trace_id 令牌武装、解除看门狗。"""
             token = ":".join(
                 (
                     _get_by_key(frame.headers, HEADER_MESSAGE_ID),
@@ -350,13 +367,16 @@ def run_feishu_runtime(spec, control, watchdog) -> None:
             watchdog.disarm(token)
 
         async def _disconnect_and_reconnect(self, *, expected_conn=None):
+            """断线重连前上报 DISCONNECTED，再交回父类执行重连。"""
             control.emit("DISCONNECTED")
             return await super()._disconnect_and_reconnect(expected_conn=expected_conn)
 
     client = ProductionClient(app_id, app_secret, event_handler=dispatcher)
 
     def request_stop() -> None:
+        """请求停止运行时：关闭自动重连、断开客户端并停止事件循环。"""
         async def shutdown() -> None:
+            """在事件循环内停用自动重连并断开客户端，最后停止 loop。"""
             client._auto_reconnect = False
             try:
                 await client._disconnect()

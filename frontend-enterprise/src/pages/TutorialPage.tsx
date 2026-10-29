@@ -189,6 +189,12 @@ const ARCHITECTURE_LAYERS = [
   ['观测层', 'Trace、事件日志和反馈分析让每次执行都能被追踪和改进。'],
 ];
 
+/**
+ * 教学文档单页：渲染产品介绍、安装步骤、核心功能、架构与 FAQ 等章节。
+ *
+ * - 挂载时按 URL hash 定位章节，并对 hash 做一次安全解码。
+ * - 滚动前临时关闭平滑滚动，避免首屏定位出现动画抖动。
+ */
 export default function TutorialPage() {
   useEffect(() => {
     const rawHash = window.location.hash.slice(1);
@@ -495,6 +501,7 @@ export default function TutorialPage() {
   );
 }
 
+/** 渲染章节标题区：统一的英文眉标、中文标题与说明文案。 */
 function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: string; body: string }) {
   return (
     <div className="tutorial-doc-section-heading">

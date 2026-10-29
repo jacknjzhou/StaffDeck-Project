@@ -9,7 +9,7 @@ from app.capability_scope import CapabilityScope
 
 
 class SkillCapabilityRefs(BaseModel):
-    """Capabilities explicitly exposed while this SOP node is active."""
+    """SOP 节点生效期间显式暴露的能力引用集合（通用技能、工具、知识库）。"""
 
     general_skill_ids: list[str] = Field(default_factory=list)
     tool_ids: list[str] = Field(default_factory=list)
@@ -20,6 +20,7 @@ class SkillCapabilityRefs(BaseModel):
 
     @model_validator(mode="after")
     def validate_required_refs(self) -> "SkillCapabilityRefs":
+        """校验 required_* 必选能力都包含在对应已选能力列表中，否则抛 ValueError。"""
         pairs = (
             ("required_general_skill_ids", self.required_general_skill_ids, self.general_skill_ids),
             ("required_tool_ids", self.required_tool_ids, self.tool_ids),
@@ -40,6 +41,8 @@ class SkillCapabilityRefs(BaseModel):
 
 
 class SkillGraphNode(BaseModel):
+    """SOP 图中的单个节点：类型、指令、槽位期望、能力引用与人工处理人。"""
+
     node_id: str
     type: str = "collect_info"
     name: str
@@ -62,6 +65,8 @@ class SkillGraphNode(BaseModel):
 
 
 class SkillGraphEdge(BaseModel):
+    """SOP 图的有向边：源/目标节点、流转条件、优先级与展示标签。"""
+
     source_node_id: str
     next_node_id: str
     condition: Optional[str] = None
@@ -70,6 +75,8 @@ class SkillGraphEdge(BaseModel):
 
 
 class SkillCard(BaseModel):
+    """SOP 技能卡的完整定义：元数据、触发意图、节点边图与中断策略；写入即严格校验。"""
+
     model_config = ConfigDict(extra="forbid")
 
     skill_id: str
@@ -93,6 +100,11 @@ class SkillCard(BaseModel):
 
     @model_validator(mode="after")
     def validate_graph(self) -> "SkillCard":
+        """写入时校验图结构不变量。
+
+        要求至少一个节点、node_id 唯一、起点与终态节点存在、边两端均存在；
+        subflow 节点被归一化为只保留 sub_sop_id，避免父图重复执行子流程工作。
+        """
         if not self.nodes:
             raise ValueError("Skill graph requires at least one node.")
         node_ids = [node.node_id for node in self.nodes]
@@ -138,12 +150,10 @@ class SkillCard(BaseModel):
 
 
 def skill_card_from_persisted(value: Any) -> SkillCard:
-    """Load legacy persisted SOP data without weakening write-time validation.
+    """加载历史持久化的 SOP 数据，同时不放松写入期校验。
 
-    Older StaffDeck versions allowed a required capability to be stored without
-    also listing it among the node's selected capabilities. Required capabilities
-    are necessarily visible to the node, so promote those legacy references before
-    applying the current strict SkillCard schema.
+    旧版本允许节点存储 required_* 必选能力却没写进对应已选能力；必选能力必然对
+    节点可见，故在校验前先把它并入已选列表，再按当前严格 SkillCard 校验。
     """
 
     if not isinstance(value, dict):
@@ -175,6 +185,8 @@ def skill_card_from_persisted(value: Any) -> SkillCard:
 
 
 class ToolSuggestion(BaseModel):
+    """技能蒸馏/改写时模型给出的工具建议，含探测结果与是否已存在的匹配信息。"""
+
     name: str
     display_name: Optional[str] = None
     description: Optional[str] = None
@@ -195,18 +207,24 @@ class ToolSuggestion(BaseModel):
 
 
 class SkillCreateRequest(BaseModel):
+    """创建技能的请求体：租户、技能卡内容与初始状态。"""
+
     tenant_id: str
     content: SkillCard
     status: Literal["draft", "published", "archived"] = "draft"
 
 
 class SkillUpdateRequest(BaseModel):
+    """更新技能的请求体：租户、技能卡内容与可选的新状态。"""
+
     tenant_id: str
     content: SkillCard
     status: Optional[Literal["draft", "published", "archived"]] = None
 
 
 class SkillRead(BaseModel):
+    """技能读取视图：技能卡内容、状态、调用与反馈统计、版本与分支信息。"""
+
     id: str
     tenant_id: str
     skill_id: str
@@ -245,6 +263,8 @@ class SkillRead(BaseModel):
 
 
 class SkillVersionRead(BaseModel):
+    """技能历史版本读取视图：版本内容、状态、统计指标与分支同步信息。"""
+
     id: str
     tenant_id: str
     skill_id: str
@@ -269,6 +289,8 @@ class SkillVersionRead(BaseModel):
 
 
 class SkillDistillRequest(BaseModel):
+    """技能蒸馏请求：原始素材、可选模型与可用的工具/技能/知识库清单。"""
+
     tenant_id: str
     agent_id: Optional[str] = None
     title: str
@@ -281,12 +303,16 @@ class SkillDistillRequest(BaseModel):
 
 
 class SkillDistillResponse(BaseModel):
+    """技能蒸馏结果：草稿技能卡、告警与工具建议。"""
+
     draft_skill: SkillCard
     warnings: list[str] = Field(default_factory=list)
     tool_suggestions: list[ToolSuggestion] = Field(default_factory=list)
 
 
 class SkillRewriteRequest(BaseModel):
+    """技能改写请求：当前技能卡、改写指令、目标路径与对话上下文。"""
+
     tenant_id: str
     agent_id: Optional[str] = None
     current_skill: SkillCard
@@ -301,6 +327,8 @@ class SkillRewriteRequest(BaseModel):
 
 
 class SkillRewriteResponse(BaseModel):
+    """技能改写结果：草稿技能卡、助手回复、变更路径、告警与工具建议。"""
+
     draft_skill: SkillCard
     assistant_message: str
     changed_paths: list[str] = Field(default_factory=list)
@@ -309,10 +337,14 @@ class SkillRewriteResponse(BaseModel):
 
 
 class SkillFileExtractRequest(BaseModel):
+    """技能素材文件解析请求：文件名与 base64 编码的文件内容。"""
+
     filename: str
     content_base64: str
 
 
 class SkillFileExtractResponse(BaseModel):
+    """技能素材文件解析结果：文件名与抽取出的纯文本。"""
+
     filename: str
     text: str

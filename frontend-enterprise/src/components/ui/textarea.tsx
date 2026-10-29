@@ -3,6 +3,13 @@ import * as React from "react"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
 
+/**
+ * 多行文本输入框组件，基于原生 textarea 封装统一样式。
+ *
+ * - 触发时机：由使用方在表单、对话等场景中渲染，受控与非受控模式均可用。
+ * - 副作用：通过 useI18n 对 placeholder、title、aria-label 文本做 i18n 翻译。
+ * - 返回语义：返回带 data-slot="textarea" 的元素，className 与内置样式合并后生效。
+ */
 function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
   const { t } = useI18n()
   const localizedProps = {

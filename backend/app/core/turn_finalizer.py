@@ -11,7 +11,7 @@ ExecutionFinalizeState = Literal["handoff", "completed", "continued"]
 
 
 class TurnFinalizer:
-    """Applies the Harness v2 post-reply terminal decision and event ordering."""
+    """在 Harness v2 回复结束后统一落地终止决策，并保持事件写入顺序一致。"""
 
     @staticmethod
     def finalize(
@@ -31,6 +31,11 @@ class TurnFinalizer:
         ],
         complete_skill: Callable[[str, ChatSession, Skill | None, str], None],
     ) -> ExecutionFinalizeState:
+        """按 v2 规则决定本轮以转人工、完结技能还是续接状态收尾。
+
+        转人工请求只有当前步骤声明允许时才创建 handoff，否则补记
+        human_handoff_ignored 事件后继续判定是否完结；外部副作用全部经注入的回调完成。
+        """
         requested_handoff = router_decision.decision == "handoff_human" or step_result.handoff
         if requested_handoff:
             if not current_step_allows_handoff(active_skill, chat_session.active_step_id):

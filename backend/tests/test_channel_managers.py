@@ -19,6 +19,7 @@ from app.security.auth import create_access_token
 
 
 def _engine():
+    """创建共享连接的内存 SQLite 引擎并建表，供渠道接口测试复用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -29,10 +30,12 @@ def _engine():
 
 
 def _client(engine) -> TestClient:
+    """构建挂载渠道路由的测试应用，并用内存引擎覆盖数据库会话依赖。"""
     app = FastAPI()
     app.include_router(channels_api.router)
 
     def override_session():
+        """覆盖数据库依赖，为每个请求提供独立的 Session。"""
         with Session(engine) as db:
             yield db
 
@@ -41,6 +44,7 @@ def _client(engine) -> TestClient:
 
 
 def _seed(engine) -> dict[str, User]:
+    """写入租户、所有者、普通用户、管理员与外部用户，返回按角色索引的字典。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         owner = User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x")
@@ -65,6 +69,7 @@ def _seed(engine) -> dict[str, User]:
 
 
 def _auth(user: User) -> dict[str, str]:
+    """生成携带该用户身份的 Bearer 认证请求头。"""
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
@@ -75,6 +80,7 @@ def _seed_binding(
     created_by: str = "user_owner",
     status: str = "active",
 ) -> str:
+    """插入一条渠道绑定记录，返回其 id 供后续接口调用使用。"""
     with Session(engine) as db:
         binding = ChannelBinding(
             tenant_id="tenant_demo",
@@ -89,6 +95,7 @@ def _seed_binding(
 
 
 def _add_collaborator(engine, binding_id: str, user_id: str, *, granted_by: str = "user_owner") -> None:
+    """直接写入一条协作者授权记录，绕开接口校验以构造前置状态。"""
     with Session(engine) as db:
         db.add(
             ChannelBindingManager(
@@ -102,6 +109,7 @@ def _add_collaborator(engine, binding_id: str, user_id: str, *, granted_by: str 
 
 
 def test_collaborator_can_save_feishu_credentials(monkeypatch) -> None:
+    """验证协作者提交飞书凭据后待激活绑定转为 active，且自身角色为 collaborator。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -129,6 +137,7 @@ def test_collaborator_can_save_feishu_credentials(monkeypatch) -> None:
 
 
 def test_collaborator_can_manage_agents() -> None:
+    """验证协作者可修改绑定的路由配置，并拿到更新后的 auto_route。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -145,6 +154,7 @@ def test_collaborator_can_manage_agents() -> None:
 
 
 def test_collaborator_can_toggle_status(monkeypatch) -> None:
+    """验证协作者可反复切换绑定状态，在 disabled 与 active 之间往返。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -168,6 +178,7 @@ def test_collaborator_can_toggle_status(monkeypatch) -> None:
 
 
 def test_manager_can_invite_internal_user_to_bind_identity() -> None:
+    """验证管理者可为内部用户生成 6 位身份绑定码，且无权者发起邀请返回 403。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -203,6 +214,7 @@ def test_manager_can_invite_internal_user_to_bind_identity() -> None:
 
 
 def test_collaborator_cannot_delete(monkeypatch) -> None:
+    """验证协作者删除绑定返回 403，删除权限仅限所有者或管理员。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -218,6 +230,7 @@ def test_collaborator_cannot_delete(monkeypatch) -> None:
 
 
 def test_collaborator_cannot_manage_managers() -> None:
+    """验证协作者无权新增其他协作者，请求返回 403。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -233,6 +246,7 @@ def test_collaborator_cannot_manage_managers() -> None:
 
 
 def test_non_collaborator_forbidden() -> None:
+    """验证未被授权的用户修改绑定时返回 403。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -247,6 +261,7 @@ def test_non_collaborator_forbidden() -> None:
 
 
 def test_list_visible_to_collaborator_and_my_role() -> None:
+    """验证列表按身份返回 my_role，且未授权用户看不到该绑定。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -284,6 +299,7 @@ def test_list_visible_to_collaborator_and_my_role() -> None:
 
 
 def test_add_remove_collaborator_revokes_access() -> None:
+    """验证移除协作者后其访问被收回，重新添加后权限恢复。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -329,6 +345,7 @@ def test_add_remove_collaborator_revokes_access() -> None:
 
 
 def test_add_collaborator_validations() -> None:
+    """验证新增协作者对创建者、管理员、不存在用户与重复授权分别返回 400 或 409。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -373,6 +390,7 @@ def test_add_collaborator_validations() -> None:
 
 
 def test_admin_can_manage_managers() -> None:
+    """验证租户管理员可为绑定新增协作者。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)
@@ -387,6 +405,7 @@ def test_admin_can_manage_managers() -> None:
 
 
 def test_list_managers() -> None:
+    """验证协作者列表返回用户 id、名称与授权人信息。"""
     engine = _engine()
     users = _seed(engine)
     client = _client(engine)

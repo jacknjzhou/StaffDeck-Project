@@ -23,6 +23,7 @@ from app.llm.model_protocols import (
 
 
 def _session() -> Session:
+    """创建绑定内存 SQLite 的会话，让每个用例使用独立的模型配置库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -33,6 +34,7 @@ def _session() -> Session:
 
 
 def _row(**overrides) -> ModelConfig:
+    """构造字段齐全的模型配置行，便于用例只覆盖关心的字段。"""
     values = {
         "id": "model_a",
         "tenant_id": "tenant_a",
@@ -52,6 +54,7 @@ def _row(**overrides) -> ModelConfig:
 
 
 def test_protocol_boundary_accepts_only_chat_compatibility() -> None:
+    """验证兼容提供商缺省映射为 chat completions，其他提供商报 MODEL_PROVIDER_UNSUPPORTED。"""
     assert resolve_api_protocol(None, "openai_compatible") == (
         ModelApiProtocol.OPENAI_CHAT_COMPLETIONS
     )
@@ -61,6 +64,7 @@ def test_protocol_boundary_accepts_only_chat_compatibility() -> None:
 
 
 def test_chat_thinking_options_are_strictly_typed() -> None:
+    """验证 thinking 选项只接受白名单字段，多余字段报 MODEL_PROTOCOL_OPTIONS_INVALID。"""
     assert normalize_chat_protocol_options(
         {"thinking": {"type": "disabled", "clear_thinking": True}}
     ) == {"thinking": {"type": "disabled", "clear_thinking": True}}
@@ -70,6 +74,7 @@ def test_chat_thinking_options_are_strictly_typed() -> None:
 
 
 def test_fingerprint_normalizes_equivalent_base_urls() -> None:
+    """验证 base_url 的大小写、默认端口与尾斜杠差异不改变配置指纹。"""
     common = {
         "api_protocol": "openai_chat_completions",
         "model": "model-a",
@@ -83,6 +88,7 @@ def test_fingerprint_normalizes_equivalent_base_urls() -> None:
 
 
 def test_runtime_resolver_preserves_legacy_chat_options_as_read_only() -> None:
+    """验证运行时解析把旧版 chat 选项规整为只读映射，并保留 legacy_extra_body。"""
     with _session() as db:
         db.add(_row())
         db.commit()
@@ -99,6 +105,7 @@ def test_runtime_resolver_preserves_legacy_chat_options_as_read_only() -> None:
 
 
 def test_verification_resolver_preserves_provider_extra_body() -> None:
+    """验证校验解析在模型未启用时仍可读取，并原样保留提供商 extra_body。"""
     with _session() as db:
         db.add(
             _row(
@@ -121,6 +128,7 @@ def test_verification_resolver_preserves_provider_extra_body() -> None:
 
 
 def test_runtime_resolver_rejects_unverified_but_verification_resolver_allows_it() -> None:
+    """验证运行时解析拒绝未验证模型（MODEL_CONFIG_DISABLED），校验解析允许同一条记录。"""
     with _session() as db:
         db.add(
             _row(
@@ -143,6 +151,7 @@ def test_runtime_resolver_rejects_unverified_but_verification_resolver_allows_it
 
 
 def test_verified_runtime_requires_matching_fingerprint() -> None:
+    """验证已验证模型的指纹过期时要求重新校验（MODEL_CONFIG_VERIFICATION_REQUIRED）。"""
     with _session() as db:
         db.add(_row(trust_status="verified", verified_fingerprint="stale"))
         db.commit()
@@ -153,6 +162,7 @@ def test_verified_runtime_requires_matching_fingerprint() -> None:
 
 
 def test_all_implemented_protocols_are_available() -> None:
+    """验证已实现的四种协议全部出现在可用协议列表中，且顺序固定。"""
     assert available_model_protocols() == [
         "openai_chat_completions",
         "openai_responses",
@@ -162,6 +172,7 @@ def test_all_implemented_protocols_are_available() -> None:
 
 
 def test_snapshot_model_config_preserves_anthropic_protocol_and_options() -> None:
+    """验证快照保留 Anthropic 协议枚举，且不放大最小输出 token 上限。"""
     from app.llm.model_config_resolver import snapshot_model_config
 
     row = _row(

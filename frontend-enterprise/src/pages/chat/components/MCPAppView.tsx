@@ -38,6 +38,11 @@ type AppMessage = JsonRpcRequest & {
   method?: string;
 };
 
+/**
+ * 在沙箱 iframe 中渲染 MCP App 的 UI 资源，并充当其与后端之间的 JSON-RPC 宿主。
+ *
+ * 加载失败时降级为提示文案；挂载后监听 iframe 的 ui/initialize 与 tools/call 请求。
+ */
 export default function MCPAppView({ descriptor }: { descriptor: MCPAppViewDescriptor }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [resource, setResource] = useState<AppResource | null>(null);
@@ -70,6 +75,11 @@ export default function MCPAppView({ descriptor }: { descriptor: MCPAppViewDescr
 
   useEffect(() => {
     if (!resource) return undefined;
+    /**
+     * 处理来自 iframe 的 postMessage：先校验消息来源与 JSON-RPC 结构。
+     *
+     * ui/initialize 请求直接返回宿主能力；tools/call 请求转交 callTool 异步执行。
+     */
     const onMessage = (event: MessageEvent<unknown>) => {
       if (event.source !== iframeRef.current?.contentWindow || !isAppMessage(event.data)) return;
       const request = event.data;
@@ -86,6 +96,11 @@ export default function MCPAppView({ descriptor }: { descriptor: MCPAppViewDescr
       }
     };
 
+    /**
+     * 代 iframe 调用后端 MCP 工具，并把结果或错误回传为 JSON-RPC 响应。
+     *
+     * 若后端要求确认副作用，先弹窗征求用户同意，拒绝时返回 -32001 错误。
+     */
     const callTool = async (request: JsonRpcRequest) => {
       const params = request.params || {};
       const toolName = typeof params.name === 'string' ? params.name : descriptor.tool_name;
@@ -125,9 +140,11 @@ export default function MCPAppView({ descriptor }: { descriptor: MCPAppViewDescr
       }
     };
 
+    /** 以 JSON-RPC 2.0 格式向 iframe 回送成功结果。 */
     const postRpcResult = (id: JsonRpcRequest['id'], result: unknown) => {
       iframeRef.current?.contentWindow?.postMessage({ jsonrpc: '2.0', id, result }, '*');
     };
+    /** 以 JSON-RPC 2.0 格式向 iframe 回送错误码与错误信息。 */
     const postRpcError = (id: JsonRpcRequest['id'], code: number, message: string) => {
       iframeRef.current?.contentWindow?.postMessage({ jsonrpc: '2.0', id, error: { code, message } }, '*');
     };
@@ -136,6 +153,7 @@ export default function MCPAppView({ descriptor }: { descriptor: MCPAppViewDescr
     return () => window.removeEventListener('message', onMessage);
   }, [descriptor, resource]);
 
+  /** iframe 加载完成后，把本轮初始工具结果以两种通知格式推送给 App。 */
   const notifyInitialResult = () => {
     const params = {
       content: descriptor.initial_result,
@@ -176,14 +194,21 @@ export default function MCPAppView({ descriptor }: { descriptor: MCPAppViewDescr
   );
 }
 
+/** 判断任意值是否为非数组的普通对象，用作类型守卫。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** 判断消息是否为带 method 字段的 App 侧请求，用作类型守卫。 */
 function isAppMessage(value: unknown): value is AppMessage {
   return isRecord(value) && typeof value.method === 'string';
 }
 
+/**
+ * 按 App 声明的 CSP 域名白名单生成 Content-Security-Policy，并注入到 HTML 的 head 中。
+ *
+ * 已有 head 时仅插入 meta；否则包装成完整的 doctype 文档。
+ */
 function injectContentSecurityPolicy(html: string, csp: Record<string, string[]>): string {
   const resourceDomains = csp.resourceDomains || [];
   const connectDomains = csp.connectDomains || [];
@@ -202,6 +227,7 @@ function injectContentSecurityPolicy(html: string, csp: Record<string, string[]>
   return `<!doctype html><html><head>${meta}</head><body>${html}</body></html>`;
 }
 
+/** 转义 HTML 属性值中的 & 与双引号，避免注入到 CSP meta 时破坏标签结构。 */
 function escapeHtmlAttribute(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }

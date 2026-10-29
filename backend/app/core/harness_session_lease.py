@@ -20,11 +20,13 @@ SESSION_LEASE_SECONDS = 900
 
 
 class HarnessSessionLeaseLost(RuntimeError):
-    pass
+    """会话执行租约已被其他 worker 接管或丢失,当前 worker 必须立即停止写入。"""
 
 
 @dataclass(frozen=True)
 class HarnessSessionLeaseToken:
+    """一次已持有的会话租约凭据,供续期、释放与 owner fencing 比对使用。"""
+
     record_id: str
     tenant_id: str
     session_id: str
@@ -32,12 +34,14 @@ class HarnessSessionLeaseToken:
 
 
 class HarnessSessionLeaseStore:
-    """Database-backed session mutex with owner fencing and expiration."""
+    """基于数据库的会话互斥锁,支持 owner fencing 与到期接管。"""
 
     def __init__(self, db: Session) -> None:
+        """绑定本次租约操作使用的数据库会话,构造时不开启事务。"""
         self.db = db
 
     def acquire(self, session: ChatSession) -> HarnessSessionLeaseToken:
+        """插入租约行抢占会话执行权,唯一约束冲突时转去接管已过期租约。"""
         now = utc_now()
         row = HarnessSessionLeaseRecord(
             tenant_id=session.tenant_id,
@@ -54,6 +58,7 @@ class HarnessSessionLeaseStore:
         return _token(row)
 
     def renew(self, lease: HarnessSessionLeaseToken | None) -> None:
+        """按 owner 原子续期租约,记录已被接管或过期时抛 HarnessSessionLeaseLost。"""
         if lease is None:
             raise HarnessSessionLeaseLost("Harness session lease is missing.")
         now = utc_now()
@@ -81,6 +86,7 @@ class HarnessSessionLeaseStore:
         self.db.flush()
 
     def release(self, lease: HarnessSessionLeaseToken | None) -> None:
+        """按 owner 删除租约行并提交,lease 为 None 时不做任何事。"""
         if lease is None:
             return
         self.db.rollback()
@@ -96,6 +102,7 @@ class HarnessSessionLeaseStore:
         self,
         session: ChatSession,
     ) -> HarnessSessionLeaseToken:
+        """接管已过期的租约行;抢不到则抛 HarnessSessionBusy,阻止并发执行。"""
         now = utc_now()
         owner = new_id("hsleaseowner")
         result = self.db.exec(
@@ -130,6 +137,7 @@ class HarnessSessionLeaseStore:
 
 
 def _token(row: HarnessSessionLeaseRecord) -> HarnessSessionLeaseToken:
+    """把租约记录投影成不可变 token,只暴露续期与释放所需的标识。"""
     return HarnessSessionLeaseToken(
         record_id=row.id,
         tenant_id=row.tenant_id,

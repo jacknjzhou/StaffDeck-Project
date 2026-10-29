@@ -14,6 +14,7 @@ def test_run_skill_script_uses_typed_argv_for_materialized_python(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证投递给沙箱进程的 argv 由脚本路径与原始参数组成，并透传 stdin。"""
     package = tmp_path / ".harness" / "skill-packages" / "demo-digest"
     package.mkdir(parents=True)
     script = package / "runner.py"
@@ -21,6 +22,7 @@ def test_run_skill_script_uses_typed_argv_for_materialized_python(
     captured: dict[str, object] = {}
 
     def fake_run_sandboxed_process(**kwargs: object):
+        """记录沙箱调用参数并返回成功的伪造进程结果。"""
         captured.update(kwargs)
         return SimpleNamespace(
             returncode=0,
@@ -75,6 +77,7 @@ def test_run_skill_script_reports_nonzero_exit_as_failed_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证脚本非零退出时工具调用仍成功，但状态标记为 failed 并带退出码。"""
     package = tmp_path / ".harness" / "skill-packages" / "demo-digest"
     package.mkdir(parents=True)
     script = package / "runner.py"

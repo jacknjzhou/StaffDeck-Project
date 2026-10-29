@@ -16,6 +16,13 @@ export function formatHandoffAssigneeValue(
     : userId;
 }
 
+/**
+ * 解析处理人下拉框取值为用户与渠道。
+ *
+ * - 空串返回空 userId 与 null 渠道,表示未指定处理人;
+ * - 不含分隔符时视为纯 user_id,渠道按网页端(web)处理;
+ * - 分隔符两侧任一为空时回退为整串 user_id + web,避免投递到非法渠道。
+ */
 export function parseHandoffAssigneeValue(value: string): {
   userId: string;
   channel: string | null;

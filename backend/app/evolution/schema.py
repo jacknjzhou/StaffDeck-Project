@@ -9,6 +9,8 @@ EvolutionResourceType = Literal["sop", "general_skill"]
 
 
 class EvolutionAnalyzeRequest(BaseModel):
+    """演化分析请求：指定待分析资源与反馈集合，可附补充指令引导分析方向。"""
+
     tenant_id: str
     resource_type: EvolutionResourceType | None = None
     resource_id: str | None = None
@@ -17,15 +19,21 @@ class EvolutionAnalyzeRequest(BaseModel):
 
 
 class EvolutionRejectRequest(BaseModel):
+    """驳回演化提案的请求体；reason 缺省为空串，表示未注明驳回原因。"""
+
     tenant_id: str
     reason: str = ""
 
 
 class EvolutionActionRequest(BaseModel):
+    """演化提案通用操作（发布、回滚等）的请求体，仅需携带租户标识。"""
+
     tenant_id: str
 
 
 class EvolutionProposalRead(BaseModel):
+    """演化提案的对外读取模型：提案元数据、候选内容、差异与评估结论。"""
+
     id: str
     tenant_id: str
     agent_id: str

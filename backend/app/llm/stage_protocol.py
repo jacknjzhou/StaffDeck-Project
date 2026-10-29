@@ -127,6 +127,7 @@ REFLECTION_OUTPUT_SCHEMA: dict[str, Any] = {
 
 
 def unified_system_prompt() -> str:
+    """读取资源目录中的统一 agent 提示词，去掉首尾空白后作为所有阶段的系统提示词。"""
     return UNIFIED_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
@@ -140,6 +141,11 @@ def stage_payload(
     stage_data: dict[str, Any],
     output_contract: dict[str, Any] | str,
 ) -> dict[str, Any]:
+    """组装某一阶段（Router/TurnPlanner 等）的用户轮载荷。
+
+    阶段协议块写入 phase、instructions、输出约束与本轮时间；记忆文本只在
+    Router、TurnPlanner 阶段注入，避免下游阶段重复消耗上下文。
+    """
     metadata = (
         conversation_context.get("metadata", {})
         if isinstance(conversation_context, dict)
@@ -172,7 +178,11 @@ def stage_payload(
 def render_stage_user_message(
     user_payload: dict[str, Any], *, include_turn_header: bool = True
 ) -> str:
-    """Render the exact stage input sent as the current user message."""
+    """把阶段载荷渲染成实际发给模型的用户消息文本，用于调试与提示词回放。
+
+    conversation_context 不进入正文，仅按需附带用户记忆、本轮时间与输入；
+    空值字段会被投影掉，输出约束已序列化则原样透传。
+    """
     payload = copy.deepcopy(
         {
             key: value
@@ -214,6 +224,7 @@ def render_stage_user_message(
 
 
 def _memory_text(items: list[dict[str, object]]) -> str:
+    """把记忆条目压成去重、去多余空白的多行 Markdown 列表，供提示词直接拼接。"""
     lines: list[str] = []
     for item in items:
         if not isinstance(item, dict):
@@ -226,6 +237,7 @@ def _memory_text(items: list[dict[str, object]]) -> str:
 
 
 def _drop_empty_values(value: Any) -> Any:
+    """递归剔除 None、空串、空列表与空字典，让阶段载荷只保留有内容的字段。"""
     if isinstance(value, dict):
         projected = {key: _drop_empty_values(item) for key, item in value.items()}
         return {

@@ -41,6 +41,7 @@ from app.db.models import (
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 会话并建表，确保各用例数据相互隔离。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -51,6 +52,7 @@ def _test_session() -> Session:
 
 
 def _seed(db: Session) -> dict[str, User]:
+    """写入租户、用户、员工与多种来源的会话，返回按角色索引的用户字典。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     admin = User(
         id="admin_user", tenant_id="tenant_demo", username="admin", role="admin", password_hash="x"
@@ -124,6 +126,7 @@ def _seed(db: Session) -> dict[str, User]:
 
 
 def test_agent_creator_sees_all_sessions_of_the_agent() -> None:
+    """验证员工创建者能看到该员工下所有成员的会话。"""
     with _test_session() as db:
         users = _seed(db)
         rows = list_sessions(
@@ -134,6 +137,7 @@ def test_agent_creator_sees_all_sessions_of_the_agent() -> None:
 
 
 def test_admin_sees_all_sessions_with_agent_id() -> None:
+    """验证管理员按 agent_id 能看到该员工的全部会话。"""
     with _test_session() as db:
         users = _seed(db)
         rows = list_sessions(
@@ -143,6 +147,7 @@ def test_admin_sees_all_sessions_with_agent_id() -> None:
 
 
 def test_member_only_sees_own_sessions() -> None:
+    """验证普通成员仅能看到自己的会话，管理员不带 agent_id 时结果也为空。"""
     with _test_session() as db:
         users = _seed(db)
         rows = list_sessions(
@@ -156,6 +161,7 @@ def test_member_only_sees_own_sessions() -> None:
 
 
 def test_enterprise_logs_keep_pilotdeck_sessions_visible() -> None:
+    """验证企业日志场景下 PilotDeck 来源会话仍对成员可见。"""
     with _test_session() as db:
         users = _seed(db)
         db.add(
@@ -188,6 +194,7 @@ def test_enterprise_logs_keep_pilotdeck_sessions_visible() -> None:
 
 
 def test_overall_agent_never_opens_to_non_admin() -> None:
+    """验证整体员工的会话只对管理员完全开放，成员仅能看到自己的会话。"""
     with _test_session() as db:
         users = _seed(db)
         # member 即使提供 agent_id 也仅见自己的整体员工会话
@@ -208,6 +215,7 @@ def test_overall_agent_never_opens_to_non_admin() -> None:
 
 
 def test_detail_allowed_for_owner_admin_and_agent_creator() -> None:
+    """验证会话详情对属主、管理员与员工创建者开放。"""
     with _test_session() as db:
         users = _seed(db)
         # 会话属主
@@ -228,6 +236,7 @@ def test_detail_allowed_for_owner_admin_and_agent_creator() -> None:
 
 
 def test_detail_404_for_other_members() -> None:
+    """验证其他成员访问他人会话详情时返回 404。"""
     with _test_session() as db:
         users = _seed(db)
         with pytest.raises(HTTPException) as exc_info:
@@ -241,6 +250,7 @@ def test_detail_404_for_other_members() -> None:
 
 
 def test_single_session_json_export_contains_complete_log_envelope() -> None:
+    """验证单会话 JSON 导出包含消息、反馈、事件与工具调用等完整信封字段。"""
     with _test_session() as db:
         users = _seed(db)
         db.add_all(
@@ -316,6 +326,7 @@ def test_single_session_json_export_contains_complete_log_envelope() -> None:
 
 
 def test_batch_json_export_preserves_order_deduplicates_and_checks_visibility() -> None:
+    """验证批量导出按入参顺序去重，并对越权会话返回 404。"""
     with _test_session() as db:
         users = _seed(db)
         response = export_session_logs(
@@ -346,6 +357,7 @@ def test_batch_json_export_preserves_order_deduplicates_and_checks_visibility() 
 
 
 def test_reset_allowed_for_agent_creator_and_admin_only() -> None:
+    """验证重置会话仅员工创建者与管理员可用，并清空技能与槽位。"""
     with _test_session() as db:
         users = _seed(db)
         with pytest.raises(HTTPException) as exc_info:
@@ -370,6 +382,7 @@ def test_reset_allowed_for_agent_creator_and_admin_only() -> None:
 
 
 def test_reset_clears_harness_execution_state_and_preserves_turn_receipt() -> None:
+    """验证重置会清空 Harness 执行状态，同时把轮次回执标记为 cancelled。"""
     with _test_session() as db:
         users = _seed(db)
         row = db.get(ChatSession, "session_channel")
@@ -438,6 +451,7 @@ def test_reset_clears_harness_execution_state_and_preserves_turn_receipt() -> No
 
 
 def test_augment_fields_channel_and_identity() -> None:
+    """验证会话列表与详情都会补充渠道及会话用户身份字段。"""
     with _test_session() as db:
         users = _seed(db)
         rows = list_sessions(
@@ -464,6 +478,7 @@ def test_augment_fields_channel_and_identity() -> None:
 
 
 def test_feedback_scope_matches_agent_session_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证反馈列表、详情与重分析沿用会话可见性规则并校验租户。"""
     with _test_session() as db:
         users = _seed(db)
         db.add_all(

@@ -25,12 +25,14 @@ import { EnterpriseRoute } from '../enums/routes';
 import { parseBackendDateTime } from '../lib/timezone';
 import type { AgentProfileRead, TeamRead, TeamThreadRead } from '../types';
 
+/** 将团队状态码转换为中文展示文案，未知状态原样返回。 */
 export function teamStatusLabel(status: string): string {
   if (status === 'active') return '正常';
   if (status === 'archived') return '已归档';
   return status;
 }
 
+/** 将任务状态码转换为中文展示文案，未知状态原样返回。 */
 export function taskStatusLabel(status: string): string {
   if (status === 'bidding') return '竞标中';
   if (status === 'pending') return '待认领';
@@ -42,6 +44,7 @@ export function taskStatusLabel(status: string): string {
   return status;
 }
 
+/** 将后端时间格式化为相对时间文案（刚刚 / N 分钟前 / N 天前），超过 7 天回退到本地日期。 */
 export function relativeTimeLabel(iso: string): string {
   const time = parseBackendDateTime(iso).getTime();
   if (Number.isNaN(time)) return '';
@@ -55,6 +58,7 @@ export function relativeTimeLabel(iso: string): string {
   return parseBackendDateTime(iso).toLocaleDateString();
 }
 
+/** 读取团队中角色为 leader 的成员名称，未设置时返回「未设置」。 */
 export function teamLeaderName(team: TeamRead): string {
   const leader = (team.members || []).find((member) => member.role === 'leader');
   return leader?.agent_name || '未设置';
@@ -78,6 +82,7 @@ export type TeamThreadTree = {
 
 const THREAD_TASK_PREFIXES = ['团队任务验收:', '团队任务验收：', '团队任务:', '团队任务：', '团队竞标:', '团队竞标：'];
 
+/** 去掉线程标题中的「团队任务 / 团队竞标 / 团队任务验收」等前缀，用于任务分组标题展示。 */
 function stripThreadPrefix(title: string): string {
   for (const prefix of THREAD_TASK_PREFIXES) {
     if (title.startsWith(prefix)) return title.slice(prefix.length);
@@ -85,6 +90,12 @@ function stripThreadPrefix(title: string): string {
   return title;
 }
 
+/**
+ * 取一组团队线程中最新的 updated_at。
+ *
+ * - 以解析后的时间戳比较，避免 ISO 字符串排序误差。
+ * - 空数组时返回空字符串。
+ */
 function latestOf(items: TeamThreadRead[]): string {
   return items.reduce((latest, item) => {
     const time = parseBackendDateTime(item.updated_at).getTime();
@@ -139,6 +150,12 @@ export function buildThreadTree(threads: TeamThreadRead[]): TeamThreadTree[] {
   return tree;
 }
 
+/**
+ * 我的团队页面：展示团队卡片与团队动态树，并提供创建、开始对话、删除团队等操作。
+ *
+ * - 挂载时加载团队、团队线程与员工列表（员工列表失败只影响成员头像映射）。
+ * - 团队动态默认只展开最近更新的团队，点击箭头可切换展开状态。
+ */
 export default function TeamsPage({
   currentUser,
   onLogout,
@@ -180,6 +197,7 @@ export default function TeamsPage({
   // 默认只展开最新动态的团队，避免动态刷屏
   const expanded = expandedTeams ?? new Set(threadTree.slice(0, 1).map((node) => node.teamId));
 
+  /** 切换指定团队的动态树展开状态，并把新的展开集合写入受控 state。 */
   function toggleTeamExpand(teamId: string) {
     const next = new Set(expanded);
     if (next.has(teamId)) next.delete(teamId);
@@ -187,6 +205,7 @@ export default function TeamsPage({
     setExpandedTeams(next);
   }
 
+  /** 渲染团队动态中的单条线程行，点击后跳转到对应会话或团队任务详情。 */
   function renderThreadRow(thread: TeamThreadRead) {
     return (
       <button
@@ -213,6 +232,7 @@ export default function TeamsPage({
     );
   }
 
+  /** 拉取当前租户的团队列表；失败时弹出错误提示并保留原有数据。 */
   async function load() {
     setLoading(true);
     try {
@@ -225,6 +245,11 @@ export default function TeamsPage({
     }
   }
 
+  /**
+   * 首次挂载时并行加载团队、团队线程与员工列表。
+   *
+   * 员工列表仅用于团队卡片的成员头像映射，失败时降级为空数组。
+   */
   useEffect(() => {
     void load();
     void loadThreads();
@@ -235,6 +260,7 @@ export default function TeamsPage({
       .catch(() => setAgents([]));
   }, []);
 
+  /** 拉取当前租户的团队线程列表；失败时清空线程，避免展示过期动态。 */
   async function loadThreads() {
     try {
       const rows = await api.get<TeamThreadRead[]>(`/api/enterprise/team-threads?tenant_id=${TENANT_ID}`);
@@ -244,6 +270,7 @@ export default function TeamsPage({
     }
   }
 
+  /** 按线程类型跳转：项目领导对话进入聊天页，任务线程进入团队详情并携带 task 查询参数。 */
   function openThread(thread: TeamThreadRead) {
     if (thread.kind === 'tl_chat') {
       navigate(`${EnterpriseRoute.Chat}/${thread.session_id}`);
@@ -253,6 +280,12 @@ export default function TeamsPage({
     navigate(thread.task_id ? `${base}?task=${thread.task_id}` : base);
   }
 
+  /**
+   * 为指定团队创建（或复用）项目领导群聊会话并跳转到聊天页。
+   *
+   * - 请求期间用 startingTeamId 锁定按钮，避免重复创建会话。
+   * - 后端未返回 session_id 时按失败处理并提示。
+   */
   async function startTeamChat(team: TeamRead) {
     if (startingTeamId) return;
     setStartingTeamId(team.id);
@@ -270,6 +303,11 @@ export default function TeamsPage({
     }
   }
 
+  /**
+   * 校验并提交新建团队请求，成功后清空表单、关闭弹窗并刷新列表。
+   *
+   * 团队名称为空时直接提示并中断，不发起请求。
+   */
   async function createTeam() {
     const trimmed = name.trim();
     if (!trimmed) {
@@ -295,6 +333,11 @@ export default function TeamsPage({
     }
   }
 
+  /**
+   * 确认删除当前选中的团队，成功后关闭确认框并刷新列表。
+   *
+   * 删除为级联操作，团队下的任务会一并移除，且不可撤销。
+   */
   async function confirmDelete() {
     const target = deleteTarget;
     if (!target) return;

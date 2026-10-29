@@ -64,6 +64,11 @@ python weather.py -json -today <地区名称>
 
 @pytest.fixture(scope="module", autouse=True)
 def _reviewed_srt_runtime(tmp_path_factory):
+    """准备审查过的沙箱运行时，供模块内所有通用技能测试复用。
+
+    已通过 STAFFDECK_SRT_RUNTIME 指定时直接复用，否则在缺少二进制时下载到临时目录，
+    并在测试结束后还原该环境变量。
+    """
     if os.environ.get("STAFFDECK_SRT_RUNTIME", "").strip():
         yield
         return
@@ -89,6 +94,7 @@ def _reviewed_srt_runtime(tmp_path_factory):
 
 
 def test_runner_accepts_only_explicit_artifact_manifest_files(tmp_path: Path) -> None:
+    """验证产物清单只保留 artifact 目录内显式声明的文件，越界路径与未声明文件被排除。"""
     workspace = tmp_path / "workspace"
     artifact_dir = workspace / "general_skill_test" / "artifacts"
     artifact_dir.mkdir(parents=True)
@@ -119,12 +125,14 @@ def test_runner_accepts_only_explicit_artifact_manifest_files(tmp_path: Path) ->
 
 
 def _system_and_stage_instructions(system_prompt: object, payload: object) -> str:
+    """把系统提示词与阶段指令拼成一段文本，供伪 LLM 按角色关键字分流。"""
     stage = payload.get("_agent_stage", {}) if isinstance(payload, dict) else {}
     instructions = stage.get("instructions", "") if isinstance(stage, dict) else ""
     return f"{system_prompt}\n{instructions}"
 
 
 def test_capability_selector_allows_general_skill_and_knowledge_together(monkeypatch) -> None:
+    """验证能力选择器可以同时启用通用技能与知识库检索。"""
     monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
     monkeypatch.setattr(
         LLMClient,
@@ -157,10 +165,12 @@ def test_capability_selector_allows_general_skill_and_knowledge_together(monkeyp
 
 
 def test_capability_selector_still_checks_knowledge_without_general_skills(monkeypatch) -> None:
+    """验证没有可用通用技能时，选择器仍会判断是否需要知识库检索。"""
     received: dict[str, object] = {}
     monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """记录下发的载荷，并返回固定的能力选择结果。"""
         received.update(payload)
         return {
             "use_general_skill": False,
@@ -182,9 +192,11 @@ def test_capability_selector_still_checks_knowledge_without_general_skills(monke
 
 
 def test_general_skill_reader_does_not_generate_runner_code(monkeypatch) -> None:
+    """验证只读说明器只返回技能介绍，不生成可执行代码。"""
     monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """校验说明器阶段指令后，返回技能介绍的结构化输出。"""
         instructions = payload["_agent_stage"]["instructions"]
         assert "只读说明器" in instructions
         return {
@@ -213,6 +225,7 @@ def test_general_skill_reader_does_not_generate_runner_code(monkeypatch) -> None
 
 
 def test_general_skill_reader_returns_structured_failure(monkeypatch) -> None:
+    """验证模型调用失败时，只读说明器返回结构化失败并记录失败轨迹。"""
     monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
     monkeypatch.setattr(
         LLMClient,
@@ -240,6 +253,7 @@ def test_general_skill_reader_returns_structured_failure(monkeypatch) -> None:
 
 
 def _admin_user() -> User:
+    """构造租户内管理员用户，供接口函数的权限参数使用。"""
     return User(
         id="user_admin",
         tenant_id="tenant_demo",
@@ -250,6 +264,7 @@ def _admin_user() -> User:
 
 
 def test_import_general_skill_uses_user_supplied_metadata() -> None:
+    """验证导入采用用户填写的元数据，并拒绝通过 original_slug 修改 slug。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
         db.add(
@@ -313,6 +328,7 @@ def test_import_general_skill_uses_user_supplied_metadata() -> None:
 
 
 def test_import_general_skill_without_original_slug_does_not_overwrite_existing() -> None:
+    """验证未携带 original_slug 的同名导入返回 409，且不覆盖已有技能。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
         db.add(
@@ -357,6 +373,7 @@ def test_import_general_skill_without_original_slug_does_not_overwrite_existing(
 
 
 def test_deleted_open_gallery_general_skill_binding_is_not_restored_by_ensure() -> None:
+    """验证已删除的开放广场技能不会被 ensure_open_gallery_binding 重新激活。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
         db.add(
@@ -402,6 +419,7 @@ def test_deleted_open_gallery_general_skill_binding_is_not_restored_by_ensure() 
 
 
 def test_reimport_restores_deleted_private_skill_binding() -> None:
+    """验证重新导入会恢复此前删除的分支私有技能绑定与技能行。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
         db.add(
@@ -456,6 +474,7 @@ def test_reimport_restores_deleted_private_skill_binding() -> None:
 
 
 def test_private_skill_can_be_published_to_open_gallery() -> None:
+    """验证分支私有技能可发布到开放广场，并激活整体智能体的绑定。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
         db.add(
@@ -503,6 +522,7 @@ def test_private_skill_can_be_published_to_open_gallery() -> None:
 
 
 def test_import_general_skill_folder_reads_skill_md_metadata() -> None:
+    """验证从目录包导入时解析 SKILL.md 头部元数据作为技能信息。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
 
@@ -543,6 +563,7 @@ def test_import_general_skill_folder_reads_skill_md_metadata() -> None:
 
 
 def test_import_general_skill_rejects_missing_reference_files() -> None:
+    """验证 Markdown 引用的参考文件缺失时导入返回 400。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
 
@@ -566,6 +587,7 @@ def test_import_general_skill_rejects_missing_reference_files() -> None:
 
 
 def test_markdown_only_update_preserves_existing_skill_package_files() -> None:
+    """验证仅更新 Markdown 时保留技能包内已有的参考文件内容。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
         created = import_general_skill(
@@ -615,6 +637,7 @@ def test_markdown_only_update_preserves_existing_skill_package_files() -> None:
 
 
 def test_import_general_skill_persists_empty_directories_across_updates() -> None:
+    """验证导入会持久化空目录，且后续更新不会清除这些目录。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
 
@@ -655,6 +678,7 @@ def test_import_general_skill_persists_empty_directories_across_updates() -> Non
 
 
 def test_import_clawhub_skill_reads_zip_package_without_overwriting(monkeypatch) -> None:
+    """验证从 zip 包导入 ClawHub 技能，重复导入生成新 slug 而不覆盖已有技能。"""
     package = BytesIO()
     with ZipFile(package, "w") as archive:
         archive.writestr(
@@ -665,6 +689,7 @@ def test_import_clawhub_skill_reads_zip_package_without_overwriting(monkeypatch)
         archive.writestr("skill-pack-main/weather/data/cities.json", '{"北京": "101010100"}')
 
     def fake_download(url: str):  # noqa: ANN001
+        """校验下载地址并返回预置的 zip 包内容。"""
         assert url == "https://example.com/weather.zip"
         return package.getvalue(), "application/zip"
 
@@ -698,6 +723,7 @@ def test_import_clawhub_skill_reads_zip_package_without_overwriting(monkeypatch)
 
 
 def test_import_general_skill_package_upload_keeps_full_zip_folder() -> None:
+    """验证 zip 上传包会去掉外层目录，并保留包内完整文件结构。"""
     package = BytesIO()
     with ZipFile(package, "w") as archive:
         archive.writestr(
@@ -731,6 +757,7 @@ def test_import_general_skill_package_upload_keeps_full_zip_folder() -> None:
 
 
 def test_import_general_skill_package_upload_treats_single_markdown_as_skill_md() -> None:
+    """验证上传单个 Markdown 文件时按 SKILL.md 解析与存储。"""
     markdown = "---\nname: 单文件技能\nslug: single-file-skill\n---\n\n# 单文件技能\n"
 
     with _test_session() as db:
@@ -751,7 +778,9 @@ def test_import_general_skill_package_upload_treats_single_markdown_as_skill_md(
 
 
 def test_import_clawhub_skill_reads_github_directory_package(monkeypatch) -> None:
+    """验证 ClawHub 导入可递归读取 GitHub 目录包中的全部文件。"""
     def fake_json(url: str):  # noqa: ANN001
+        """按 GitHub 目录接口地址返回预置的文件与目录列表。"""
         if url == "https://api.github.com/repos/example/skill-pack/contents/weather?ref=main":
             return [
                 {
@@ -786,6 +815,7 @@ def test_import_clawhub_skill_reads_github_directory_package(monkeypatch) -> Non
         raise AssertionError(f"unexpected github api url: {url}")
 
     def fake_download(url: str):  # noqa: ANN001
+        """按 raw 地址返回预置的技能文件内容。"""
         content = {
             "https://raw.githubusercontent.com/example/skill-pack/main/weather/SKILL.md": "---\nname: 目录天气\nslug: weather-dir\n---\n\n# 天气\n",
             "https://raw.githubusercontent.com/example/skill-pack/main/weather/scripts/run.py": "print('ok')\n",
@@ -819,7 +849,9 @@ def test_import_clawhub_skill_reads_github_directory_package(monkeypatch) -> Non
 
 
 def test_import_clawhub_skill_follows_page_to_real_skill_package(monkeypatch) -> None:
+    """验证 ClawHub 页面链接会被解析到真实技能包地址后再导入。"""
     def fake_download(url: str):  # noqa: ANN001
+        """技能页返回含 GitHub 链接的 HTML，raw 地址返回 SKILL.md。"""
         if url == "https://clawhub.example/skills/weather":
             return (
                 b'<html><a href="https://github.com/example/skill-pack/tree/main/weather">download</a></html>',
@@ -833,6 +865,7 @@ def test_import_clawhub_skill_follows_page_to_real_skill_package(monkeypatch) ->
         return content.encode("utf-8"), "text/plain"
 
     def fake_json(url: str):  # noqa: ANN001
+        """返回技能目录下唯一的 SKILL.md 文件条目。"""
         assert url == "https://api.github.com/repos/example/skill-pack/contents/weather?ref=main"
         return [
             {
@@ -861,6 +894,7 @@ def test_import_clawhub_skill_follows_page_to_real_skill_package(monkeypatch) ->
 
 
 def test_import_clawhub_skill_uses_clawhub_download_api_for_page_url(monkeypatch) -> None:
+    """验证 clawhub.ai 技能页改用官方下载 API 获取 zip 包。"""
     package = BytesIO()
     with ZipFile(package, "w") as archive:
         archive.writestr(
@@ -873,6 +907,7 @@ def test_import_clawhub_skill_uses_clawhub_download_api_for_page_url(monkeypatch
     calls: list[str] = []
 
     def fake_download(url: str):  # noqa: ANN001
+        """记录下载地址并返回预置的 zip 包。"""
         calls.append(url)
         assert url == "https://wry-manatee-359.convex.site/api/v1/download?slug=maomao-weather"
         return package.getvalue(), "application/zip"
@@ -902,11 +937,13 @@ def test_import_clawhub_skill_uses_clawhub_download_api_for_page_url(monkeypatch
 
 
 def test_import_clawhub_skill_accepts_cli_slug(monkeypatch) -> None:
+    """验证 ClawHub 导入支持直接传入 CLI 使用的技能 slug。"""
     package = BytesIO()
     with ZipFile(package, "w") as archive:
         archive.writestr("SKILL.md", "---\nname: weather\n---\n\n# 天气\n")
 
     def fake_download(url: str):  # noqa: ANN001
+        """校验由 slug 拼出的下载地址并返回预置 zip 包。"""
         assert url == "https://wry-manatee-359.convex.site/api/v1/download?slug=maomao-weather"
         return package.getvalue(), "application/zip"
 
@@ -925,7 +962,9 @@ def test_import_clawhub_skill_accepts_cli_slug(monkeypatch) -> None:
 
 
 def test_import_clawhub_skill_rejects_plain_html_page(monkeypatch) -> None:
+    """验证普通 HTML 页面不会被当作 SKILL.md 导入。"""
     def fake_download(url: str):  # noqa: ANN001
+        """返回不含技能包的纯 HTML 页面。"""
         assert url == "https://clawhub.example/skills/weather"
         return b"<html><body>skill landing page without package</body></html>", "text/html"
 
@@ -949,12 +988,14 @@ def test_import_clawhub_skill_rejects_plain_html_page(monkeypatch) -> None:
 
 
 def test_general_skill_archive_publish_and_delete_api(monkeypatch) -> None:
+    """验证通用技能的归档、发布、执行、只读与删除接口状态流转。"""
     captured_model_ids: list[str] = []
     read_queries: list[str] = []
 
     def fake_run(
         self, skill, query, model_config, user_id="enterprise_demo", max_attempts=5, event_sink=None
     ):  # noqa: ANN001
+        """伪造技能执行，记录所选模型并返回固定的成功结果。"""
         captured_model_ids.append(model_config.id)
         return {
             "skill_slug": skill.slug,
@@ -969,6 +1010,7 @@ def test_general_skill_archive_publish_and_delete_api(monkeypatch) -> None:
     monkeypatch.setattr(GeneralSkillRunner, "run", fake_run)
 
     def fake_read(self, skill, query, model_config, **kwargs):  # noqa: ANN001
+        """伪造只读说明调用，记录查询内容并返回只读响应。"""
         read_queries.append(query)
         return GeneralSkillRunResponse(
             skill_slug=skill.slug,
@@ -1087,6 +1129,7 @@ def test_general_skill_archive_publish_and_delete_api(monkeypatch) -> None:
 
 @pytest.mark.anyio
 async def test_general_skill_stream_executes_through_forced_harness_v2(monkeypatch) -> None:
+    """验证技能试用流式接口强制走 Harness v2，并透出轨迹、回复与产物。"""
     test_engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -1096,9 +1139,11 @@ async def test_general_skill_stream_executes_through_forced_harness_v2(monkeypat
     captured_requests = []
 
     def fail_legacy_runner(*args, **kwargs):  # noqa: ANN002, ANN003
+        """断言旧版执行器未被调用，一旦被调用即说明走了错误路径。"""
         raise AssertionError("legacy GeneralSkillRunner must not handle skill tests")
 
     def fake_handle_turn(self, request):  # noqa: ANN001
+        """伪造 Harness v2 回合处理，写入轨迹事件与助手消息并返回回合响应。"""
         captured_requests.append(request)
         self.db.add(
             AgentEvent(
@@ -1188,6 +1233,7 @@ async def test_general_skill_stream_executes_through_forced_harness_v2(monkeypat
 
 
 def test_non_overall_agent_delete_hides_general_skill_only_in_branch() -> None:
+    """验证非整体智能体删除技能只影响本分支，开放广场仍可见。"""
     with _test_session() as db:
         _seed_minimal_tenant(db)
         db.add(
@@ -1229,6 +1275,7 @@ def test_non_overall_agent_delete_hides_general_skill_only_in_branch() -> None:
 
 
 def test_scene_layer_prompt_contract_mentions_general_skill_tools() -> None:
+    """验证场景层提示词仍声明通用技能是场景内的第二层能力。"""
     prompt_dir = Path(__file__).resolve().parents[1] / "app" / "llm" / "prompts"
 
     router_prompt = (prompt_dir / "router_prompt.md").read_text(encoding="utf-8")
@@ -1241,12 +1288,15 @@ def test_scene_layer_prompt_contract_mentions_general_skill_tools() -> None:
 
 
 def test_general_skill_runner_repairs_failed_code(monkeypatch) -> None:
+    """验证执行器首次失败后调用代码修复，重试成功后生成回复。"""
     calls: list[str] = []
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """按提示词中的角色名返回执行、修复或回复的预设输出。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "代码修复器" in prompt_text:
             calls.append("repair")
@@ -1305,12 +1355,15 @@ def test_general_skill_runner_repairs_failed_code(monkeypatch) -> None:
 
 
 def test_general_skill_runner_materializes_folder_package(monkeypatch) -> None:
+    """验证执行器会把技能包文件物化到工作目录，供生成代码读取。"""
     calls: list[str] = []
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """按提示词中的角色名返回执行、审查或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "通用技能执行器" in prompt_text:
             calls.append("runner")
@@ -1377,12 +1430,15 @@ def test_general_skill_runner_materializes_folder_package(monkeypatch) -> None:
 
 
 def test_general_skill_runner_executes_bash_package_command(monkeypatch) -> None:
+    """验证声明 allowed-tools: Bash 的技能以 bash 运行时执行包内脚本。"""
     calls: list[str] = []
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """按提示词中的角色名返回执行、审查或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "通用技能执行器" in prompt_text:
             calls.append("runner")
@@ -1456,12 +1512,15 @@ def test_general_skill_runner_executes_bash_package_command(monkeypatch) -> None
 
 
 def test_general_skill_runner_has_requests_in_runtime(monkeypatch) -> None:
+    """验证通用技能的 Python 运行环境已预装 requests。"""
     calls: list[str] = []
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """按提示词中的角色名返回执行、审查或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "通用技能执行器" in prompt_text:
             calls.append("runner")
@@ -1521,6 +1580,7 @@ def test_general_skill_runner_has_requests_in_runtime(monkeypatch) -> None:
 
 
 def test_general_skill_prompt_rejects_unlisted_external_apis() -> None:
+    """验证执行器提示词禁止自行发明第三方接口，并说明 bash 运行时的用法。"""
     prompt = (
         Path(__file__).resolve().parents[1]
         / "app"
@@ -1534,6 +1594,7 @@ def test_general_skill_prompt_rejects_unlisted_external_apis() -> None:
 
 
 def test_general_skill_repair_prompt_uses_artifact_directory_contract() -> None:
+    """验证修复提示词使用 ARTIFACT_DIR 产物目录契约，不再出现 OUTPUT_DIR。"""
     prompt = (
         Path(__file__).resolve().parents[1]
         / "app"
@@ -1549,12 +1610,15 @@ def test_general_skill_repair_prompt_uses_artifact_directory_contract() -> None:
 
 
 def test_general_skill_runner_reflects_failed_initial_plan(monkeypatch) -> None:
+    """验证首次计划生成失败会触发代码修复，并在轨迹中记录计划失败与重试。"""
     calls: list[str] = []
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """按提示词中的角色名返回修复、失败或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "代码修复器" in prompt_text:
             calls.append("repair")
@@ -1610,12 +1674,15 @@ def test_general_skill_runner_reflects_failed_initial_plan(monkeypatch) -> None:
 
 
 def test_general_skill_runner_stops_on_non_retryable_failure(monkeypatch) -> None:
+    """验证不可重试的失败会跳过代码修复直接结束，并给出兜底回复。"""
     calls: list[str] = []
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """按提示词中的角色名返回执行、审查或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "通用技能执行器" in prompt_text:
             calls.append("runner")
@@ -1680,6 +1747,7 @@ def test_general_skill_runner_stops_on_non_retryable_failure(monkeypatch) -> Non
 
 
 def _seed_minimal_tenant(db: Session) -> None:
+    """写入最小租户、用户与默认模型，满足技能接口测试的前置数据。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     db.add(
         User(
@@ -1703,6 +1771,7 @@ def _seed_minimal_tenant(db: Session) -> None:
 
 
 def _purchase_scene_skill() -> Skill:
+    """构造一个已发布的购买流程场景技能，供分支与场景测试复用。"""
     return Skill(
         tenant_id="tenant_demo",
         skill_id="purchase",
@@ -1727,6 +1796,7 @@ def _purchase_scene_skill() -> Skill:
 
 
 def _test_session():
+    """创建内存 SQLite 会话，保证每个用例的数据互相隔离。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

@@ -64,6 +64,10 @@ WECHAT_ALLOWED_HOSTS = ("ilinkai.weixin.qq.com",)
 
 
 async def _download_wechat_cdn_limited(url: str) -> tuple[bytes, str]:
+    """用 aiohttp 下载微信 CDN 密文，带 TLS 重试与大小上限校验。
+
+    返回 (密文, content-type)；仅超时/连接/载荷错误重试，超过密文上限直接抛错。
+    """
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     for attempt in range(WECHAT_MEDIA_DOWNLOAD_ATTEMPTS):
         try:
@@ -97,7 +101,7 @@ async def _download_wechat_cdn_limited(url: str) -> tuple[bytes, str]:
 
 
 async def _download_wechat_cdn_httpx(url: str) -> tuple[bytes, str]:
-    """Fallback for CDN nodes that reject aiohttp's TLS handshake."""
+    """aiohttp 握手被拒的 CDN 节点改用 httpx 下载，行为与主路径一致。"""
     async with httpx.AsyncClient(
         verify=certifi.where(),
         http2=False,
@@ -116,12 +120,16 @@ async def _download_wechat_cdn_httpx(url: str) -> tuple[bytes, str]:
 
 
 async def _download_wechat_cdn_curl(url: str) -> tuple[bytes, str]:
-    """Use the system TLS stack for CDN nodes incompatible with Python TLS."""
+    """Python TLS 不兼容的 CDN 节点改用系统 curl 下载。
+
+    子进程边读边校验密文大小；curl 返回 18/28 但已收全数据时仍交给解密环节判断。
+    """
     curl = shutil.which("curl")
     if not curl:
         raise RuntimeError("微信媒体下载失败: curl 不可用")
 
     def run() -> bytes:
+        """在线程中执行 curl 并返回密文，多次失败后抛 RuntimeError。"""
         command = [
             curl,
             "--silent",
@@ -179,7 +187,11 @@ async def _download_wechat_cdn_curl(url: str) -> tuple[bytes, str]:
 
 
 def decrypt_wechat_media(data: bytes, aes_key: str, *, expected_size: int = 0) -> bytes:
-    """Decrypt iLink CDN media using its fixed AES-ECB/PKCS#7 wire format."""
+    """按 iLink CDN 固定的 AES-ECB/PKCS#7 格式解密媒体密文。
+
+    aes_key 为空时原样返回；密钥非法或解密失败抛 WeChatApiError；
+    expected_size 大于 0 时还会校验解密后长度。
+    """
     if not aes_key:
         return data
     try:
@@ -215,7 +227,11 @@ def _patch_runtime_config(
     expected_values: dict[str, Any] | None = None,
     binding_values: dict[str, Any] | None = None,
 ) -> bool:
-    """Atomically patch connector-owned JSON keys without replacing API configuration."""
+    """原子增删 config_json 中的运行时键，不整体覆盖已有 API 配置。
+
+    按方言生成 SQLite/PostgreSQL 的 JSON 补丁表达式，可选校验 config_revision、
+    期望键值与 active 状态；返回是否命中并更新了唯一目标行。
+    """
     # SQLite JSON1 与 PostgreSQL jsonb 的等价写法按方言分支(config_json 列在 PG 上为 json 类型)。
     is_sqlite = db_engine.dialect.name == "sqlite"
     if is_sqlite:
@@ -325,7 +341,10 @@ WeChatInbound = ChannelInbound
 
 
 class WeChatApiError(Exception):
+    """微信 iLink 接口返回错误码时抛出的异常，保留原始 errcode 供调用方判断。"""
+
     def __init__(self, errcode: int, message: str):
+        """把 errcode 拼进异常消息，并保留在实例上供调用方按码分支处理。"""
         super().__init__(f"微信 iLink 接口错误 errcode={errcode}: {message}")
         self.errcode = errcode
 
@@ -351,12 +370,14 @@ class WeChatClient:
         *,
         transport: httpx.BaseTransport | None = None,
     ):
+        """记录接入地址与 bot_token，并创建复用的 httpx 客户端。"""
         self.base_url = base_url.rstrip("/")
         self.bot_token = bot_token
         self._client = httpx.Client(transport=transport)
 
     @classmethod
     def for_binding(cls, binding: ChannelBinding) -> WeChatClient:
+        """按绑定配置构造客户端：baseurl 经域名白名单钳制，凭证解密后作为 bot_token。"""
         config = dict(binding.config_json or {})
         # 防御纵深:存量 config 里的非法 baseurl 一律钳制回默认官方地址
         base_url = sanitize_wechat_baseurl(
@@ -369,6 +390,7 @@ class WeChatClient:
         return cls(base_url, token)
 
     def _business_headers(self) -> dict[str, str]:
+        """构造业务请求头，携带 bot_token 与每次重新生成的 X-WECHAT-UIN。"""
         return {
             "Content-Type": "application/json",
             "AuthorizationType": "ilink_bot_token",
@@ -378,9 +400,11 @@ class WeChatClient:
 
     @staticmethod
     def _base_info() -> dict[str, Any]:
+        """构造协议要求的 base_info 字段。"""
         return {"channel_version": CHANNEL_VERSION}
 
     def get_bot_qrcode(self, local_token_list: list[str] | None = None) -> dict[str, Any]:
+        """获取扫码绑定二维码；local_token_list 只提交前 10 个本地 token。"""
         # local_token_list:本地已有 bot_token 列表(官方签名,最多 10 个)
         resp = self._client.post(
             f"{self.base_url}/ilink/bot/get_bot_qrcode",
@@ -398,6 +422,7 @@ class WeChatClient:
         verify_code: str | None = None,
         timeout_seconds: float = 35.0,
     ) -> dict[str, Any]:
+        """查询扫码状态，可按需附带 verify_code；请求超时比轮询超时留出余量。"""
         params = {"qrcode": qrcode}
         if verify_code:
             params["verify_code"] = verify_code
@@ -416,6 +441,7 @@ class WeChatClient:
         *,
         timeout_seconds: float = GETUPDATES_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
+        """拉取一批增量消息，get_updates_buf 传上一轮游标(空串表示从头拉取)。"""
         resp = self._client.post(
             f"{self.base_url}/ilink/bot/getupdates",
             headers=self._business_headers(),
@@ -426,6 +452,11 @@ class WeChatClient:
         return dict(resp.json() or {})
 
     def send_message(self, to_user_id: str, context_token: str, text: str, client_id: str = "") -> None:
+        """向指定用户发送一条文本消息。
+
+        client_id 用于服务端幂等：同一投递的重试要复用同一值，为空时随机生成；
+        响应 errcode 非 0 时抛 WeChatApiError。
+        """
         payload = {
             "msg": {
                 "from_user_id": "",
@@ -453,6 +484,7 @@ class WeChatClient:
                 raise WeChatApiError(int(errcode), str(data.get("errmsg") or ""))
 
     def get_config(self, ilink_user_id: str, context_token: str = "") -> dict[str, Any]:
+        """获取该用户的会话配置(含 typing_ticket)，context_token 按需传入。"""
         resp = self._client.post(
             f"{self.base_url}/ilink/bot/getconfig",
             headers=self._business_headers(),
@@ -467,6 +499,7 @@ class WeChatClient:
         return dict(resp.json() or {})
 
     def send_typing(self, ilink_user_id: str, typing_ticket: str, status: int = 1) -> None:
+        """发送或取消"正在输入"状态，status 1=正在输入 2=取消。"""
         # status: 1=正在输入 2=取消输入
         resp = self._client.post(
             f"{self.base_url}/ilink/bot/sendtyping",
@@ -482,6 +515,10 @@ class WeChatClient:
         resp.raise_for_status()
 
     def download_media(self, context_token: str, media_id: str) -> bytes:
+        """按 context_token 与 media_id 下载媒体，非 JSON 响应视为二进制正文。
+
+        读取中超过大小上限立即抛错；JSON 响应按 errcode 判失败(该接口不返回二进制)。
+        """
         request = self._client.build_request(
             "POST",
             f"{self.base_url}/ilink/bot/downloadmedia",
@@ -531,7 +568,10 @@ class WeChatClient:
         aes_key: str = "",
         expected_size: int = 0,
     ) -> bytes:
-        """Download the CDN URL supplied by an iLink image item."""
+        """下载 iLink 图片项给出的 CDN URL，必要时解密并校验大小。
+
+        只允许 https 官方域；aiohttp 失败依次退到 httpx 与 curl，JSON 响应按错误码抛出。
+        """
         parsed = urlparse(full_url)
         if parsed.scheme != "https" or not validate_wechat_host(parsed.hostname or ""):
             raise WeChatApiError(-1, "微信媒体 URL 域名不受信任")
@@ -571,9 +611,11 @@ class WeChatAdapter:
     """微信适配器:出站 sendmessage + 归一化 + typing + ingress(poll manager)。"""
 
     def __init__(self, client_factory=None):
+        """记录 client 工厂，默认按绑定配置构造 WeChatClient。"""
         self._client_factory = client_factory or WeChatClient.for_binding
 
     def normalize(self, raw: dict[str, Any]) -> ChannelInbound | None:
+        """把 getupdates 原始消息归一化为 ChannelInbound，不可用时返回 None。"""
         return normalize_wechat_message(raw)
 
     def download_media(
@@ -583,6 +625,11 @@ class WeChatAdapter:
         *,
         max_bytes: int = 0,
     ) -> bytes:
+        """按附件下载参数取回媒体内容。
+
+        有 full_url 时走 CDN 下载(先校验声明的媒体大小)，否则用 context_token 与
+        media_id 调用下载接口；缺少 context_token 抛 ValueError。
+        """
         context_token = str(attachment.download_params.get("context_token") or "").strip()
         if not context_token:
             raise ValueError("微信附件下载缺少 context_token")
@@ -607,6 +654,11 @@ class WeChatAdapter:
         *,
         idempotency_key: str | None = None,
     ) -> None:
+        """向目标用户发送文本，超长内容自动分片。
+
+        目标必须含 to_user_id 与 context_token；有 idempotency_key 时各分片以
+        该键加下标作为 client_id，保证重试幂等。
+        """
         to_user_id = str(target.get("to_user_id") or "").strip()
         context_token = str(target.get("context_token") or "").strip()
         if not to_user_id or not context_token:
@@ -668,17 +720,20 @@ class WeChatAdapter:
             logger.debug("微信 typing 状态发送失败(忽略) binding=%s status=%s", binding.id, status, exc_info=True)
 
     def start_ingress(self, binding_id: str) -> None:
+        """确保该绑定在微信 poll manager 中有一个长轮询线程。"""
         from app.channels import get_wechat_poll_manager
 
         get_wechat_poll_manager().ensure_binding(binding_id)
 
     def stop_ingress(self, binding_id: str) -> None:
+        """停止该绑定的微信长轮询线程。"""
         from app.channels import get_wechat_poll_manager
 
         get_wechat_poll_manager().stop_binding(binding_id)
 
 
 def is_self_message(msg: dict[str, Any], ilink_bot_id: str = "") -> bool:
+    """判断消息是否由机器人自己发出(message_type=2 或发送者为该 bot)。"""
     if msg.get("message_type") == 2:
         return True
     from_user_id = str(msg.get("from_user_id") or "").strip()
@@ -686,6 +741,10 @@ def is_self_message(msg: dict[str, Any], ilink_bot_id: str = "") -> bool:
 
 
 def extract_message_text(msg: dict[str, Any]) -> str:
+    """汇总消息中可读的文本，兼容文本项与已转写的语音项。
+
+    没有 item_list 时回退顶层 text/content 字段；全部缺失返回空串。
+    """
     items = msg.get("item_list")
     if isinstance(items, list):
         parts: list[str] = []
@@ -711,7 +770,11 @@ def extract_message_text(msg: dict[str, Any]) -> str:
 
 
 def extract_message_attachments(msg: dict[str, Any]) -> list[ChannelInboundAttachment]:
-    """Extract assumed iLink image/file item descriptors."""
+    """从 item_list 提取图片与文件附件描述。
+
+    只识别 type=2 图片、type=4 文件；带 full_url 时一并给出加密下载所需的
+    aes_key 与大小提示，供后续按需下载。
+    """
     items = msg.get("item_list")
     if not isinstance(items, list):
         return []
@@ -873,6 +936,7 @@ class WeChatPollManager:
         reconcile_seconds: float = RECONCILE_SECONDS,
         recovery_cooldown_seconds: float = RECOVERY_COOLDOWN_SECONDS,
     ):
+        """初始化 poll manager：记录引擎、client 工厂、线程表与暂停集合。"""
         self._engine = db_engine or engine
         self._client_factory = client_factory or WeChatClient.for_binding
         self._reconcile_seconds = reconcile_seconds
@@ -886,6 +950,7 @@ class WeChatPollManager:
         self._reconcile_thread: threading.Thread | None = None
 
     def start(self) -> None:
+        """启动 reconcile 线程(已在运行则直接返回)，由它热启停各绑定的轮询线程。"""
         if self._reconcile_thread and self._reconcile_thread.is_alive():
             return
         self._stopped.clear()
@@ -897,6 +962,7 @@ class WeChatPollManager:
         self._reconcile_thread.start()
 
     def stop(self, timeout_seconds: float = 5.0) -> bool:
+        """停止全部轮询线程与 reconcile 线程，返回是否都在超时内退出。"""
         self._stopped.set()
         with self._lock:
             binding_ids = list(self._threads)
@@ -916,6 +982,7 @@ class WeChatPollManager:
         return polls_stopped and not (reconcile_thread and reconcile_thread.is_alive())
 
     def ensure_binding(self, binding_id: str) -> None:
+        """确保该绑定有存活的 poll 线程；已暂停或线程已在运行则跳过。"""
         with self._lock:
             if binding_id in self._paused:
                 return
@@ -934,6 +1001,7 @@ class WeChatPollManager:
             thread.start()
 
     def stop_binding(self, binding_id: str) -> None:
+        """请求该绑定的 poll 线程停止，并关闭其 client 以打断在飞的长轮询。"""
         with self._lock:
             flag = self._stop_flags.get(binding_id)
             client = self._clients.get(binding_id)
@@ -947,11 +1015,13 @@ class WeChatPollManager:
                 logger.debug("关闭微信 client 失败(忽略) binding=%s", binding_id, exc_info=True)
 
     def pause_binding(self, binding_id: str) -> None:
+        """暂停该绑定：标记为暂停并停掉轮询，reconcile 不再自动拉起。"""
         with self._lock:
             self._paused.add(binding_id)
         self.stop_binding(binding_id)
 
     def resume_binding(self, binding_id: str, *, start: bool = True) -> None:
+        """解除暂停，start=True 时立即重建轮询线程。"""
         with self._lock:
             self._paused.discard(binding_id)
         if start:
@@ -967,6 +1037,7 @@ class WeChatPollManager:
         return not (thread and thread.is_alive())
 
     def running_binding_ids(self) -> set[str]:
+        """返回当前仍有存活 poll 线程的绑定 id 集合。"""
         with self._lock:
             return {binding_id for binding_id, thread in self._threads.items() if thread.is_alive()}
 
@@ -988,6 +1059,7 @@ class WeChatPollManager:
             self.stop_binding(binding_id)
 
     def _reconcile_loop(self) -> None:
+        """按 reconcile 间隔对齐 DB 中的 active 绑定与运行中线程，异常只记日志。"""
         while not self._stopped.is_set():
             try:
                 self.reconcile_once()
@@ -996,6 +1068,7 @@ class WeChatPollManager:
             self._stopped.wait(self._reconcile_seconds)
 
     def _load_binding(self, binding_id: str) -> ChannelBinding | None:
+        """读取仍为 active 的绑定并脱离 session，便于 poll 线程后续跨轮使用。"""
         with Session(self._engine) as db:
             binding = db.get(ChannelBinding, binding_id)
             if not binding or binding.status != "active":
@@ -1004,6 +1077,11 @@ class WeChatPollManager:
             return binding
 
     def _poll_loop(self, binding_id: str, stop_flag: threading.Event) -> None:
+        """单绑定的 getupdates 长轮询主循环，直到 stop_flag 或全局停止。
+
+        正常响应时逐条交给 process_inbound，整批成功后才推进游标；失败走熔断与退避；
+        errcode=-14 走会话恢复，恢复次数达上限才判真过期。
+        """
         backoff = POLL_BACKOFF_START_SECONDS
         failures = 0
         # 官方建议:优先使用服务端下发的 longpolling_timeout_ms(内存态跟踪,限 10-60s)
@@ -1078,6 +1156,10 @@ class WeChatPollManager:
         backoff: float,
         exc: Exception,
     ) -> float:
+        """记录 getupdates 失败并按退避等待，返回下一次使用的退避秒数。
+
+        连续失败达阈值时先熔断固定时长，随后回到起始退避。
+        """
         logger.warning("微信 getupdates 失败(连续 %s 次) binding=%s: %s", failures, binding_id, exc)
         if failures >= POLL_FAILURE_CIRCUIT_THRESHOLD:
             logger.warning("微信 getupdates 连续失败熔断 %ss binding=%s", POLL_FAILURE_CIRCUIT_SECONDS, binding_id)
@@ -1150,6 +1232,10 @@ class WeChatPollManager:
         *,
         expected_revision: int | None = None,
     ) -> bool:
+        """持久化新游标(空串不写)并标记已连接，返回是否仍持有该绑定。
+
+        expected_revision 防止覆盖其它连接器改过的配置，被抢占时返回 False 以结束本线程。
+        """
         return _patch_runtime_config(
             self._engine,
             binding_id,
@@ -1160,6 +1246,7 @@ class WeChatPollManager:
         )
 
     def _mark_session_expired(self, binding_id: str) -> None:
+        """判定会话真过期：标记 expired 并清空游标，随后告警绑定创建者重新扫码。"""
         marked = _patch_runtime_config(
             self._engine,
             binding_id,

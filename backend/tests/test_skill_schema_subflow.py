@@ -2,6 +2,7 @@ from app.skills.skill_schema import SkillCard
 
 
 def test_subflow_node_is_normalized_to_orchestration_only() -> None:
+    """验证 subflow 节点被归一化为纯编排节点，指令、能力引用与重试策略等均被清空。"""
     card = SkillCard.model_validate(
         {
             "skill_id": "parent",

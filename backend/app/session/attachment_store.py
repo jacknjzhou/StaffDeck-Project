@@ -14,6 +14,11 @@ from app.session.session_schema import ChatAttachmentRead
 
 
 def sandbox_attachment_path(attachment: ChatAttachmentRead, index: int = 1) -> str:
+    """生成附件在沙箱工作区中的虚拟路径，避免向模型泄露宿主机真实路径。
+
+    文件名会被清洗为安全的 ASCII 片段，并前置附件 id 的哈希片段以防重名冲突。
+    """
+
     basename = PurePath(attachment.filename or f"attachment-{index}").name
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", basename).strip(".-")
     safe_name = safe_name[:96] or f"attachment-{index}.bin"
@@ -29,7 +34,11 @@ def stage_chat_attachment(
     tenant_id: str,
     user_id: str,
 ) -> ChatAttachmentRead:
-    """Persist upload bytes outside TaskFrame workspaces without exposing the host path."""
+    """把上传字节持久化到 TaskFrame 工作区之外，并返回补齐哈希与沙箱路径的附件副本。
+
+    目录已存在但为软链接时抛 OSError；payload 与 metadata.json 均原子写入，
+    因此读取方不会看到写了一半的内容。
+    """
 
     directory = _attachment_directory(
         tenant_id=tenant_id,
@@ -68,6 +77,12 @@ def read_staged_chat_attachment(
     tenant_id: str,
     user_id: str,
 ) -> bytes | None:
+    """读取暂存的上传内容，返回 None 表示数据缺失、被篡改或不属于该租户/用户。
+
+    除重算 payload 的 sha256 外，还会逐项比对 metadata 中的归属字段与附件记录，
+    并拒绝任何软链接路径。
+    """
+
     directory = _attachment_directory(
         tenant_id=tenant_id,
         user_id=user_id,
@@ -99,6 +114,11 @@ def read_staged_chat_attachment(
 
 
 def _attachment_directory(*, tenant_id: str, user_id: str, attachment_id: str) -> Path:
+    """解析附件暂存目录，并确认根目录与末级目录都未逃逸出用户数据目录。
+
+    任何解析后越界的路径都以 ValueError 拒绝，防止伪造 id 穿越目录。
+    """
+
     data_root = paths.user_data_dir().resolve()
     root = (data_root / "harness_uploads").resolve()
     if not root.is_relative_to(data_root):
@@ -115,6 +135,11 @@ def _attachment_directory(*, tenant_id: str, user_id: str, attachment_id: str) -
 
 
 def _attachment_storage_key(*, tenant_id: str, user_id: str, attachment_id: str) -> str:
+    """对租户、用户与附件 id 三元组取 sha256，得到不透明的存储目录名。
+
+    同一附件 id 在不同租户或用户下会落到不同目录，避免跨身份覆盖。
+    """
+
     identity = json.dumps(
         [tenant_id, user_id, attachment_id],
         ensure_ascii=False,
@@ -124,6 +149,11 @@ def _attachment_storage_key(*, tenant_id: str, user_id: str, attachment_id: str)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
+    """先写入同目录临时文件并 fsync，再用 os.replace 原子替换目标文件。
+
+    无论成功与否都会清理临时文件，避免在暂存目录留下残留。
+    """
+
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=str(path.parent))
     temporary_path = Path(temporary)
     try:

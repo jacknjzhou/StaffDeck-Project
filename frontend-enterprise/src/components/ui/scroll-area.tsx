@@ -3,6 +3,7 @@ import { ScrollArea as ScrollAreaPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/** 滚动区域根组件：组合视口、滚动条与角落，className 可覆盖根节点样式。 */
 function ScrollArea({
   className,
   children,
@@ -26,6 +27,7 @@ function ScrollArea({
   )
 }
 
+/** 滚动条组件：默认纵向，orientation 控制方向，滑块外观由 Radix 内部渲染。 */
 function ScrollBar({
   className,
   orientation = "vertical",

@@ -18,6 +18,12 @@ const DEFAULT_FIELDS: ChannelCredentialFieldRead[] = [
   { key: 'secret', label: '微信客服应用 Secret', secret: true },
 ];
 
+/**
+ * 微信客服接入配置面板：引导生成回调配置、填写 Secret、管理并绑定客服账号。
+ *
+ * - 按 binding 状态在「生成回调配置 / 凭证已保存 / 重新配置」等视图间切换。
+ * - 所有写操作成功后都会回调 onChanged，把最新绑定信息交还父组件。
+ */
 export default function WechatKfSetup({
   binding,
   meta,
@@ -62,6 +68,11 @@ export default function WechatKfSetup({
   const [editingAccountName, setEditingAccountName] = useState('');
   const callbackUrl = `${window.location.origin}/api/channels/wechat-kf/${binding.id}/callback`;
 
+  /**
+   * 校验企业 ID 后向后端申请回调 Token 与 EncodingAESKey，供填入微信客服后台。
+   *
+   * 生成结果同时写回表单值与 callbackConfig；失败时仅提示，不切换视图。
+   */
   async function prepareCallbackConfig() {
     const corpId = String(values.corp_id || binding.corp_id || '').trim();
     if (!corpId) {
@@ -87,11 +98,18 @@ export default function WechatKfSetup({
     }
   }
 
+  /** 复制当前渠道的微信客服回调 URL 到剪贴板并提示结果。 */
   async function copyCallbackUrl() {
     await copyTextToClipboard(callbackUrl);
     notify.success('回调 URL 已复制');
   }
 
+  /**
+   * 提交微信客服凭证（企业 ID、回调 Token、EncodingAESKey 与 Secret）并校验连通性。
+   *
+   * - 必填字段缺失时直接提示并中断，不发起请求。
+   * - 保存成功后清空输入、退出编辑态，并把最新绑定回调给父组件。
+   */
   async function save() {
     if (fields.some((field) => !field.optional && !String(values[field.key] || '').trim())) {
       notify.error('请填写完整凭证');
@@ -123,6 +141,12 @@ export default function WechatKfSetup({
     }
   }
 
+  /**
+   * 为指定客服账号生成咨询链接，按需渲染二维码。
+   *
+   * - showQr 为真时额外用 qrcode 生成 data URL，并提示「二维码已生成」。
+   * - 结果按 open_kfid 缓存在 accountLinks，重复生成会覆盖旧链接。
+   */
   async function generateContactUrl(openKfId: string, showQr: boolean) {
     setGenerating(true);
     try {
@@ -145,6 +169,7 @@ export default function WechatKfSetup({
     }
   }
 
+  /** 复制客服咨询链接到剪贴板，失败时提示错误信息。 */
   async function copyAccountLink(url: string) {
     try {
       await copyTextToClipboard(url);
@@ -154,6 +179,7 @@ export default function WechatKfSetup({
     }
   }
 
+  /** 拉取微信客服后台的客服账号列表，供选择绑定、查看配置详情或编辑。 */
   async function loadAccounts() {
     setAccountsLoading(true);
     try {
@@ -175,6 +201,11 @@ export default function WechatKfSetup({
     }
   }
 
+  /**
+   * 回调就绪且渠道状态为 active 时才加载客服账号。
+   *
+   * 绑定 ID、渠道状态或配置版本变化都会重新拉取；未就绪时清空账号列表。
+   */
   useEffect(() => {
     if (!callbackReady || binding.status !== 'active') {
       setAccounts([]);
@@ -183,6 +214,7 @@ export default function WechatKfSetup({
     void loadAccounts();
   }, [binding.id, binding.status, binding.config_revision, callbackReady]);
 
+  /** 把指定客服账号绑定到当前渠道，成功后更新本地选中项并刷新账号列表。 */
   async function selectAccount(openKfId: string) {
     setSaving(true);
     try {
@@ -206,6 +238,11 @@ export default function WechatKfSetup({
     }
   }
 
+  /**
+   * 用已上传的头像在微信客服后台创建账号，并自动绑定到当前渠道。
+   *
+   * 账号名称或头像 media_id 缺失时直接提示并中断。
+   */
   async function createAccount() {
     if (!accountName.trim()) {
       notify.error('请输入客服账号名称');
@@ -236,6 +273,7 @@ export default function WechatKfSetup({
     }
   }
 
+  /** 修改指定客服账号的名称，若已上传新头像则一并提交更新。 */
   async function updateAccount(openKfId: string) {
     if (!editingAccountName.trim()) {
       notify.error('请输入客服账号名称');
@@ -266,6 +304,7 @@ export default function WechatKfSetup({
     }
   }
 
+  /** 二次确认后删除指定客服账号（微信客服后台账号同步删除），并清理其咨询链接缓存。 */
   async function deleteAccount(openKfId: string) {
     if (!window.confirm('确定删除这个微信客服账号吗？删除后微信客服后台账号也会被删除。')) return;
     setSaving(true);
@@ -288,6 +327,11 @@ export default function WechatKfSetup({
     }
   }
 
+  /**
+   * 上传客服头像：仅接受 2MB 以内的 JPG/PNG。
+   *
+   * 成功后记录返回的 media_id 与文件名，供创建或修改客服账号时使用。
+   */
   async function uploadAvatar(file: File) {
     if (!['image/jpeg', 'image/png'].includes(file.type)) {
       notify.error('客服头像仅支持 JPG 或 PNG');

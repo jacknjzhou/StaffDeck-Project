@@ -65,10 +65,17 @@ FEEDBACK_ANALYSIS_PROMPT = """
 
 
 class FeedbackAnalysisService:
+    """调用模型对用户反馈做根因归因，并落库结论、状态与置信度。"""
+
     def __init__(self, db: Session):
+        """绑定请求级数据库会话，后续读写复用同一事务。"""
         self.db = db
 
     def analyze_feedback(self, feedback_id: str) -> MessageFeedback | None:
+        """对单条反馈执行 LLM 归因并持久化结果；记录不存在时返回 None。
+
+        无可用默认模型时标记为待模型分析；LLM 失败按次数退避重试，用尽后标记 failed。
+        """
         feedback = self.db.get(MessageFeedback, feedback_id)
         if not feedback:
             return None
@@ -102,6 +109,7 @@ class FeedbackAnalysisService:
         return feedback
 
     def _default_model_config(self, tenant_id: str) -> ModelConfig | None:
+        """取租户默认且启用的模型配置并解析为运行时可用的配置；缺失时返回 None。"""
         row = self.db.exec(
             select(ModelConfig).where(
                 ModelConfig.tenant_id == tenant_id,
@@ -114,6 +122,7 @@ class FeedbackAnalysisService:
         return resolve_model_config_for_runtime(self.db, tenant_id, row.id)
 
     def _mark_needs_model(self, feedback: MessageFeedback) -> MessageFeedback:
+        """无可用模型时把反馈标记为待模型分析并提交。"""
         analysis = {
             "bucket": "needs_model_analysis",
             "confidence": 0.0,
@@ -129,6 +138,7 @@ class FeedbackAnalysisService:
         return feedback
 
     def _mark_failed(self, feedback: MessageFeedback, exc: LLMError, attempts: int) -> None:
+        """记录分析失败：截断错误信息，并标注错误类型、可重试与已尝试次数。"""
         error_message = str(exc)[:300]
         self._apply_analysis(
             feedback,
@@ -147,6 +157,7 @@ class FeedbackAnalysisService:
         )
 
     def _apply_analysis(self, feedback: MessageFeedback, analysis: dict[str, Any], status: str) -> None:
+        """把分析结果写回反馈行：截断文本、夹取置信度并刷新状态与时间戳。"""
         feedback.analysis_status = status
         feedback.analysis_bucket = str(analysis.get("bucket") or "unknown")
         feedback.analysis_reason = str(analysis.get("reason") or "")[:300]
@@ -158,6 +169,7 @@ class FeedbackAnalysisService:
         feedback.updated_at = utc_now()
 
     def _analysis_payload(self, feedback: MessageFeedback) -> dict[str, Any]:
+        """组装分析载荷：目标消息、邻近上下文、会话槽位与最近 30 条 Agent 事件。"""
         message = self.db.get(Message, feedback.message_id)
         chat_session = self.db.get(ChatSession, feedback.session_id)
         user = self.db.get(User, feedback.user_id)
@@ -225,6 +237,7 @@ class FeedbackAnalysisService:
 
 
 def feedback_analysis_read(row: MessageFeedback) -> dict[str, Any]:
+    """把反馈分析字段序列化为 API 读取结构，失败状态下隐藏置信度。"""
     bucket = row.analysis_bucket or "unknown"
     status = _effective_analysis_status(row)
     confidence = None if status == "failed" else row.analysis_confidence
@@ -241,6 +254,7 @@ def feedback_analysis_read(row: MessageFeedback) -> dict[str, Any]:
 
 
 def _effective_analysis_status(row: MessageFeedback) -> str:
+    """计算对外展示的分析状态：标为 analyzed 但带错误元数据时降级为 failed。"""
     if row.analysis_status != "analyzed":
         return row.analysis_status
     metadata = row.analysis_json or {}
@@ -250,6 +264,7 @@ def _effective_analysis_status(row: MessageFeedback) -> str:
 
 
 def feedback_summary(rows: list[MessageFeedback]) -> dict[str, Any]:
+    """汇总反馈统计：点赞/点踩数、归因分布、状态计数与最多 5 条点踩摘要。"""
     total = len(rows)
     down_rows = [row for row in rows if row.rating == "down"]
     up_rows = [row for row in rows if row.rating == "up"]
@@ -286,6 +301,7 @@ def feedback_summary(rows: list[MessageFeedback]) -> dict[str, Any]:
 
 
 def _normalize_analysis(raw: dict[str, Any], rating: str) -> dict[str, Any]:
+    """归一化模型输出：纠正点赞归因、把非法 bucket 兜底为 unknown 并截断各字段。"""
     bucket = str(raw.get("bucket") or "").strip()
     if rating == "up" and bucket in {"", "unknown", "user_random_or_unclear"}:
         bucket = "positive_or_resolved"
@@ -305,6 +321,7 @@ def _normalize_analysis(raw: dict[str, Any], rating: str) -> dict[str, Any]:
 
 
 def _compact_overall_summary(bucket_counts: Counter[str], top_summaries: list[dict[str, Any]]) -> str:
+    """生成一句话总览：点出占比最高的点踩归因，并附该归因下的一条摘要。"""
     if not bucket_counts:
         return "暂无点踩归因数据。"
     leader, count = bucket_counts.most_common(1)[0]
@@ -316,6 +333,7 @@ def _compact_overall_summary(bucket_counts: Counter[str], top_summaries: list[di
 
 
 def _float_in_range(value: Any, minimum: float, maximum: float) -> float:
+    """把任意输入转成 [minimum, maximum] 内的浮点数；无法解析时取最小值。"""
     try:
         parsed = float(value)
     except (TypeError, ValueError):

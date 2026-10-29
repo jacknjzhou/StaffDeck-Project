@@ -19,6 +19,7 @@ from app.db.migrations import run_migrations
 
 
 def _resolve_url() -> str:
+    """取迁移目标库 URL：STAFFDECK_DATABASE_URL 优先，缺省回落到配置中的 database_url。"""
     url = os.environ.get("STAFFDECK_DATABASE_URL")
     if url:
         return url
@@ -26,6 +27,10 @@ def _resolve_url() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """执行迁移 CLI 并返回进程退出码；缺省动作是 upgrade。
+
+    仅支持 upgrade，其他动作向 stderr 报错并返回 2。
+    """
     args = list(sys.argv[1:] if argv is None else argv)
     action = args[0] if args else "upgrade"
     if action != "upgrade":

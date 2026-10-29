@@ -38,6 +38,7 @@ class _SinkEvent:
     __slots__ = ("created_at", "event_type", "id", "payload_json")
 
     def __init__(self, event_type: str, payload: dict[str, Any]) -> None:
+        """用事件类型与 payload 构造轻量事件对象，id 取自 turn 或消息 id。"""
         self.event_type = event_type
         self.payload_json = payload
         self.id = str(payload.get("turn_id") or payload.get("user_message_id") or "")
@@ -47,6 +48,10 @@ class _SinkEvent:
 def _load_skill_trace_names(
     db, tenant_id: str
 ) -> tuple[dict[str, str], dict[str, dict[str, str]], dict[str, str]]:
+    """加载租户内的技能名、SOP 节点名与工具展示名，供 trace 行渲染使用。
+
+    单次查询技能表后按 skill_id 建索引，没有命名节点的技能不产生 step 映射。
+    """
     from sqlmodel import select
 
     rows = db.exec(select(Skill).where(Skill.tenant_id == tenant_id)).all()
@@ -70,6 +75,7 @@ def _load_skill_trace_names(
 
 
 def _load_tool_display_names(db, tenant_id: str) -> dict[str, str]:
+    """加载工具与通用技能的展示名，工具缺展示名时回落到 description。"""
     from sqlmodel import select
 
     tool_names: dict[str, str] = {}
@@ -121,6 +127,7 @@ class FeishuTraceStreamer:
         min_update_interval: float = _MIN_UPDATE_INTERVAL,
         compact_sop: bool | None = None,
     ) -> None:
+        """缓存 binding、目标与名称映射，初始化行缓冲、节流状态与后台 worker 句柄。"""
         self._binding = binding
         self._target = dict(target or {})
         self._turn_id = str(turn_id or "").strip()
@@ -157,6 +164,7 @@ class FeishuTraceStreamer:
         self._worker_started = False
 
     def _resolve_compact_sop(self, compact_sop: bool | None) -> bool:
+        """解析是否启用 SOP 紧凑展示：入参优先，其次 binding 配置与全局开关。"""
         if compact_sop is not None:
             return bool(compact_sop)
         config = self._binding.config_json if isinstance(self._binding.config_json, dict) else {}
@@ -167,6 +175,7 @@ class FeishuTraceStreamer:
     # ---- 后台 worker ----
 
     def _start_worker(self) -> None:
+        """懒启动 daemon worker 线程，重复调用无副作用。"""
         if self._worker_started:
             return
         self._worker_started = True
@@ -176,6 +185,10 @@ class FeishuTraceStreamer:
         self._worker.start()
 
     def _worker_loop(self) -> None:
+        """worker 主循环：串行执行排队任务，空闲时推进翻书动画。
+
+        draining 且队列已空时退出；单个任务异常只记日志，不终止线程。
+        """
         while True:
             try:
                 task = self._task_queue.get(timeout=0.05)
@@ -220,6 +233,7 @@ class FeishuTraceStreamer:
     # ---- adapter / skill names ----
 
     def _ensure_adapter(self):
+        """懒加载飞书渠道 adapter，加载后复用同一实例。"""
         if self._adapter is not None:
             return self._adapter
         from app.channels.adapters.base import get_channel_adapter
@@ -228,18 +242,22 @@ class FeishuTraceStreamer:
         return self._adapter
 
     def _ensure_skill_names(self) -> dict[str, str]:
+        """返回技能名映射，必要时先从库中加载 trace 名称。"""
         self._ensure_trace_names()
         return self._skill_names
 
     def _ensure_step_names(self) -> dict[str, dict[str, str]]:
+        """返回 SOP 节点名映射，必要时先从库中加载 trace 名称。"""
         self._ensure_trace_names()
         return self._step_names
 
     def _ensure_tool_names(self) -> dict[str, str]:
+        """返回工具展示名映射，必要时先从库中加载 trace 名称。"""
         self._ensure_trace_names()
         return self._tool_names
 
     def _ensure_trace_names(self) -> None:
+        """首次使用时从库加载技能/节点/工具名称；已有映射不覆盖，失败仅记日志。"""
         if self._db is None or self._names_loaded:
             return
         try:
@@ -260,6 +278,7 @@ class FeishuTraceStreamer:
     # ---- 生命周期 ----
 
     def start(self) -> None:
+        """标记已启动，并异步创建"正在执行"卡片；重复调用无副作用。"""
         if self._started:
             return
         self._started = True
@@ -267,6 +286,7 @@ class FeishuTraceStreamer:
         self._task_queue.put(_CreateCardTask())
 
     def on_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """接收单个 AgentEvent 并触发节流后的卡片更新，不阻塞调用方线程。"""
         if self._finished:
             return
         try:
@@ -281,6 +301,10 @@ class FeishuTraceStreamer:
             )
 
     def finish(self) -> None:
+        """定格为完成态：把未结行置为 completed 并异步 PATCH 最终卡片。
+
+        不 join worker，避免飞书网络异常拖住会话锁；建卡任务会补发最终状态。
+        """
         if self._finished:
             return
         self._finished = True
@@ -297,6 +321,7 @@ class FeishuTraceStreamer:
         self._stop_worker()
 
     def abort(self, reason: str | None = None) -> None:
+        """定格为失败态并记录中止原因，异常路径同样不阻塞调用方。"""
         if self._finished:
             return
         self._finished = True
@@ -318,6 +343,10 @@ class FeishuTraceStreamer:
     # ---- 事件处理 ----
 
     def _ingest_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """把单个事件转换为 trace 行合并进缓冲，并维护 SOP 紧凑展示状态。
+
+        紧凑模式下 SOP 推进期的中间行只打 hidden 标记，数据仍全量累积供回滚。
+        """
         if event_type == "router_decision_created":
             target_skill_id = str(payload.get("target_skill_id") or "").strip()
             if target_skill_id:
@@ -366,6 +395,7 @@ class FeishuTraceStreamer:
             self._skill_hint = skill_context
 
     def _maybe_enqueue_patch(self) -> None:
+        """按最小更新间隔决定是否把当前行快照入队为一次 PATCH，以规避飞书限流。"""
         if not self._message_id:
             return
         with self._lock:
@@ -382,6 +412,10 @@ class FeishuTraceStreamer:
     # ---- 卡片操作（在 worker 线程执行）----
 
     def _do_create_card(self) -> None:
+        """在 worker 线程创建卡片并记下 message_id，失败仅记日志。
+
+        建卡后若已有最终状态就补发最终 PATCH，否则补一次累积行的 PATCH。
+        """
         try:
             adapter = self._ensure_adapter()
             card = self._render_card(state="running")
@@ -419,6 +453,7 @@ class FeishuTraceStreamer:
                     )
 
     def _do_patch_card(self, lines: list[dict] | None, *, state: str, force: bool) -> None:
+        """在 worker 线程按行快照渲染并 PATCH 卡片，失败仅记日志。"""
         if not self._message_id:
             return
         try:
@@ -498,6 +533,7 @@ class FeishuTraceStreamer:
         lines: list[dict] | None = None,
         state: str = "running",
     ) -> dict[str, Any]:
+        """渲染卡片 JSON：按 state 选标题与配色，紧凑模式下改用合成进度行。"""
         header_title = "正在思考…"
         header_template = "blue"
         if state == "completed":
@@ -533,27 +569,36 @@ class _Task:
     """worker 线程执行的抽象任务。"""
 
     def execute(self, streamer: FeishuTraceStreamer) -> None:
+        """在 worker 线程执行具体任务，由子类实现。"""
         raise NotImplementedError
 
 
 class _CreateCardTask(_Task):
+    """创建首张"正在执行"卡片的后台任务。"""
+
     def execute(self, streamer: FeishuTraceStreamer) -> None:
+        """委托 streamer 在 worker 线程完成建卡。"""
         streamer._do_create_card()
 
 
 class _PatchCardTask(_Task):
+    """按给定行快照与状态更新卡片的后台任务。"""
+
     __slots__ = ("force", "lines", "state")
 
     def __init__(self, *, lines: list[dict] | None = None, state: str = "running", force: bool = False) -> None:
+        """保存行快照、目标状态与是否强制刷新。"""
         self.lines = lines
         self.state = state
         self.force = force
 
     def execute(self, streamer: FeishuTraceStreamer) -> None:
+        """委托 streamer 在 worker 线程执行卡片 PATCH。"""
         streamer._do_patch_card(self.lines, state=self.state, force=self.force)
 
 
 def _line_to_card_element(line: dict) -> dict[str, Any]:
+    """把一条 trace 行渲染为飞书卡片的 div 元素（lark_md 文本）。"""
     text = str(line.get("text") or "").strip()
     detail = str(line.get("detail") or "").strip()
     state = str(line.get("state") or "").strip()
@@ -566,6 +611,7 @@ def _line_to_card_element(line: dict) -> dict[str, Any]:
 
 
 def _state_icon(state: str) -> str:
+    """按行状态返回 emoji 前缀，未知状态不加图标。"""
     if state == "completed":
         return "✅"
     if state == "failed":
@@ -576,6 +622,7 @@ def _state_icon(state: str) -> str:
 
 
 def _upsert_line(lines: list[dict], line: dict) -> None:
+    """按 id 就地合并已有行，无 id 或未命中时追加到末尾。"""
     line_id = str(line.get("id") or "").strip()
     if line_id:
         for index, existing in enumerate(lines):
@@ -590,6 +637,7 @@ def _skill_context_from_payload(
     payload: dict[str, Any],
     skill_hint: str | None,
 ) -> str | None:
+    """从技能流转事件的 payload 推断当前技能 id，作为后续行的渲染提示。"""
     if event_type in {"skill_started", "skill_resumed", "skill_step_changed"}:
         to_skill_id = str(payload.get("to_skill_id") or "").strip()
         from_skill_id = str(payload.get("from_skill_id") or "").strip()
@@ -648,6 +696,7 @@ def _sop_line_hidden(event_type: str, payload: dict[str, Any], line: dict) -> bo
 
 
 def is_feishu_trace_enabled(binding: ChannelBinding | None) -> bool:
+    """判断该 binding 是否启用飞书实时步骤卡片（全局开关 + 渠道配置）。"""
     if not binding or binding.channel != "feishu":
         return False
     if not get_settings().channel_feishu_trace_enabled:

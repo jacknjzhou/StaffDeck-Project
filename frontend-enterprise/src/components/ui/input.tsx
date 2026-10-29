@@ -3,6 +3,12 @@ import * as React from "react"
 import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
 
+/**
+ * 通用文本输入框,统一尺寸与边框样式,并把 placeholder、title、aria-label 交给 i18n 翻译。
+ *
+ * - 关闭浏览器与密码管理器的自动填充提示(autoComplete="off" 及相关 ignore 标记);
+ * - 其余原生 input 属性透传,自定义 className 通过 cn 与内置样式合并。
+ */
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   const { t } = useI18n()
   const localizedProps = {

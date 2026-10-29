@@ -30,12 +30,16 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 class LoginRequest(BaseModel):
+    """登录请求体：租户、用户名与密码。"""
+
     tenant_id: str
     username: str
     password: str
 
 
 class UserCreateRequest(BaseModel):
+    """管理员创建账号的请求体，role 缺省为 member。"""
+
     tenant_id: str
     username: str
     password: str
@@ -44,6 +48,8 @@ class UserCreateRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
+    """账号更新请求体，字段为 None 表示保持原值。"""
+
     tenant_id: str
     display_name: Optional[str] = None
     password: Optional[str] = None
@@ -51,6 +57,8 @@ class UserUpdateRequest(BaseModel):
 
 
 class UserChannelIdentity(BaseModel):
+    """账号已绑定的渠道身份摘要，供处理人选择器判断可达性。"""
+
     channel: str
     display_name: Optional[str] = None
     external_user_id: Optional[str] = None
@@ -58,6 +66,8 @@ class UserChannelIdentity(BaseModel):
 
 
 class UserRead(BaseModel):
+    """账号对外视图，avatar_url 只给资源指针，不内联图片字节。"""
+
     id: str
     tenant_id: str
     username: str
@@ -74,20 +84,28 @@ class UserRead(BaseModel):
 
 
 class AvatarRead(BaseModel):
+    """头像相关接口的响应：返回需认证拉取的头像资源路径。"""
+
     avatar_url: str
 
 
 class LoginResponse(BaseModel):
+    """登录成功响应：JWT 与账号信息。"""
+
     token: str
     user: UserRead
 
 
 class AccountAPICredentialCreateRequest(BaseModel):
+    """创建账号级 API 密钥的请求体，name 长度限制 1-120。"""
+
     name: str = Field(min_length=1, max_length=120)
     expires_at: datetime | None = None
 
 
 class AccountAPICredentialRead(BaseModel):
+    """账号级 API 密钥的对外视图，不包含明文密钥与 digest。"""
+
     id: str
     user_id: str
     name: str
@@ -102,6 +120,8 @@ class AccountAPICredentialRead(BaseModel):
 
 
 class AccountAPICredentialCreated(AccountAPICredentialRead):
+    """新建或轮换密钥的响应，明文 api_key 仅在此返回一次。"""
+
     api_key: str
 
 
@@ -110,6 +130,10 @@ ACCOUNT_API_CLIENT_PREFIX = "StaffDeck 账号全量 API"
 
 @router.post("/login", response_model=LoginResponse)
 def login(request: LoginRequest, db: Session = Depends(get_session)) -> LoginResponse:
+    """账号密码登录：校验租户与密码后签发访问令牌。
+
+    用户名不存在时允许唯一匹配 display_name 作为登录名；凭据错误一律返回 401。
+    """
     ensure_tenant(db, request.tenant_id)
     username = request.username.strip()
     if not username or not request.password:
@@ -137,6 +161,7 @@ def login(request: LoginRequest, db: Session = Depends(get_session)) -> LoginRes
 
 @router.get("/me", response_model=UserRead)
 def me(user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> UserRead:
+    """返回当前登录用户的账号信息与头像资源指针。"""
     return _user_read(user, _avatar_pointer_for(db, user.id))
 
 
@@ -237,6 +262,7 @@ def create_user(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> UserRead:
+    """管理员在自身租户内创建 web 账号，用户名已存在时返回 409。"""
     if not is_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Only administrator can create accounts")
     if request.tenant_id != current_user.tenant_id:
@@ -269,6 +295,10 @@ def list_users(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[UserRead]:
+    """列出指定租户的账号，管理员可附带渠道身份。
+
+    非管理员只返回 source=web 的内部成员，避免渠道客户与群聊虚拟账号外泄。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     statement = select(User).where(User.tenant_id == tenant_id)
     # 非管理员只需要为处理人选择器读取内部成员。不能依赖前端过滤，否则
@@ -324,6 +354,7 @@ def list_account_api_credentials(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[AccountAPICredentialRead]:
+    """列出当前账号名下的 API 密钥（含已吊销），不返回明文密钥。"""
     client = _ensure_account_api_client(db, current_user.tenant_id, current_user)
     if not client:
         return []
@@ -349,6 +380,7 @@ def create_account_api_credential(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> AccountAPICredentialCreated:
+    """为当前账号创建全量权限 API 密钥，明文 token 仅在本次响应返回。"""
     client = _ensure_account_api_client(db, current_user.tenant_id, current_user)
     token, prefix, digest = generate_api_key()
     row = APICredential(
@@ -379,6 +411,7 @@ def rotate_account_api_credential(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> AccountAPICredentialCreated:
+    """轮换指定密钥：换发新 token，并把状态重置为 active、清除吊销时间。"""
     row = _get_account_api_credential(
         db, current_user.tenant_id, current_user.id, credential_id
     )
@@ -406,6 +439,7 @@ def revoke_account_api_credential(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> AccountAPICredentialRead:
+    """吊销指定密钥，保留记录供审计查询。"""
     row = _get_account_api_credential(
         db, current_user.tenant_id, current_user.id, credential_id
     )
@@ -425,6 +459,7 @@ def update_user(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> UserRead:
+    """管理员更新账号昵称、密码或角色，禁止修改自己的角色。"""
     _require_admin(current_user, request.tenant_id)
     user = db.get(User, user_id)
     if not user or user.tenant_id != request.tenant_id:
@@ -454,6 +489,10 @@ def delete_user(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict[str, bool]:
+    """管理员删除普通账号，并同步清理其头像记录。
+
+    自己或管理员账号不允许删除，否则返回 400。
+    """
     _require_admin(current_user, tenant_id)
     user = db.get(User, user_id)
     if not user or user.tenant_id != tenant_id:
@@ -474,6 +513,7 @@ def _user_read(
     avatar_url: Optional[str] = None,
     channel_identities: Optional[list[UserChannelIdentity]] = None,
 ) -> UserRead:
+    """把 User ORM 行转换为对外视图，可选附带头像指针与渠道身份。"""
     return UserRead(
         id=user.id,
         tenant_id=user.tenant_id,
@@ -507,6 +547,7 @@ def _parse_avatar_data_url(data_url: str) -> Optional[tuple[bytes, str]]:
 
 
 def _require_admin(user: User, tenant_id: str) -> None:
+    """校验当前用户是管理员且属于目标租户，否则抛 403。"""
     if not is_admin_user(user):
         raise HTTPException(status_code=403, detail="Only administrator can manage accounts")
     if user.tenant_id != tenant_id:
@@ -514,6 +555,7 @@ def _require_admin(user: User, tenant_id: str) -> None:
 
 
 def _account_api_client_name(user_id: str) -> str:
+    """生成账号级密钥专用 APIClient 名称，按 user_id 区分。"""
     return f"{ACCOUNT_API_CLIENT_PREFIX}:{user_id}"
 
 
@@ -522,6 +564,7 @@ def _find_account_api_client(
     tenant_id: str,
     user_id: str,
 ) -> APIClient | None:
+    """按租户与账号名查找账号级 APIClient，不存在时返回 None。"""
     return db.exec(
         select(APIClient).where(
             APIClient.tenant_id == tenant_id,
@@ -531,6 +574,10 @@ def _find_account_api_client(
 
 
 def _ensure_account_api_client(db: Session, tenant_id: str, user: User) -> APIClient:
+    """获取或创建账号级 APIClient，并同步其权限范围为账号全量访问。
+
+    复用已有 client 时刷新 scopes、状态与 metadata，并同步其下密钥的 scopes。
+    """
     row = _find_account_api_client(db, tenant_id, user.id)
     required_scopes = sorted(USER_FULL_ACCESS_SCOPES)
     if row:
@@ -582,6 +629,7 @@ def _get_account_api_credential(
     user_id: str,
     credential_id: str,
 ) -> APICredential:
+    """取当前账号名下的密钥行，跨租户或不属于该账号时抛 404。"""
     client = _find_account_api_client(db, tenant_id, user_id)
     row = db.get(APICredential, credential_id)
     if (
@@ -599,6 +647,7 @@ def _account_api_credential_read(
     row: APICredential,
     user_id: str,
 ) -> AccountAPICredentialRead:
+    """把 APICredential 行转为对外视图，密钥前缀只暴露展示用片段。"""
     return AccountAPICredentialRead(
         id=row.id,
         user_id=user_id,

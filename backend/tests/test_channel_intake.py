@@ -33,6 +33,7 @@ from app.db.models import (
 
 
 def _test_engine():
+    """创建进程内共享的内存 SQLite 引擎并建表，供各用例隔离运行。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -43,6 +44,7 @@ def _test_engine():
 
 
 def _p2p_message(event_id: str = "evt_1", text: str = "你好") -> dict:
+    """构造一条微信单聊入站消息，可按需覆盖事件 ID 与文本。"""
     return {
         "message_id": event_id,
         "from_user_id": "user_ab12cd34@im.wechat",
@@ -57,6 +59,7 @@ def _p2p_message(event_id: str = "evt_1", text: str = "你好") -> dict:
 
 
 def _group_message(event_id: str = "evt_g1", text: str = "群里问一句") -> dict:
+    """构造一条微信群聊入站消息，基于单聊字段补上群 ID 与会话 ID。"""
     msg = _p2p_message(event_id, text)
     msg["group_id"] = "room_123456"
     msg["session_id"] = "room_123456"
@@ -64,6 +67,7 @@ def _group_message(event_id: str = "evt_g1", text: str = "群里问一句") -> d
 
 
 def _seed_binding(engine, **overrides) -> str:
+    """写入一条激活的微信渠道绑定，可按需覆盖字段，返回绑定 ID。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         values = {
@@ -81,6 +85,7 @@ def _seed_binding(engine, **overrides) -> str:
 
 
 def _load_binding(engine, binding_id: str) -> ChannelBinding:
+    """脱离会话读取绑定快照，避免用例内多次查询共用缓存。"""
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         db.expunge(binding)
@@ -88,6 +93,7 @@ def _load_binding(engine, binding_id: str) -> ChannelBinding:
 
 
 def test_channel_only_attachment_uses_default_message_intent() -> None:
+    """验证纯附件入站消息沿用默认文本意图，图片与文件都取同一默认提示。"""
     binding = ChannelBinding(tenant_id="tenant_demo", agent_id="agent_1", channel="wecom")
     image = ChannelInbound(
         channel="wecom",
@@ -121,9 +127,11 @@ class RecordingAgentLoop:
     error: Exception | None = None
 
     def __init__(self, db, *, event_sink=None):
+        """保存会话以便模拟消息落库，事件回调参数仅为对齐接口。"""
         self.db = db
 
     def handle_turn(self, request):
+        """记录本轮请求并落库用户与助手消息，可注入异常模拟模型失败。"""
         type(self).calls.append(request)
         if type(self).error:
             raise type(self).error
@@ -157,11 +165,13 @@ class TypingRecorder:
 
 
 def _record_typing(binding, ilink_user_id, context_token, status, **kwargs) -> None:
+    """替代真实 typing 上报，仅记录 status 调用序列以便断言。"""
     TypingRecorder.calls.append(status)
 
 
 @pytest.fixture(autouse=True)
 def _fake_agent_loop(monkeypatch):
+    """自动替换 AgentLoop 与 typing 发送，隔离网络并重置各记录器。"""
     RecordingAgentLoop.calls = []
     RecordingAgentLoop.error = None
     TypingRecorder.calls = []
@@ -171,6 +181,7 @@ def _fake_agent_loop(monkeypatch):
 
 
 def test_inbound_runs_turn_and_marks_done() -> None:
+    """验证单聊入站事件会触发一轮对话、落库会话并标记 done。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -199,6 +210,7 @@ def test_inbound_runs_turn_and_marks_done() -> None:
 
 
 def test_event_id_replay_is_idempotent() -> None:
+    """验证重复投递同一事件时只处理一次，第二次直接返回 False。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -215,6 +227,7 @@ def test_event_id_replay_is_idempotent() -> None:
 
 
 def test_crash_recovery_dedup_marks_done_without_rerun() -> None:
+    """验证崩溃后消息已落库时，重放事件只补记 done 而不再跑对话。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
 
@@ -253,6 +266,7 @@ def test_crash_recovery_dedup_marks_done_without_rerun() -> None:
 
 
 def test_sweep_finds_turn_in_migration_isolated_session() -> None:
+    """验证迁移隔离会话中已落库的 turn 会被 sweep 判为失败而非重跑。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     original_conv = "wechat_p2p_user_ab12cd34@im.wechat"
@@ -304,6 +318,7 @@ def test_sweep_finds_turn_in_migration_isolated_session() -> None:
 
 
 def test_group_message_uses_group_account_and_sender_prefix() -> None:
+    """验证群消息使用群账号会话，并在文本前加上发送者前缀。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -326,6 +341,7 @@ def test_group_message_uses_group_account_and_sender_prefix() -> None:
 
 
 def test_failure_marks_event_failed_and_stages_error_notice() -> None:
+    """验证对话失败时事件标记 failed，并暂存一条待投递的错误提示。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -348,15 +364,19 @@ def test_failure_marks_event_failed_and_stages_error_notice() -> None:
 
 
 def test_harness_conflict_keeps_inbound_retryable_and_stages_terminal_notice(monkeypatch) -> None:
+    """验证 harness 会话忙冲突时事件保持可重试，并暂存终态提示。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
 
     class ConflictAgentLoop:
+        """模拟返回 HARNESS_SESSION_BUSY 的 AgentLoop，用于覆盖冲突分支。"""
         def __init__(self, db, *, event_sink=None):
+            """保存会话对象，事件回调参数仅为对齐接口。"""
             self.db = db
 
         def handle_turn(self, request):  # noqa: ANN001
+            """返回会话忙错误码，触发 intake 的可重试处理。"""
             return SimpleNamespace(
                 runtime_error_code="HARNESS_SESSION_BUSY",
                 reply="当前会话仍有任务执行，请稍后重试。",
@@ -379,15 +399,19 @@ def test_harness_conflict_keeps_inbound_retryable_and_stages_terminal_notice(mon
 
 
 def test_legacy_dict_harness_conflict_is_also_retryable(monkeypatch) -> None:
+    """验证旧式字典返回值中的 HARNESS_TURN_CONFLICT 同样按可重试处理。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
 
     class ConflictAgentLoop:
+        """模拟以字典返回冲突标记的旧式 AgentLoop。"""
         def __init__(self, db, *, event_sink=None):
+            """保存会话对象，事件回调参数仅为对齐接口。"""
             self.db = db
 
         def handle_turn(self, request):  # noqa: ANN001
+            """返回字典形式的冲突标记，覆盖旧版返回协议。"""
             return {"reply": "HARNESS_TURN_CONFLICT"}
 
     monkeypatch.setattr(agent_loop_module, "AgentLoop", ConflictAgentLoop)
@@ -404,6 +428,7 @@ def test_legacy_dict_harness_conflict_is_also_retryable(monkeypatch) -> None:
 
 
 def test_non_text_message_is_dropped_silently() -> None:
+    """验证纯图片等非文本消息被静默丢弃，不留事件记录也不跑对话。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -417,12 +442,14 @@ def test_non_text_message_is_dropped_silently() -> None:
 
 
 def test_session_serial_lock_shared_per_session() -> None:
+    """验证同一会话复用同一把锁，不同会话之间互不共享。"""
     assert _session_lock("s1") is _session_lock("s1")
     assert _session_lock("s1") is not _session_lock("s2")
 
 
 def test_concurrent_inbound_same_conversation_is_serialized(tmp_path) -> None:
     # 文件库 + busy timeout,避免内存库单连接下的并发事务冲突
+    """验证同一会话的并发入站被串行化，同一时刻只跑一轮对话。"""
     engine = create_engine(
         f"sqlite:///{tmp_path / 'intake.db'}",
         connect_args={"check_same_thread": False, "timeout": 30},
@@ -438,7 +465,9 @@ def test_concurrent_inbound_same_conversation_is_serialized(tmp_path) -> None:
     guard = threading.Lock()
 
     class SlowLoop(RecordingAgentLoop):
+        """在 handle_turn 中统计并发度并放慢处理，暴露串行化失效。"""
         def handle_turn(self, request):
+            """统计当前并发轮数后延迟执行，再走父类的落库逻辑。"""
             with guard:
                 active["count"] += 1
                 active["max"] = max(active["max"], active["count"])
@@ -471,6 +500,7 @@ def test_concurrent_inbound_same_conversation_is_serialized(tmp_path) -> None:
 
 
 def test_typing_wraps_handle_turn_success() -> None:
+    """验证一轮对话会先上报正在输入，再在结束时上报取消。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -480,6 +510,7 @@ def test_typing_wraps_handle_turn_success() -> None:
 
 
 def test_typing_cancelled_on_turn_failure() -> None:
+    """验证对话失败时仍会上报取消 typing，避免残留输入状态。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -490,6 +521,7 @@ def test_typing_cancelled_on_turn_failure() -> None:
 
 
 class FakeTypingClient:
+    """可注入故障的 typing 客户端替身，记录每次调用参数。"""
     def __init__(
         self,
         *,
@@ -497,6 +529,7 @@ class FakeTypingClient:
         get_config_error: Exception | None = None,
         send_error: Exception | None = None,
     ):
+        """保存票据与故障注入开关，并初始化调用记录。"""
         self.ticket = ticket
         self.get_config_error = get_config_error
         self.send_error = send_error
@@ -504,18 +537,21 @@ class FakeTypingClient:
         self.send_calls: list[tuple[str, str, int]] = []
 
     def get_config(self, ilink_user_id: str, context_token: str = "") -> dict:
+        """返回预设 typing 票据，或按注入的异常抛出。"""
         self.get_config_calls.append((ilink_user_id, context_token))
         if self.get_config_error:
             raise self.get_config_error
         return {"typing_ticket": self.ticket}
 
     def send_typing(self, ilink_user_id: str, typing_ticket: str, status: int = 1) -> None:
+        """记录发送的参数，或按注入的异常抛出。"""
         self.send_calls.append((ilink_user_id, typing_ticket, status))
         if self.send_error:
             raise self.send_error
 
 
 def test_typing_fetches_and_caches_ticket() -> None:
+    """验证首次上报会拉取票据并写回绑定配置，随后用它发送。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -534,6 +570,7 @@ def test_typing_fetches_and_caches_ticket() -> None:
 
 
 def test_typing_reuses_cached_ticket_without_get_config() -> None:
+    """验证已有缓存票据时跳过 get_config，直接发送。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, config_json={"typing_ticket": "cached_ticket"})
     binding = _load_binding(engine, binding_id)
@@ -549,6 +586,7 @@ def test_typing_reuses_cached_ticket_without_get_config() -> None:
 
 
 def test_typing_skips_silently_when_get_config_fails() -> None:
+    """验证拉取票据失败时静默跳过，不发送也不写缓存。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -567,6 +605,7 @@ def test_typing_skips_silently_when_get_config_fails() -> None:
 
 
 def test_typing_send_failure_clears_cached_ticket() -> None:
+    """验证发送失败会清除缓存票据，避免后续继续使用失效票据。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, config_json={"typing_ticket": "stale_ticket"})
     binding = _load_binding(engine, binding_id)
@@ -584,6 +623,7 @@ def test_typing_send_failure_clears_cached_ticket() -> None:
 
 
 def test_typing_cancel_without_ticket_is_noop() -> None:
+    """验证取消 typing 时不拉取票据，无缓存则直接跳过。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -600,6 +640,7 @@ def test_typing_cancel_without_ticket_is_noop() -> None:
 
 
 def test_typing_noop_for_inactive_binding() -> None:
+    """验证绑定非激活时 typing 上报整体跳过。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, status="expired")
     binding = _load_binding(engine, binding_id)
@@ -628,6 +669,7 @@ def _seed_stale_event(
     processor_run_id: str | None = None,
     lease_seconds: float | None = None,
 ) -> None:
+    """写入指定状态与时间戳的入站事件，模拟陈旧或并发接管现场。"""
     from datetime import timedelta
 
     with Session(engine) as db:
@@ -652,6 +694,7 @@ def _seed_stale_event(
 
 
 def test_stale_processing_event_is_taken_over() -> None:
+    """验证超过阈值的 processing 事件会被接管并跑完。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_stale_event(engine, binding_id, "evt_stale", status="processing", age_seconds=300)
@@ -666,6 +709,7 @@ def test_stale_processing_event_is_taken_over() -> None:
 
 
 def test_fresh_processing_event_is_not_killed() -> None:
+    """验证同进程内新近处理的 processing 事件不会被抢占。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_stale_event(
@@ -686,6 +730,7 @@ def test_fresh_processing_event_is_not_killed() -> None:
 
 
 def test_current_run_processing_event_is_never_taken_over_by_age() -> None:
+    """验证本进程在处理的事件即使很老也不会被抢占或被 sweep。"""
     from app.channels.service_intake import sweep_stale_inbound_events
 
     engine = _test_engine()
@@ -711,6 +756,7 @@ def test_current_run_processing_event_is_never_taken_over_by_age() -> None:
 
 
 def test_other_process_active_lease_is_not_taken_over() -> None:
+    """验证其他进程租约未过期时事件不会被接管。"""
     from app.channels.service_intake import sweep_stale_inbound_events
 
     engine = _test_engine()
@@ -735,6 +781,7 @@ def test_other_process_active_lease_is_not_taken_over() -> None:
 
 
 def test_other_process_expired_lease_is_taken_over() -> None:
+    """验证其他进程租约已过期时事件会被接管并重跑。"""
     from app.channels.service_intake import sweep_stale_inbound_events
 
     engine = _test_engine()
@@ -758,6 +805,7 @@ def test_other_process_expired_lease_is_taken_over() -> None:
 
 
 def test_stale_claim_is_released_when_recovery_logic_raises(monkeypatch) -> None:
+    """验证恢复逻辑抛异常时释放抢占标记，事件仍可被后续接管。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_stale_event(
@@ -794,6 +842,7 @@ def test_stale_claim_is_released_when_recovery_logic_raises(monkeypatch) -> None
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
 def test_processor_run_id_changes_after_prefork() -> None:
+    """验证 fork 出的子进程重新生成 run id，避免与父进程混淆租约。"""
     parent_run_id = intake_module.current_processor_run_id()
     read_fd, write_fd = os.pipe()
     child_pid = os.fork()
@@ -816,6 +865,7 @@ def test_processor_run_id_changes_after_prefork() -> None:
 
 
 def test_concurrent_sweeps_claim_old_event_once(tmp_path) -> None:
+    """验证两个 sweep 并发抢同一陈旧事件时只有一方成功接管。"""
     from app.channels.service_intake import sweep_stale_inbound_events
 
     db_path = tmp_path / "sweep.db"
@@ -839,6 +889,7 @@ def test_concurrent_sweeps_claim_old_event_once(tmp_path) -> None:
     errors: list[Exception] = []
 
     def sweep() -> None:
+        """在栅栏处对齐后执行一次 sweep，并收集返回值或异常。"""
         try:
             gate.wait(timeout=5.0)
             results.append(sweep_stale_inbound_events(db_engine=engine))
@@ -862,6 +913,7 @@ def test_concurrent_sweeps_claim_old_event_once(tmp_path) -> None:
 
 
 def test_done_event_is_never_taken_over() -> None:
+    """验证已完成事件不会因年龄被重新接管。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_stale_event(engine, binding_id, "evt_done", status="done", age_seconds=300)
@@ -874,6 +926,7 @@ def test_done_event_is_never_taken_over() -> None:
 
 
 def test_startup_sweep_takes_over_stale_events() -> None:
+    """验证启动 sweep 只接管陈旧事件，跳过新鲜和已完成事件。"""
     from app.channels.service_intake import sweep_stale_inbound_events
 
     engine = _test_engine()
@@ -909,6 +962,7 @@ def test_startup_sweep_takes_over_stale_events() -> None:
 
 
 def _seed_incomplete_turn(engine, binding_id: str, event_id: str, *, with_reply: bool) -> None:
+    """构造 turn 未完成的现场：用户消息已落库，回复缺失或已存在。"""
     from datetime import timedelta
 
     with Session(engine) as db:
@@ -959,6 +1013,7 @@ def _seed_incomplete_turn(engine, binding_id: str, event_id: str, *, with_reply:
 
 
 def test_incomplete_turn_marks_failed_and_notices_without_rerun() -> None:
+    """验证中断的 turn 不重跑，标记 failed 并暂存中断通知。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_incomplete_turn(engine, binding_id, "evt_gap", with_reply=False)
@@ -980,6 +1035,7 @@ def test_incomplete_turn_marks_failed_and_notices_without_rerun() -> None:
 
 
 def test_repeated_incomplete_turn_recovery_stages_one_notice() -> None:
+    """验证重复恢复同一中断 turn 只暂存一条通知。"""
     from datetime import timedelta
 
     engine = _test_engine()
@@ -1005,6 +1061,7 @@ def test_repeated_incomplete_turn_recovery_stages_one_notice() -> None:
 
 
 def test_completed_turn_is_not_misflagged() -> None:
+    """验证已有助手回复的 turn 收敛为 done，不误判为中断。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_incomplete_turn(engine, binding_id, "evt_done_turn", with_reply=True)
@@ -1020,6 +1077,7 @@ def test_completed_turn_is_not_misflagged() -> None:
 
 
 def test_sweep_marks_incomplete_turn_failed_consistently() -> None:
+    """验证 sweep 对中断 turn 的处理与运行时一致：标记失败并通知。"""
     from app.channels.service_intake import sweep_stale_inbound_events
 
     engine = _test_engine()
@@ -1043,6 +1101,7 @@ def test_sweep_marks_incomplete_turn_failed_consistently() -> None:
 
 
 def test_concurrent_sweeps_stage_one_incomplete_notice(tmp_path) -> None:
+    """验证并发 sweep 遇到中断 turn 时只暂存一条通知。"""
     from app.channels.service_intake import sweep_stale_inbound_events
 
     db_path = tmp_path / "incomplete-sweep.db"
@@ -1063,6 +1122,7 @@ def test_concurrent_sweeps_stage_one_incomplete_notice(tmp_path) -> None:
     errors: list[Exception] = []
 
     def sweep() -> None:
+        """在栅栏处对齐后执行 sweep，只收集异常不关心返回值。"""
         try:
             gate.wait(timeout=5.0)
             sweep_stale_inbound_events(db_engine=engine)
@@ -1114,6 +1174,7 @@ def test_inbound_attachment_download_failure_degrades_to_text(monkeypatch) -> No
 
     # 让 inbound_attachments_to_chat 抛异常,验证 intake 降级
     def _boom(*_args, **_kwargs):
+        """模拟附件桥接服务不可用，抛出运行时异常。"""
         raise RuntimeError("下载服务不可用")
 
     monkeypatch.setattr(bridge_module, "inbound_attachments_to_chat", _boom)
@@ -1166,6 +1227,7 @@ def test_inbound_with_attachments_passes_them_to_request(monkeypatch) -> None:
     )
 
     def _fake_bridge(*_args, **_kwargs):
+        """返回预置附件，模拟下载成功。"""
         return [staged]
 
     monkeypatch.setattr(bridge_module, "inbound_attachments_to_chat", _fake_bridge)

@@ -21,6 +21,10 @@ def enqueue_memory_capture(
     tool_result: ToolResult | None,
     model_config_id: str,
 ) -> AsyncJob:
+    """把本轮请求、模型输出与工具结果打包成后台 Memory 捕获任务并入队。
+
+    入队后立即返回 AsyncJob 句柄，真正的记忆抽取由 run_memory_capture_job 执行。
+    """
     payload = {
         "request": request.model_dump(mode="json"),
         "session_id": session_id,
@@ -41,6 +45,10 @@ def enqueue_memory_capture(
 
 
 def run_memory_capture_job(payload: dict[str, Any]) -> None:
+    """后台执行 Memory 捕获：定位本轮消息历史后写入记忆，异常只记事件不外抛。
+
+    缺少 session、model_config 或本轮消息尚未落库时，记录 memory_error 事件后直接返回。
+    """
     request = ChatTurnRequest.model_validate(payload["request"])
     session_id = str(payload["session_id"])
     model_config_id = str(payload["model_config_id"])
@@ -104,6 +112,7 @@ def run_memory_capture_job(payload: dict[str, Any]) -> None:
             return
 
         def persist_span(event_type: str, event_payload: dict[str, Any]) -> None:
+            """补上 turn 与 client_turn 标识后把 span 事件落库，供捕获过程实时观测。"""
             traced_payload = dict(event_payload)
             if turn_id:
                 traced_payload.setdefault("turn_id", turn_id)
@@ -150,6 +159,7 @@ def _conversation_messages_for_turn(
     session_id: str,
     turn_id: str,
 ) -> list[dict[str, str]]:
+    """取截至本轮助手回复的最近对话，最多 12 条；定位不到该 turn 时返回空列表。"""
     if not turn_id:
         return []
     rows = list(

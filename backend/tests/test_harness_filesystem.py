@@ -17,6 +17,7 @@ from app.harness import (
 
 
 def test_write_read_edit_and_info_are_hash_guarded_and_atomic(tmp_path: Path) -> None:
+    """验证写入、读取、编辑与文件信息都受哈希校验保护且原子落盘。"""
     executor, context = _harness(tmp_path)
 
     written = _execute(
@@ -82,6 +83,7 @@ def test_write_read_edit_and_info_are_hash_guarded_and_atomic(tmp_path: Path) ->
 
 
 def test_artifacts_are_published_explicitly_with_safe_metadata(tmp_path: Path) -> None:
+    """验证产物必须显式发布，且发布元信息会被安全清洗。"""
     executor, context = _harness(tmp_path)
     _execute(
         executor,
@@ -124,6 +126,7 @@ def test_artifacts_are_published_explicitly_with_safe_metadata(tmp_path: Path) -
 
 
 def test_extract_document_text_persists_docx_for_bounded_reading(tmp_path: Path) -> None:
+    """验证文档抽取把正文落盘，便于后续分段读取。"""
     executor, context = _harness(tmp_path)
     context.workspace_root.mkdir(parents=True)
     document = BytesIO()
@@ -177,6 +180,7 @@ def test_extract_document_text_persists_docx_for_bounded_reading(tmp_path: Path)
 
 
 def test_extract_document_text_rejects_unsupported_binary(tmp_path: Path) -> None:
+    """验证不支持的二进制文档格式返回抽取失败错误。"""
     executor, context = _harness(tmp_path)
     context.workspace_root.mkdir(parents=True)
     (context.workspace_root / "unknown.bin").write_bytes(b"\x00\x01")
@@ -192,6 +196,7 @@ def test_extract_document_text_rejects_unsupported_binary(tmp_path: Path) -> Non
 
 
 def test_harness_internal_trash_remains_reserved(tmp_path: Path) -> None:
+    """验证 Harness 内部回收站路径保持保留，不允许写入。"""
     executor, context = _harness(tmp_path)
 
     code = _execute_failure(
@@ -205,6 +210,7 @@ def test_harness_internal_trash_remains_reserved(tmp_path: Path) -> None:
 
 
 def test_typed_file_tools_accept_absolute_and_parent_paths(tmp_path: Path) -> None:
+    """验证文件工具能处理绝对路径与父级相对路径。"""
     executor, context = _harness(tmp_path)
     context.workspace_root.mkdir(parents=True)
     outside = tmp_path / "outside.txt"
@@ -276,6 +282,7 @@ def test_typed_file_tools_accept_absolute_and_parent_paths(tmp_path: Path) -> No
 
 
 def test_external_file_can_be_staged_as_downloadable_artifact(tmp_path: Path) -> None:
+    """验证工作区外的文件可先暂存为工作区内的可下载产物。"""
     executor, context = _harness(tmp_path)
     external = tmp_path / "outside-report.txt"
     external.write_text("ready", encoding="utf-8")
@@ -293,6 +300,7 @@ def test_external_file_can_be_staged_as_downloadable_artifact(tmp_path: Path) ->
 
 
 def test_symlink_targets_and_symlink_ancestors_are_rejected(tmp_path: Path) -> None:
+    """验证符号链接目标与符号链接祖先路径都被拒绝。"""
     executor, context = _harness(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -323,6 +331,7 @@ def test_symlink_targets_and_symlink_ancestors_are_rejected(tmp_path: Path) -> N
 
 
 def test_soft_delete_rejects_a_symlinked_internal_trash(tmp_path: Path) -> None:
+    """验证软删除拒绝被符号链接替换的内部回收站目录。"""
     executor, context = _harness(tmp_path)
     _execute(
         executor,
@@ -353,6 +362,7 @@ def test_soft_delete_rejects_a_symlinked_internal_trash(tmp_path: Path) -> None:
 
 
 def test_list_glob_and_grep_are_bounded_and_do_not_follow_symlinks(tmp_path: Path) -> None:
+    """验证列表、glob 与 grep 受上限约束且不跟随符号链接。"""
     executor, context = _harness(tmp_path)
     _execute(executor, context, "mkdir", {"path": "src/nested"})
     _execute(
@@ -408,6 +418,7 @@ def test_list_glob_and_grep_are_bounded_and_do_not_follow_symlinks(tmp_path: Pat
 
 
 def test_grep_rejects_untrusted_regular_expressions(tmp_path: Path) -> None:
+    """验证 grep 拒绝高风险正则表达式。"""
     executor, context = _harness(tmp_path)
     error_code = _execute_failure(
         executor,
@@ -424,6 +435,7 @@ def test_grep_rejects_untrusted_regular_expressions(tmp_path: Path) -> None:
 
 
 def test_copy_move_and_soft_delete_preserve_recovery_and_hashes(tmp_path: Path) -> None:
+    """验证复制、移动与软删除都保留哈希并支持从回收站恢复。"""
     executor, context = _harness(tmp_path)
     source = _execute(
         executor,
@@ -484,6 +496,7 @@ def test_copy_move_and_soft_delete_preserve_recovery_and_hashes(tmp_path: Path) 
 
 
 def test_workspace_and_file_quotas_are_enforced_before_write(tmp_path: Path) -> None:
+    """验证写入前先检查单文件与工作区配额，超限即失败。"""
     limits = HarnessLimits(
         max_read_bytes=64,
         max_file_bytes=8,
@@ -512,6 +525,7 @@ def test_workspace_and_file_quotas_are_enforced_before_write(tmp_path: Path) -> 
 
 
 def test_deleted_files_do_not_consume_workspace_quota(tmp_path: Path) -> None:
+    """验证已删除的文件不再占用工作区配额。"""
     limits = HarnessLimits(
         max_read_bytes=64,
         max_file_bytes=8,
@@ -528,6 +542,7 @@ def test_deleted_files_do_not_consume_workspace_quota(tmp_path: Path) -> None:
 
 
 def test_read_chunks_on_utf8_boundaries_and_rejects_binary(tmp_path: Path) -> None:
+    """验证按 UTF-8 边界分块读取、偏移对齐，并拒绝二进制文件。"""
     limits = HarnessLimits(
         max_read_bytes=8,
         max_file_bytes=32,
@@ -598,6 +613,7 @@ def test_read_chunks_on_utf8_boundaries_and_rejects_binary(tmp_path: Path) -> No
 
 
 def test_ambiguous_edit_requires_explicit_replace_all(tmp_path: Path) -> None:
+    """验证多处匹配的编辑必须显式声明替换全部。"""
     executor, context = _harness(tmp_path)
     _execute(
         executor,
@@ -633,6 +649,7 @@ def _harness(
     *,
     limits: HarnessLimits | None = None,
 ) -> tuple[HarnessExecutor, HarnessToolContext]:
+    """构建带独立工作区与限额的执行器和工具上下文。"""
     context = HarnessToolContext(
         run_id="run",
         task_frame_id="frame",
@@ -648,6 +665,7 @@ def _execute(
     name: str,
     arguments: dict[str, object],
 ) -> dict[str, object]:
+    """执行工具调用并断言成功，返回结果数据。"""
     result = executor.execute(
         context,
         HarnessToolCall(call_id=f"call-{name}", name=name, arguments=arguments),
@@ -663,6 +681,7 @@ def _execute_failure(
     name: str,
     arguments: dict[str, object],
 ) -> str:
+    """执行工具调用并断言失败，返回错误码。"""
     result = executor.execute(
         context,
         HarnessToolCall(call_id=f"call-{name}", name=name, arguments=arguments),

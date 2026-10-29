@@ -8,7 +8,9 @@ import { I18nProvider } from '@/i18n';
 
 import { EditableCapabilityReferencesLine } from './DistillPage';
 
+/** 验证 SOP 能力引用选择器的可用性与删除行为。 */
 describe('SOP capability references', () => {
+  /** 验证未启用资源默认隐藏，除非节点已引用它。 */
   it('hides unavailable resources unless the node already references them', async () => {
     const user = userEvent.setup();
 
@@ -43,6 +45,7 @@ describe('SOP capability references', () => {
     expect(screen.queryByText('已停用技能')).toBeNull();
   });
 
+  /** 验证删除不可用的可选引用只触发一次状态更新。 */
   it('removes an unavailable optional reference with one state update', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

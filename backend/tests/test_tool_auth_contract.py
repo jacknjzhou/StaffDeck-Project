@@ -12,6 +12,7 @@ from app.tools.tool_schema import ToolCall
 
 
 def _session() -> Session:
+    """创建已建表并写入演示租户的内存 SQLite 会话，供工具执行链路使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -24,10 +25,12 @@ def _session() -> Session:
 
 
 def test_http_tool_auth_json_reaches_protected_service(monkeypatch) -> None:
+    """验证 basic 认证与租户请求头会随调用下发，受保护服务因此返回成功。"""
     expected_basic = "Basic " + base64.b64encode(b"demo:secret").decode("ascii")
     seen: list[httpx.Headers] = []
 
     def service(request: httpx.Request) -> httpx.Response:
+        """模拟受保护服务，记录请求头并校验 Basic 认证与租户标识。"""
         seen.append(request.headers)
         if request.headers.get("authorization") != expected_basic:
             return httpx.Response(401, json={"detail": "unauthorized"}, request=request)
@@ -38,7 +41,9 @@ def test_http_tool_auth_json_reaches_protected_service(monkeypatch) -> None:
     transport = httpx.MockTransport(service)
 
     class Client(httpx.Client):
+        """把真实客户端替换为固定走 MockTransport 的测试子类，避免外网请求。"""
         def __init__(self, *, timeout):
+            """初始化客户端并将所有请求绑定到已注入的 mock transport。"""
             super().__init__(transport=transport, timeout=timeout)
 
     monkeypatch.setattr(httpx, "Client", Client)
@@ -67,7 +72,9 @@ def test_http_tool_auth_json_reaches_protected_service(monkeypatch) -> None:
 
 
 def test_custom_auth_json_is_sent_as_literal_headers(monkeypatch) -> None:
+    """验证自定义 auth_json 会被当作字面请求头原样发送，而非套用固定认证方案。"""
     def service(request: httpx.Request) -> httpx.Response:
+        """模拟仅接受 X-API-Key 的下游服务，用于断言自定义头确实到达。"""
         if request.headers.get("x-api-key") != "vendor-secret":
             return httpx.Response(401, request=request)
         return httpx.Response(200, json={"accepted": True}, request=request)
@@ -75,7 +82,9 @@ def test_custom_auth_json_is_sent_as_literal_headers(monkeypatch) -> None:
     transport = httpx.MockTransport(service)
 
     class Client(httpx.Client):
+        """把真实客户端替换为固定走 MockTransport 的测试子类，避免外网请求。"""
         def __init__(self, *, timeout):
+            """初始化客户端并将所有请求绑定到已注入的 mock transport。"""
             super().__init__(transport=transport, timeout=timeout)
 
     monkeypatch.setattr(httpx, "Client", Client)

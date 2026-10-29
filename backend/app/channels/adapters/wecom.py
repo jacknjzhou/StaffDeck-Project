@@ -48,6 +48,7 @@ WECOM_STREAM_MAX_BYTES = 1800
 
 
 def validate_wecom_media_url(url: str) -> bool:
+    """校验媒体 URL 是否为企微可信 COS 域的 https 地址,防止下载被引到外部主机。"""
     try:
         parsed = urlparse(url)
     except ValueError:
@@ -56,6 +57,7 @@ def validate_wecom_media_url(url: str) -> bool:
 
 
 def _wecom_event_label(payload: dict[str, Any], *keys: str) -> str:
+    """按给定顺序取第一个非空的事件字段并截断到 80 字符,用于拼进度文案。"""
     for key in keys:
         value = str(payload.get(key) or "").strip()
         if value:
@@ -64,7 +66,7 @@ def _wecom_event_label(payload: dict[str, Any], *keys: str) -> str:
 
 
 def _split_wecom_text(text: str, max_bytes: int = 1800) -> list[str]:
-    """Split output by UTF-8 bytes so mobile WeCom does not truncate CJK text."""
+    """按 UTF-8 字节切分文本,避免移动端企微把中英文混排内容截断。"""
     chunks: list[str] = []
     current: list[str] = []
     current_bytes = 0
@@ -84,6 +86,7 @@ def _split_wecom_text(text: str, max_bytes: int = 1800) -> list[str]:
 def _load_wecom_progress_names(
     binding: ChannelBinding,
 ) -> tuple[dict[str, str], dict[str, dict[str, str]], dict[str, str]]:
+    """读取本租户的 SOP、流程步骤与工具展示名,供进度文案替换内部 ID。"""
     with Session(engine) as db:
         skill_names: dict[str, str] = {}
         step_names: dict[str, dict[str, str]] = {}
@@ -112,6 +115,10 @@ def _load_wecom_progress_names(
 
 
 async def _download_wecom_media_limited(url: str, aes_key: str) -> tuple[bytes, str | None]:
+    """流式下载企微加密附件,解密前后各校验一次大小上限。
+
+    返回解密后的内容与从 content-disposition 解析出的原始文件名。
+    """
     from aibot import decrypt_file
 
     async with httpx.AsyncClient(timeout=15.0) as client, client.stream("GET", url) as response:
@@ -147,7 +154,7 @@ def is_self_frame(frame: dict[str, Any]) -> bool:
 
 
 def _strip_bot_mention(text: str, *, is_group: bool) -> str:
-    """Remove the leading WeCom bot mention before command parsing."""
+    """去掉群消息开头的机器人 @ 提及,便于后续命令解析。"""
     if not is_group:
         return text
     return re.sub(r"^\s*(?:<@[^>\s]+>|@[^\s]+)\s*", "", text).strip()
@@ -285,13 +292,16 @@ def normalize_wecom_frame(frame: dict[str, Any], *, account_scope: str = "") -> 
 
 
 def _default_client_factory(bot_id: str, secret: str):
+    """构造企微官方 WSClient,关闭重连次数上限以便长连接常驻。"""
     from aibot import WSClient, WSClientOptions
 
     return WSClient(WSClientOptions(bot_id=bot_id, secret=secret, max_reconnect_attempts=-1))
 
 
 class _StreamState:
+    """单个企微绑定的运行时状态:线程、事件循环、消息队列与断连标记。"""
     def __init__(self) -> None:
+        """初始化线程协作原语与句柄,具体线程在 ensure_binding 时再填充。"""
         self.thread: threading.Thread | None = None
         # 每绑定一个入站工作线程:WS loop 线程只入队,AgentLoop 轮在 worker 里跑,心跳不被阻塞
         self.worker: threading.Thread | None = None
@@ -309,7 +319,7 @@ class _StreamState:
 
 
 class WeComStreamReply:
-    """Render safe execution progress and model deltas into one stream message."""
+    """把执行进度与模型增量渲染成流式消息,进度流与答案流分开推送。"""
 
     def __init__(
         self,
@@ -321,6 +331,7 @@ class WeComStreamReply:
         step_names: dict[str, dict[str, str]] | None = None,
         tool_names: dict[str, str] | None = None,
     ):
+        """持有帧与连接后立即启动渲染线程,构造完成即开始推送进度。"""
         self._binding = binding
         self._frame = frame
         self._client, self._loop = stream
@@ -359,10 +370,12 @@ class WeComStreamReply:
 
     @property
     def failed(self) -> bool:
+        """发送线程是否已失败,调用方据此放弃本次流式回复。"""
         with self._condition:
             return self._failed
 
     def on_delta(self, delta: str) -> None:
+        """追加模型增量文本;首条增量后停用动画,后续增量合并进答案流。"""
         if not delta:
             return
         with self._condition:
@@ -375,7 +388,7 @@ class WeComStreamReply:
             self._condition.notify_all()
 
     def on_event(self, event_type: str, payload: dict[str, Any]) -> None:
-        """Convert internal execution events to user-safe progress text."""
+        """把内部执行事件翻译成用户可见的进度文案,无可展示内容则忽略。"""
         progress = self._event_progress(event_type, payload)
         if not progress:
             return
@@ -406,7 +419,7 @@ class WeComStreamReply:
             self._condition.notify_all()
 
     def _event_progress(self, event_type: str, payload: dict[str, Any]) -> tuple[str, str] | None:
-        """Render the same high-level milestones shown by the Feishu trace UI."""
+        """按事件类型渲染里程碑文案,未知事件返回 None 表示不展示。"""
         if event_type == "router_decision_created":
             intent = str(payload.get("user_intent") or payload.get("intent") or "").strip()
             return "intent", f"✅ 已判断意图：{intent}" if intent else "⏳ 判断意图…"
@@ -463,10 +476,12 @@ class WeComStreamReply:
 
     # Compatibility for focused callers/tests that only need the rendered text.
     def _event_message(self, event_type: str, payload: dict[str, Any]) -> str | None:
+        """只返回渲染后的文案,兼容仅关心文本的调用方与测试。"""
         progress = self._event_progress(event_type, payload)
         return progress[1] if progress else None
 
     def _upsert_progress(self, key: str, message: str) -> None:
+        """按 key 覆盖或追加进度行,最多保留最近 5 行以免卡片过长。"""
         for index, (existing_key, _existing_message) in enumerate(self._progress):
             if existing_key == key:
                 self._progress[index] = (key, message)
@@ -475,6 +490,10 @@ class WeComStreamReply:
         self._progress = self._progress[-5:]
 
     def finish(self) -> bool:
+        """收尾本次回复:推送终态进度与答案,并等待渲染线程退出。
+
+        没有任何答案文本时直接判失败;返回是否正常结束。
+        """
         with self._condition:
             if not self._answer.strip():
                 self._failed = True
@@ -491,6 +510,7 @@ class WeComStreamReply:
         return not self.failed and not self._worker.is_alive()
 
     def abort(self) -> None:
+        """放弃本次回复:标记失败并丢弃未发送内容,最多等待一个发送超时。"""
         with self._condition:
             self._failed = True
             self._finished = True
@@ -499,6 +519,10 @@ class WeComStreamReply:
         self._worker.join(timeout=SEND_TIMEOUT_SECONDS)
 
     def _run(self) -> None:
+        """渲染线程主循环:按需重绘动画并把变化的进度与答案推送给企微。
+
+        内容超过移动端安全字节数或发送异常时置失败并退出。
+        """
         while True:
             with self._condition:
                 while not self._dirty and not self._finished:
@@ -576,17 +600,21 @@ class WeComStreamReply:
                 return
 
     def _render_content(self) -> str:
+        """加锁渲染进度与答案的合并文本,主要供调试与测试。"""
         with self._condition:
             return self._render_content_unlocked()
 
     def _render_progress(self) -> str:
+        """加锁渲染当前进度文本。"""
         with self._condition:
             return self._render_progress_unlocked()
 
     def _render_progress_unlocked(self) -> str:
+        """调用方需持有 self._condition;把进度行用空行拼接。"""
         return "\n\n".join(message for _key, message in self._progress)
 
     def _render_content_unlocked(self) -> str:
+        """调用方需持有 self._condition;有答案时用分隔线接在进度之后。"""
         progress = "\n\n".join(message for _key, message in self._progress)
         answer = self._answer.strip()
         return f"{progress}\n\n---\n\n{answer}" if answer else progress
@@ -602,6 +630,7 @@ class WeComStreamManager:
         client_factory=None,
         reconcile_seconds: float = RECONCILE_SECONDS,
     ):
+        """保存数据库与客户端工厂注入点;线程由 start 与 reconcile 负责拉起。"""
         self._engine = db_engine or engine
         self._intake_engine = self._short_timeout_engine(self._engine)
         self._client_factory = client_factory or _default_client_factory
@@ -614,7 +643,7 @@ class WeComStreamManager:
 
     @staticmethod
     def _short_timeout_engine(db_engine):
-        """Use a separate short-timeout SQLite pool so inbox writes cannot stall heartbeats."""
+        """为 SQLite 单独建短超时连接池,避免收件箱写入拖住心跳线程。"""
         url = db_engine.url
         if url.get_backend_name() != "sqlite" or not url.database or url.database == ":memory:":
             return db_engine
@@ -625,6 +654,7 @@ class WeComStreamManager:
         )
 
     def start(self) -> None:
+        """幂等启动 reconcile 线程,周期对齐 DB 中的 active 绑定。"""
         if self._reconcile_thread and self._reconcile_thread.is_alive():
             return
         self._stopped.clear()
@@ -636,6 +666,10 @@ class WeComStreamManager:
         self._reconcile_thread.start()
 
     def stop(self, timeout_seconds: float = 5.0) -> bool:
+        """停止全部绑定线程与 reconcile 线程,返回是否在期限内全部退出。
+
+        超时的 worker 会被标记强制退役,完成当前消息后自行退出。
+        """
         self._stopped.set()
         with self._lock:
             states = list(self._streams.values())
@@ -665,6 +699,7 @@ class WeComStreamManager:
         ) and not (reconcile_thread and reconcile_thread.is_alive())
 
     def ensure_binding(self, binding_id: str) -> None:
+        """为 active 绑定按需拉起 stream 与 worker;已运行、已暂停或有残留线程时不新建。"""
         with Session(self._engine) as db:
             binding = db.get(ChannelBinding, binding_id)
             if not binding or binding.status != "active":
@@ -702,6 +737,7 @@ class WeComStreamManager:
             thread.start()
 
     def stop_binding(self, binding_id: str) -> None:
+        """请求停止指定绑定:关闭 producer 并调度 disconnect,worker 待回调排空后退出。"""
         with self._lock:
             state = self._streams.get(binding_id)
         if state:
@@ -710,17 +746,20 @@ class WeComStreamManager:
             self._stop_loop(state)
 
     def pause_binding(self, binding_id: str) -> None:
+        """暂停绑定:加入暂停集合并停止线程,reconcile 不再将其拉起。"""
         with self._lock:
             self._paused.add(binding_id)
         self.stop_binding(binding_id)
 
     def resume_binding(self, binding_id: str, *, start: bool = True) -> None:
+        """解除暂停,按需立即重建该绑定的长连接。"""
         with self._lock:
             self._paused.discard(binding_id)
         if start:
             self.ensure_binding(binding_id)
 
     def _join_worker(self, state: _StreamState) -> None:
+        """有界等待 worker 退出;进行中的对话轮可能很久,超时即放弃。"""
         worker = state.worker
         if worker and worker.is_alive():
             # 容忍超时:进行中的对话轮可能很长,worker 是 daemon,不阻塞停机
@@ -761,6 +800,10 @@ class WeComStreamManager:
         state: _StreamState,
         deadline: float | None,
     ) -> bool:
+        """等已登记回调全部退出后再投递 worker 停止哨兵,返回是否送达。
+
+        deadline 为 None 表示无限等待,超时则返回 False 且不投递。
+        """
         with state.callback_condition:
             while state.callbacks_inflight:
                 if deadline is None:
@@ -776,6 +819,7 @@ class WeComStreamManager:
             return True
 
     def running_binding_ids(self) -> set[str]:
+        """返回 stream 或 worker 仍存活的绑定 ID 集合。"""
         with self._lock:
             return {
                 binding_id
@@ -844,6 +888,7 @@ class WeComStreamManager:
         return bool(getattr(client, "is_connected", False))
 
     def _reconcile_loop(self) -> None:
+        """后台循环按固定间隔对账一次,单轮异常只记录日志不退出。"""
         while not self._stopped.is_set():
             try:
                 self.reconcile_once()
@@ -852,6 +897,7 @@ class WeComStreamManager:
             self._stopped.wait(self._reconcile_seconds)
 
     def _stop_loop(self, state: _StreamState) -> None:
+        """在 loop 线程上调度 disconnect 与 loop.stop,重复调用无副作用。"""
         loop = state.loop
         client = state.client
         if loop is None or loop.is_closed():
@@ -875,6 +921,10 @@ class WeComStreamManager:
         *,
         config_revision: int | None = None,
     ) -> None:
+        """把连接状态写回 DB,仅在状态真正变化时更新,避免空写。
+
+        连上时记录 last_connected_at 并清掉断开告警标记,按 config_revision 条件更新防止旧线程覆盖新配置。
+        """
         try:
             with Session(self._engine) as db:
                 statement = update(ChannelBinding).where(
@@ -951,7 +1001,9 @@ class WeComStreamManager:
             logger.exception("企微断开超时告警失败 binding=%s", binding_id)
 
     def _wire_client(self, binding_id: str, client, state: _StreamState, account_scope: str = "") -> None:
+        """给 SDK client 注册认证、断开与消息回调;消息先落 durable inbox 再入队。"""
         def on_authenticated(*_args) -> None:
+            """SDK 认证成功回调:按本线程的配置版本写入已连接。"""
             self._set_connected(
                 binding_id,
                 True,
@@ -959,6 +1011,7 @@ class WeComStreamManager:
             )
 
         def on_disconnected(*_args) -> None:
+            """SDK 断开回调:按本线程的配置版本写入未连接。"""
             self._set_connected(
                 binding_id,
                 False,
@@ -966,6 +1019,10 @@ class WeComStreamManager:
             )
 
         def on_frame(frame, *_args) -> None:
+            """收到消息帧:归一化后写入 durable inbox,成功才交给本地 worker。
+
+            归一化失败直接丢弃;inbox 暂不可写时在回调内退避重试,用背压代替丢消息。
+            """
             # SDK callback returns only after the durable inbox commit. The queue only wakes
             # the local worker; startup polling recovers the row if the process exits here.
             with state.callback_condition:
@@ -1046,6 +1103,7 @@ class WeComStreamManager:
                     del self._streams[binding_id]
 
     def _run_stream(self, binding_id: str, state: _StreamState) -> None:
+        """绑定专属线程:建独立 event loop,连上企微 WS 后常驻运行到 stop。"""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         # 先发布 loop 再检查 stop，覆盖 ensure_binding 后立即 stop 的启动竞态。
@@ -1100,11 +1158,13 @@ class WeComAdapter:
     """
 
     def normalize(self, raw: dict[str, Any]) -> ChannelInbound | None:
+        """把原始企微消息帧归一化为渠道内核的入站结构。"""
         return normalize_wecom_frame(raw)
 
     _token_provider: WeComTokenProvider | None = None
 
     def _get_token_provider(self) -> WeComTokenProvider:
+        """惰性创建并复用本实例的 token 缓存。"""
         if self._token_provider is None:
             self._token_provider = WeComTokenProvider()
         return self._token_provider
@@ -1116,6 +1176,10 @@ class WeComAdapter:
         *,
         max_bytes: int = 0,
     ) -> bytes:
+        """下载附件:带 url 时走加密直链,否则按 media_id 调 media/get。
+
+        直链域名必须可信,下载与解密后都不得超过大小上限;token 失效时刷新后重试一次。
+        """
         media_url = str(attachment.download_params.get("url") or "").strip()
         if media_url:
             if not validate_wecom_media_url(media_url):
@@ -1188,6 +1252,10 @@ class WeComAdapter:
         *,
         idempotency_key: str | None = None,
     ) -> None:
+        """通过已就绪的长连接主动发消息,群聊按字节切片并附带引用前缀。
+
+        idempotency_key 仅为签名一致保留,企微 WS 协议无法注入客户端幂等标识。
+        """
         chat_id = str(target.get("to_user_id") or "").strip()
         if not chat_id:
             raise ValueError("企微投递目标缺少 to_user_id(chatid)")
@@ -1220,6 +1288,7 @@ class WeComAdapter:
         binding: ChannelBinding,
         frame: dict[str, Any],
     ) -> WeComStreamReply | None:
+        """连接未就绪或帧非法时返回 None,否则构造流式回复器并预加载进度名称。"""
         from app.channels import get_wecom_stream_manager
 
         stream = get_wecom_stream_manager().get_stream(binding.id)
@@ -1236,33 +1305,41 @@ class WeComAdapter:
         )
 
     def start_ingress(self, binding_id: str) -> None:
+        """按需拉起该绑定的入站长连接。"""
         from app.channels import get_wecom_stream_manager
 
         get_wecom_stream_manager().ensure_binding(binding_id)
 
     def stop_ingress(self, binding_id: str) -> None:
+        """停止该绑定的入站长连接。"""
         from app.channels import get_wecom_stream_manager
 
         get_wecom_stream_manager().stop_binding(binding_id)
 
 
 class WeComTokenError(RuntimeError):
-    pass
+    """企微 access_token 获取或媒体接口调用失败。"""
 
 
 class WeComTokenProvider:
-    """Cache enterprise access tokens for each binding and configuration revision."""
+    """按绑定与配置版本缓存企业 access_token,提前 5 分钟过期以避开边界失效。"""
 
     def __init__(self, *, client_factory: Callable[[], httpx.Client] | None = None):
+        """保存 HTTP 客户端工厂与按 (绑定, 配置版本) 索引的 token 缓存。"""
         self._client_factory = client_factory or (lambda: httpx.Client(timeout=10.0))
         self._cache: dict[tuple[str, int], tuple[str, float]] = {}
         self._lock = threading.Lock()
 
     @staticmethod
     def _key(binding: ChannelBinding) -> tuple[str, int]:
+        """缓存键带上 config_revision,凭证或配置变更后自然换用新 token。"""
         return binding.id, binding.config_revision
 
     def get(self, binding: ChannelBinding, *, force_refresh: bool = False) -> str:
+        """取有效 access_token:命中未过期缓存直接返回,否则请求并缓存剩余有效期。
+
+        缺 corp_id/secret、请求失败或响应字段不全时抛 WeComTokenError。
+        """
         key = self._key(binding)
         with self._lock:
             cached = self._cache.get(key)

@@ -42,6 +42,8 @@ RECOVERY_REPLY = (
 
 @dataclass(frozen=True)
 class HarnessRecoveryResult:
+    """一次孤儿回收的统计结果，按表记录处理条数，供日志与监控使用。"""
+
     run_count: int = 0
     frame_count: int = 0
     turn_count: int = 0
@@ -55,12 +57,12 @@ def recover_orphan_harness_runs(
     startup: bool = False,
     now: datetime | None = None,
 ) -> HarnessRecoveryResult:
-    """Recover active rows left without a live executor.
+    """回收没有存活执行者的活跃 Harness 记录，避免用户轮次永久挂起。
 
-    On startup every active row belongs to the previous process and is orphaned,
-    even if its wall-clock lease has not expired yet.  During normal operation
-    only expired frame/run leases are reclaimed.  An expired turn by itself is
-    reclaimed only when no still-valid frame or run proves that work is alive.
+    启动时所有活跃行都属于上一个进程，即使租约未到期也按孤儿处理；常规巡检只认
+    已过期的 run/frame 租约。仅当没有仍有效的 frame 或 run 时，才单凭过期 turn
+    判定其失联。回收时把 TaskFrame 退回 queued 并保留步骤与槽位，把 turn 置为
+    failed，补写一条失败回执，最后释放会话租约，全程不重放已消失的那次执行。
     """
 
     now = now or utc_now()
@@ -225,6 +227,11 @@ def _append_recovery_message(
     code: str,
     now: datetime,
 ) -> bool:
+    """为失联的 turn 补写一条失败回执消息及配套 Agent 事件。
+
+    同一 turn 或同一用户消息若已有助手回执则跳过并返回 False；返回 True 表示
+    本次确实新建了消息。可见性沿用用户消息的 message_visibility 标记。
+    """
     user_message_id = str(turn.user_message_id or "").strip()
     existing = list(
         db.exec(
@@ -310,6 +317,7 @@ _sweeper_thread: threading.Thread | None = None
 
 
 def _sweep_loop(interval_seconds: float) -> None:
+    """后台巡检循环：按间隔执行一次回收，单次异常只记日志、不终止循环。"""
     while not _stop_event.wait(max(1.0, interval_seconds)):
         try:
             with Session(engine) as db:
@@ -323,6 +331,7 @@ def _sweep_loop(interval_seconds: float) -> None:
 def start_harness_recovery_sweeper(
     *, interval_seconds: float = SWEEP_INTERVAL_SECONDS
 ) -> None:
+    """启动守护式巡检线程；已有存活线程时直接复用，不重复拉起。"""
     global _sweeper_thread
     if _sweeper_thread and _sweeper_thread.is_alive():
         return
@@ -337,4 +346,5 @@ def start_harness_recovery_sweeper(
 
 
 def stop_harness_recovery_sweeper() -> None:
+    """请求巡检线程退出；仅置位停止事件，不阻塞等待线程结束。"""
     _stop_event.set()

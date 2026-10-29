@@ -25,6 +25,7 @@ from app.db.models import (
 
 
 def test_private_skill_detail_and_versions_require_the_bound_agent_scope() -> None:
+    """验证私有技能详情与版本仅对绑定员工可见，其它作用域一律 404。"""
     with _test_session() as db:
         owner_agent, other_agent = _seed_private_scope(db)
         skill = Skill(
@@ -58,6 +59,7 @@ def test_private_skill_detail_and_versions_require_the_bound_agent_scope() -> No
 
 
 def test_private_knowledge_details_documents_and_jobs_require_the_bound_agent_scope() -> None:
+    """验证私有知识库的详情、版本、文档与任务仅对绑定员工可见。"""
     with _test_session() as db:
         owner_agent, other_agent = _seed_private_scope(db)
         knowledge_base = KnowledgeBase(
@@ -122,6 +124,7 @@ def test_private_knowledge_details_documents_and_jobs_require_the_bound_agent_sc
 
 
 def test_visible_knowledge_history_has_consistent_list_and_detail_access() -> None:
+    """验证知识历史版本的列表与详情可见性一致，历史文档仍可读取。"""
     with _test_session() as db:
         owner_agent, _ = _seed_private_scope(db)
         knowledge_base = KnowledgeBase(
@@ -170,6 +173,7 @@ def test_visible_knowledge_history_has_consistent_list_and_detail_access() -> No
 
 
 def _seed_private_scope(db: Session) -> tuple[AgentProfile, AgentProfile]:
+    """创建租户与两个各自拥有员工的用户，构造私有资源的作用域。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     owner = User(
         id="user_owner",
@@ -204,6 +208,7 @@ def _seed_private_scope(db: Session) -> tuple[AgentProfile, AgentProfile]:
 
 
 def _skill_content(skill_id: str) -> dict[str, object]:
+    """构造最小可用的技能卡内容，供私有技能用例使用。"""
     return {
         "skill_id": skill_id,
         "name": "私有流程",
@@ -224,6 +229,7 @@ def _skill_content(skill_id: str) -> dict[str, object]:
 
 
 def _test_session() -> Session:
+    """创建并返回基于内存 SQLite 的数据库会话。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

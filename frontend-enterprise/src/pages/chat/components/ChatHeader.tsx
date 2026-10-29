@@ -22,6 +22,7 @@ import {
 } from '../chatPageStyles';
 import type { UseChatSession } from '../useChatSession';
 
+/** 聊天页顶部栏：展示会话标题与群聊徽标，并提供重命名、语言切换和退出登录入口。 */
 export default function ChatHeader({ chat }: { chat: UseChatSession }) {
   const { auth, currentSession, openRename, logout } = chat;
   const teamId = currentSession?.team_id || null;

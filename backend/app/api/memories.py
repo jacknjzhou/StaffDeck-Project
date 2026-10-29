@@ -25,6 +25,11 @@ def list_memories(
     current_user: User = Depends(require_current_tenant),
     db: Session = Depends(get_session),
 ) -> list[dict]:
+    """按可见范围列出记忆，普通用户只能看到自己的记录。
+
+    管理员或 agent 拥有者可跨用户查询；按 agent 过滤时先用会话归属补齐缺失的
+    agent_id，所以会多取若干行再截断；conversation 类记忆不在列表内。
+    """
     ensure_tenant(db, tenant_id)
     can_view_all = _can_view_all_memories(db, tenant_id, agent_id, current_user)
     if not can_view_all and user_id and user_id != current_user.id:
@@ -60,6 +65,10 @@ def clear_my_memories(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """清空当前用户在指定租户下的记忆，可用 agent_id 只删该员工的记录。
+
+    只删除 kind 非 conversation 的行，返回实际删除条数；租户不匹配时直接 403。
+    """
     if tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
     ensure_tenant(db, tenant_id)
@@ -85,6 +94,7 @@ def clear_my_memories(
 
 
 def _session_agent_map(db: Session, rows: list[MemoryRecord]) -> dict[str, str | None]:
+    """为缺少 agent_id 的记忆批量查出所属会话的员工，未命中的会话不入表。"""
     session_ids = sorted({row.session_id for row in rows if row.session_id and not memory_agent_id(row)})
     if not session_ids:
         return {}
@@ -98,6 +108,10 @@ def _can_view_all_memories(
     agent_id: str | None,
     current_user: User,
 ) -> bool:
+    """判断当前用户能否查看该租户下的全部记忆。
+
+    管理员直接放行；指定 agent_id 时要求该 agent 属于当前用户，跨租户或不存在则 404。
+    """
     if is_admin_user(current_user):
         return True
     if not agent_id:
@@ -109,6 +123,7 @@ def _can_view_all_memories(
 
 
 def _memory_matches_agent(row: MemoryRecord, agent_id: str, session_agents: dict[str, str | None]) -> bool:
+    """判断记忆是否属于指定 agent；没有显式 agent_id 时回退到会话归属。"""
     if memory_matches_agent(row, agent_id):
         return True
     if memory_agent_id(row):
@@ -117,6 +132,7 @@ def _memory_matches_agent(row: MemoryRecord, agent_id: str, session_agents: dict
 
 
 def _memory_read_with_inferred_agent(row: MemoryRecord, session_agents: dict[str, str | None]) -> dict:
+    """把记忆转成读取结构，并为缺少 agent_id 的记录补上会话推导值及来源标记。"""
     payload = memory_read(row)
     if memory_agent_id(row) or not row.session_id:
         return payload

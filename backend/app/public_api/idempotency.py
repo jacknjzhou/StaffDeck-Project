@@ -15,6 +15,7 @@ from app.public_api.errors import PublicAPIError
 
 
 def request_fingerprint(payload: Any) -> str:
+    """把请求体序列化成键有序、无空白的规范 JSON 再取 SHA-256，用于判定重放是否同一请求。"""
     canonical = json.dumps(
         payload,
         ensure_ascii=False,
@@ -31,6 +32,11 @@ def replay_idempotent_response(
     request: Request,
     payload: Any,
 ) -> tuple[int, dict[str, Any]] | None:
+    """按 Idempotency-Key 命中未过期的历史记录时回放上次的响应，否则返回 None 让请求照常执行。
+
+    同一 key 换了请求体会抛 409 IDEMPOTENCY_CONFLICT，key 超长抛 400；缺 key 或凭据、
+    记录已过期（顺手删除）都视为未命中，不产生副作用。
+    """
     key = str(request.headers.get("Idempotency-Key") or "").strip()
     if not key:
         return None
@@ -71,6 +77,10 @@ def store_idempotent_response(
     status_code: int,
     resource_id: str | None = None,
 ) -> None:
+    """把成功响应连同请求指纹落库，供后续重放同一 Idempotency-Key 的请求；无 key 或无凭据时直接返回。
+
+    过期时间取 public_api_idempotency_ttl_seconds，resource_id 用于把重放结果关联到具体资源。
+    """
     key = str(request.headers.get("Idempotency-Key") or "").strip()
     if not key or not principal.credential_id:
         return

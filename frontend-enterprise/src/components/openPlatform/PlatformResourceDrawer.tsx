@@ -37,10 +37,12 @@ const DRAWER_SHEET_CLASS = cn(
   '',
 );
 
+/** 侧拉面板中的水平分隔线。 */
 function DrawerDivider() {
   return <div className="h-px w-full shrink-0 bg-[#e3e7f1]" />;
 }
 
+/** 上一项/下一项切换按钮，禁用时降低透明度并屏蔽点击。 */
 function NavChevron({
   direction,
   disabled,

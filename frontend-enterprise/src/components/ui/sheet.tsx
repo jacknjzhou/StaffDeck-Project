@@ -5,28 +5,40 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
+/** 抽屉根组件：维护 Radix Dialog 的开关状态，需与 Trigger/Content 配合使用。 */
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
 }
 
+/** 抽屉触发按钮：点击后打开抽屉，点击事件由父级 Sheet 接管。 */
 function SheetTrigger({
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Trigger>) {
   return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />
 }
 
+/**
+ * 抽屉关闭按钮：点击后关闭抽屉；打开状态由父级 Sheet 管理，自身不持有状态。
+ */
 function SheetClose({
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Close>) {
   return <SheetPrimitive.Close data-slot="sheet-close" {...props} />
 }
 
+/**
+ * 抽屉传送门：将抽屉内容渲染到 body 之外的固定层级，避免被父级 overflow 裁剪。
+ */
 function SheetPortal({
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Portal>) {
   return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
 }
 
+/**
+ * 抽屉遮罩：覆盖全屏的半透明背景，打开/关闭时带淡入淡出动画。
+ * 点击遮罩默认会关闭抽屉，可通过调用方属性覆盖。
+ */
 function SheetOverlay({
   className,
   ...props
@@ -43,6 +55,13 @@ function SheetOverlay({
   )
 }
 
+/**
+ * 抽屉主体：内部自动包裹遮罩与传送门，按 side 从四个方向滑入。
+ *
+ * @param side 弹出方向，默认 right
+ * @param showCloseButton 是否渲染右上角默认关闭按钮，默认 true
+ * @param onEscapeKeyDown 按下 Esc 时的回调；组件已先 preventDefault 再透传
+ */
 function SheetContent({
   className,
   children,
@@ -89,6 +108,7 @@ function SheetContent({
   )
 }
 
+/** 抽屉头部容器：纵向排列标题与描述，自带内边距。 */
 function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -99,6 +119,7 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** 抽屉底部容器：通过 mt-auto 固定在底部，常用于放置操作按钮。 */
 function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -109,6 +130,7 @@ function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** 抽屉标题：渲染为 Radix Title，供无障碍读屏关联抽屉内容。 */
 function SheetTitle({
   className,
   ...props
@@ -125,6 +147,7 @@ function SheetTitle({
   )
 }
 
+/** 抽屉描述：渲染为 Radix Description，提供次要说明文本。 */
 function SheetDescription({
   className,
   ...props

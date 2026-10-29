@@ -25,6 +25,7 @@ from app.db.models import (
 
 
 def test_work_record_returns_timezone_aware_reply_and_activity_times(monkeypatch) -> None:
+    """验证工作记录按指定时区统计回复与活动,所有时间均带 Z 后缀。"""
     with _test_session() as db:
         owner, other = _seed_users(db)
         agent = AgentProfile(
@@ -193,6 +194,7 @@ def test_work_record_returns_timezone_aware_reply_and_activity_times(monkeypatch
 
 
 def test_work_record_rejects_invalid_timezone_and_private_agent_access() -> None:
+    """验证非所有者访问返回 403,非法时区返回 400。"""
     with _test_session() as db:
         owner, other = _seed_users(db)
         agent = AgentProfile(
@@ -226,6 +228,7 @@ def test_work_record_rejects_invalid_timezone_and_private_agent_access() -> None
 
 
 def _seed_users(db: Session) -> tuple[User, User]:
+    """写入租户、所有者与另一名用户,返回 (owner, other)。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     owner = User(
         id="user_owner",
@@ -246,6 +249,7 @@ def _seed_users(db: Session) -> tuple[User, User]:
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 引擎并返回会话,供每个用例独享数据库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

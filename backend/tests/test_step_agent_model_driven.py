@@ -5,12 +5,18 @@ from app.session.session_schema import RouterDecision
 
 
 def test_step_agent_uses_model_json_for_slots_and_tool(monkeypatch):
+    """验证 Step Agent 用模型返回的 JSON 填槽并触发工具调用。
+
+    同时确认送模型的载荷只含当前 SOP 的最小投影，不再携带完整节点与边。
+    """
     captured = {}
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实的 LLM 客户端初始化，用例无需任何模型配置。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """记录系统提示词与请求载荷，并返回带槽位和工具调用的固定结构。"""
         captured["system_prompt"] = system_prompt
         captured["payload"] = payload
         return {
@@ -104,12 +110,18 @@ def test_step_agent_uses_model_json_for_slots_and_tool(monkeypatch):
 
 
 def test_step_agent_compacts_knowledge_continuation_without_duplicate_results(monkeypatch):
+    """验证知识续答场景下知识载荷被压缩去重。
+
+    预期不再重复投递整份切片、目录树和上一轮旧知识，只保留裁剪后的证据。
+    """
     captured = {}
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实的 LLM 客户端初始化，用例无需任何模型配置。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """记录请求载荷，并返回一条已完成的回复。"""
         captured["payload"] = payload
         return {"reply": "已找到相关信息", "is_step_completed": True}
 
@@ -160,6 +172,7 @@ def test_step_agent_compacts_knowledge_continuation_without_duplicate_results(mo
 
 
 def _repair_skill() -> Skill:
+    """构建设备报修的两节点 SOP，供 Step Agent 用例作为当前技能。"""
     return Skill(
         tenant_id="tenant_demo",
         skill_id="repair_ticket",
@@ -193,6 +206,7 @@ def _repair_skill() -> Skill:
 
 
 def _ticket_tool() -> Tool:
+    """构造创建工单的 HTTP 工具定义，用于断言可调用工具清单。"""
     return Tool(
         tenant_id="tenant_demo",
         name="ticket.create",

@@ -11,15 +11,28 @@ export type TeamCardProps = {
   onOpen: () => void;
 };
 
+/**
+ * 取团队的项目领导（role 为 leader 的成员）。
+ *
+ * @param team 团队数据。
+ * @returns 首位领导成员；无成员或未设置领导时返回 null。
+ */
 export function teamLeader(team: TeamRead): TeamMemberRead | null {
   return (team.members || []).find((member) => member.role === 'leader') || null;
 }
 
+/**
+ * 团队卡片：展示团队名称、成员数、简介、项目领导与成员头像堆叠。
+ *
+ * - 点击卡片或按 Enter/空格打开团队详情，`busy` 为真时忽略交互。
+ * - 头像按 agent_id 从 `agents` 映射，最多堆叠 3 个并显示剩余人数。
+ */
 export default function TeamCard({ team, agents, busy = false, onOpen }: TeamCardProps) {
   const members = team.members || [];
   const leader = teamLeader(team);
   const stacked = members.slice(0, 3);
   const extraCount = members.length - stacked.length;
+  /** 按 agent_id 在已加载员工列表中查找头像数据。 */
   const agentById = (agentId: string) => agents.find((agent) => agent.id === agentId) || null;
 
   return (

@@ -9,6 +9,7 @@ from app.session.session_schema import RouterDecision, TurnPlan
 
 
 class SlotHydrationPolicy:
+    """SOP 槽位注水策略：只用带稳定 key 的结构化记忆补全槽位，不做自然语言推测。"""
     ALLOWED_MEMORY_KINDS = frozenset({"profile", "preference", "fact"})
     SLOT_MEMORY_KEY_ALIASES: dict[str, tuple[str, ...]] = {
         "user_name": ("preferred_name",),
@@ -26,14 +27,11 @@ class SlotHydrationPolicy:
         ]
         | None = None,
     ) -> dict[str, Any]:
-        """Hydrate SOP TaskFrames before they are persisted or executed.
+        """在 SOP 任务帧落库或执行前，用长期记忆补全槽位。
 
-        Slot hydration used to exist only as a RouterDecision utility and was
-        not called by Harness v2. That allowed a step to ask for information
-        already available in structured long-term memory; the next user
-        message would then appear to satisfy two different questions. Mutating
-        the canonical TurnPlan keeps persistence, execution and the public
-        router projection on the same slot snapshot.
+        槽位补全过去只是 RouterDecision 的工具函数，Harness v2 并未调用，导致步骤重复
+        追问记忆里已有的信息。这里就地改写唯一的 TurnPlan，让持久化、执行与对外路由
+        投影共用同一份槽位快照；返回已补全任务的摘要，无补全时返回空字典。
         """
 
         patch_slots = patcher or cls.patch
@@ -83,6 +81,11 @@ class SlotHydrationPolicy:
         ]
         | None = None,
     ) -> dict[str, Any]:
+        """就地补全 RouterDecision 的主槽位与各任务帧槽位，并裁剪已被槽位满足的待补字段。
+
+        返回 {"primary": 主槽位补丁, "tasks": 任务补丁列表,
+        "awaiting_input_expected_fields": 剩余待补字段} 的子集，无变化时为空字典。
+        """
         patch_slots = patcher or cls.patch
         trim_awaiting = awaiting_trimmer or cls.trim_satisfied_awaiting_fields
         skills_by_id = {skill.skill_id: skill for skill in skills}
@@ -129,6 +132,10 @@ class SlotHydrationPolicy:
         slots: dict[str, Any],
         memory_context: list[dict[str, object]],
     ) -> dict[str, Any]:
+        """计算需要补的槽位：记忆 key 命中即直接补，声明字段再按别名映射补一次。
+
+        只补当前 slots 里尚无有效值（见 slot_has_value）的字段，不覆盖已有值。
+        """
         expected_fields = cls.skill_expected_fields(skill) if skill else set()
         memory_values = cls.memory_values_by_key(memory_context)
         patch: dict[str, Any] = {
@@ -150,6 +157,10 @@ class SlotHydrationPolicy:
     def trim_satisfied_awaiting_fields(
         cls, router_decision: RouterDecision, slots: dict[str, Any]
     ) -> list[str] | None:
+        """移除 awaiting_input 中已被槽位满足的字段，返回剩余字段。
+
+        原本没有 awaiting_input、或剩余字段与原始一致时返回 None；全部满足则整体置空。
+        """
         if not router_decision.awaiting_input:
             return None
         original = list(router_decision.awaiting_input.expected_fields)
@@ -168,11 +179,13 @@ class SlotHydrationPolicy:
 
     @staticmethod
     def slot_has_value(slots: dict[str, Any], field: str) -> bool:
+        """判断槽位是否已有有效值：非 None、非空串、非空列表即视为已填。"""
         value = slots.get(field)
         return value is not None and value != "" and value != []
 
     @staticmethod
     def skill_expected_fields(skill: Skill) -> set[str]:
+        """收集 SOP 声明的期望信息字段：顶层 required_info 加各节点的 expected_user_info。"""
         content = skill.content_json or {}
         fields: set[str] = set()
         required_info = content.get("required_info")
@@ -192,16 +205,11 @@ class SlotHydrationPolicy:
     def memory_values_by_key(
         cls, memory_context: list[dict[str, object]]
     ) -> dict[str, str]:
-        """Index eligible structured memories without inferring from prose.
+        """把可用的结构化记忆按稳定 key 建索引，不从散文内容推断。
 
-        ``MemoryService.context_memories`` returns newest records first, so
-        ``setdefault`` preserves the most recent value when legacy duplicate
-        keys exist. Memories without an explicit stable key are deliberately
-        ignored: free-text similarity is not a safe basis for filling a Slot.
-        Every keyed profile, preference and fact is projected into the
-        TaskFrame; declared SOP fields only add explicit aliases such as
-        ``preferred_name`` to ``user_name``.
-        """
+    MemoryService.context_memories 返回新记录在前，故用 setdefault 保留最新值；
+    没有显式 key 的记忆会被刻意忽略，因为文本相似度不足以作为填槽依据。
+    """
 
         values: dict[str, str] = {}
         for memory in memory_context:
@@ -217,6 +225,7 @@ class SlotHydrationPolicy:
 
     @classmethod
     def memory_keys_for_slot(cls, field: str) -> tuple[str, ...]:
+        """返回槽位字段可匹配的记忆 key：规范化字段名在前，再附 SLOT_MEMORY_KEY_ALIASES 别名。"""
         normalized = cls.normalize_key(field)
         if not normalized:
             return ()
@@ -225,6 +234,7 @@ class SlotHydrationPolicy:
 
     @staticmethod
     def normalize_key(value: object) -> str:
+        """把输入规范成小写下划线 key：非字母数字统一替换为 _，并去掉首尾下划线。"""
         if not isinstance(value, str):
             return ""
         return re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip().lower()).strip("_")

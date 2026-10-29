@@ -22,6 +22,7 @@ LOCAL_KNOWLEDGE_OPERATIONS = {
 
 
 def _model_config_revision(model_config: Any | None) -> str:
+    """把模型配置压成 `配置 ID:修订号` 短标识，供能力绑定的修订号比对使用。"""
     if model_config is None:
         return "none"
     config_id = str(getattr(model_config, "id", "inline"))
@@ -35,7 +36,11 @@ def build_local_capability_registry(
     *,
     service_factory: Any = KnowledgeService,
 ) -> CapabilityRegistry:
-    """Build explicit Local bindings; this function does not touch AgentLoop."""
+    """构建只含本地知识能力的注册表，显式声明 operation 版本且不触碰 AgentLoop。
+
+    注册、重建回调共用同一个 runtime 与服务工厂；返回前已 seal()，调用方拿到的
+    是封闭注册表，不能再追加绑定。
+    """
 
     runtime = LocalKnowledgeRuntime(service_factory, db, model_config)
     registry = CapabilityRegistry()
@@ -54,6 +59,7 @@ def build_local_capability_registry(
         )
 
     def rehydrate(binding: DurableCapabilityBinding) -> KnowledgeRuntime:
+        """按持久化绑定重建本地知识运行时，契约或修订号不符时抛 LookupError。"""
         if (
             binding.service_contract_version != LOCAL_KNOWLEDGE_CONTRACT
             or binding.config_revision != config_revision

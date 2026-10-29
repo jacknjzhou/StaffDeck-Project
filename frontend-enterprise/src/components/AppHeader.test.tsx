@@ -10,12 +10,15 @@ import { ENTERPRISE_AUTH_STORAGE_KEY } from '@/auth';
 
 import AppHeader from './AppHeader';
 
+/** AppHeader 页头的样式透传与全局账户菜单行为。 */
 describe('AppHeader', () => {
+  /** 每个用例结束后卸载组件并清空本地登录态缓存。 */
   afterEach(() => {
     cleanup();
     window.localStorage.clear();
   });
 
+  /** 验证简单页面标题可通过 className 选用居中对齐。 */
   it('allows simple page titles to opt into centered controls', () => {
     const { container } = render(
       createElement(
@@ -34,6 +37,7 @@ describe('AppHeader', () => {
     expect(header?.classList.contains('items-start')).toBe(false);
   });
 
+  /** 验证全局账户菜单展示当前用户的全量 API 密钥与显示名。 */
   it('places the current user full-access key in the global account menu', async () => {
     window.localStorage.setItem(ENTERPRISE_AUTH_STORAGE_KEY, JSON.stringify({
       token: 'session-token',

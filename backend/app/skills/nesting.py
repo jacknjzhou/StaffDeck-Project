@@ -10,10 +10,11 @@ MAX_NESTED_SOP_DEPTH = 8
 
 
 class SopNestingError(ValueError):
-    pass
+    """SOP 嵌套配置错误：层级超限、出现环、子 SOP 缺失/未发布或子图不完整。"""
 
 
 def sop_capability_scope(skill: Skill | dict[str, Any]) -> str:
+    """读取 SOP 的能力范围并归一化为 sop_specific 或 general，缺失或其他值按 general。"""
     content = skill.content_json if isinstance(skill, Skill) else skill
     return (
         "sop_specific"
@@ -24,10 +25,12 @@ def sop_capability_scope(skill: Skill | dict[str, Any]) -> str:
 
 
 def discoverable_sops(skills: Iterable[Skill]) -> list[Skill]:
+    """筛出可被其他 SOP 嵌套引用的通用 SOP，即能力范围为 general 的那些。"""
     return [skill for skill in skills if sop_capability_scope(skill) == "general"]
 
 
 def nested_sop_ids(content: dict[str, Any]) -> list[str]:
+    """按出现顺序去重列出 content 中所有 subflow 节点引用的 sub_sop_id。"""
     return list(
         dict.fromkeys(
             str(node.get("sub_sop_id") or "").strip()
@@ -43,6 +46,11 @@ def validate_sop_nesting(
     content: dict[str, Any],
     available: Iterable[Skill | dict[str, Any]],
 ) -> None:
+    """校验 SOP 嵌套关系：子 SOP 是否存在、嵌套深度是否超限、有无环，违者抛 SopNestingError。
+
+    只有 published/active 的 SOP 可被嵌套，待校验的 skill_id 自身无论状态都会载入；
+    遍历基于内容深拷贝，不修改入参。
+    """
     contents: dict[str, dict[str, Any]] = {}
     for row in available:
         row_id, row_status, row_content = _available_sop_parts(row)
@@ -51,6 +59,7 @@ def validate_sop_nesting(
     contents[skill_id] = deepcopy(content)
 
     def visit(current_id: str, path: list[str]) -> None:
+        """深度优先遍历当前 SOP 的子 SOP：超深、路径成环或子 SOP 缺失即抛 SopNestingError。"""
         if len(path) > MAX_NESTED_SOP_DEPTH:
             raise SopNestingError(
                 f"SOP nesting exceeds {MAX_NESTED_SOP_DEPTH} levels: "
@@ -72,6 +81,11 @@ def validate_sop_nesting(
 def _available_sop_parts(
     row: Skill | dict[str, Any],
 ) -> tuple[str, str, dict[str, Any]]:
+    """把 Skill 行或普通字典统一解成（skill_id、状态、content）三元组。
+
+    dict 未提供 content 时用扁平字段拼一个最小 content，状态缺省按 published 处理，
+    供嵌套校验与展开共用。
+    """
     if isinstance(row, Skill):
         return row.skill_id, row.status, row.content_json or {}
     content = row.get("content")
@@ -88,6 +102,10 @@ def _available_sop_parts(
 
 
 def expand_sop_for_execution(skill: Skill, available: Iterable[Skill]) -> Skill:
+    """先校验嵌套关系，再把 subflow 占位节点展开成子 SOP 内联图，返回深拷贝副本。
+
+    不修改传入的 skill；候选只含 published 的子 SOP，skill 自身总会纳入。
+    """
     by_id = {row.skill_id: row for row in available if row.status == "published"}
     by_id.setdefault(skill.skill_id, skill)
     validate_sop_nesting(skill.skill_id, skill.content_json or {}, by_id.values())
@@ -102,6 +120,10 @@ def expand_sop_for_execution(skill: Skill, available: Iterable[Skill]) -> Skill:
 
 
 def expand_visible_sops(skills: Iterable[Skill]) -> list[Skill]:
+    """批量展开可见 SOP：单个 SOP 嵌套非法（如子 SOP 归档/缺失）时跳过它，不影响其他。
+
+    配置错误由发布时校验负责暴露给编辑者，这里只保证无关 SOP 与普通对话仍可运行。
+    """
     rows = list(skills)
     expanded: list[Skill] = []
     for row in rows:
@@ -123,6 +145,11 @@ def _expand_content(
     *,
     path: list[str],
 ) -> dict[str, Any]:
+    """把 content 里的 subflow 节点递归内联成子 SOP 图：节点/边 id 加前缀，并重接入口与出口。
+
+    子 SOP 缺失、未发布，或其图缺入口/终止节点时抛 SopNestingError；展开后合并
+    required_info 与 response_rules 并去重，同时标记 runtime_expanded=True。
+    """
     nodes = [deepcopy(node) for node in content.get("nodes", []) if isinstance(node, dict)]
     edges = [deepcopy(edge) for edge in content.get("edges", []) if isinstance(edge, dict)]
     start_node_id = str(content.get("start_node_id") or "")

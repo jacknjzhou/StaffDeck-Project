@@ -1,3 +1,10 @@
+/**
+ * 员工能力页加载占位骨架屏。
+ *
+ * - 触发时机：能力配置数据请求尚未返回时由父级页面渲染。
+ * - 副作用：纯展示组件，无副作用；自带 role="status" 与屏幕阅读器提示文案。
+ * - 边界条件：仅用于加载态，数据就绪后应由真实内容替换。
+ */
 export default function CapabilityScopeLoading() {
   return (
     <div

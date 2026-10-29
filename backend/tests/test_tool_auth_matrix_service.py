@@ -19,6 +19,7 @@ from app.tools.tool_schema import ToolCall
 
 
 def _wait_for_port(port: int) -> None:
+    """轮询等待 mock 认证矩阵服务监听指定端口，超时则抛错。"""
     deadline = time.time() + 10
     while time.time() < deadline:
         try:
@@ -31,6 +32,7 @@ def _wait_for_port(port: int) -> None:
 
 @pytest.fixture(scope="module")
 def auth_matrix_url() -> str:
+    """以子进程启动 mock 认证矩阵服务，产出其基址并在用例结束后终止。"""
     port = 18081
     process = subprocess.Popen(
         [sys.executable, "-m", "mock_servers.auth_matrix_service", "--port", str(port)],
@@ -47,6 +49,7 @@ def auth_matrix_url() -> str:
 
 
 def _session() -> Session:
+    """创建带演示租户的内存数据库会话，供工具配置用例使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -71,6 +74,7 @@ def _session() -> Session:
 def test_real_auth_matrix_service_accepts_tool_configuration(
     auth_matrix_url: str, name: str, path: str, auth: dict, headers: dict
 ) -> None:
+    """验证 basic、bearer、api-key 与自定义头四类认证配置都能被真实服务接受。"""
     with _session() as db:
         db.add(
             Tool(
@@ -94,6 +98,7 @@ def test_real_auth_matrix_service_accepts_tool_configuration(
 
 
 def test_real_auth_matrix_service_accepts_probe_configuration(auth_matrix_url: str) -> None:
+    """验证工具探测复用同一套认证矩阵配置，返回成功状态与响应预览。"""
     with _session() as db:
         user = User(
             id="user_member",

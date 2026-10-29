@@ -7,6 +7,7 @@ from app.knowledge.citations import (
 
 
 def test_compact_knowledge_citation_labels_renumbers_by_first_appearance() -> None:
+    """验证引用按首次出现重编号，并丢弃未被正文引用的来源。"""
     content, citations = compact_knowledge_citation_labels(
         "先参考手册。[4] 再确认规范。[1] 最后仍参考手册。[4]",
         [
@@ -25,6 +26,7 @@ def test_compact_knowledge_citation_labels_renumbers_by_first_appearance() -> No
 
 
 def test_compact_knowledge_citation_labels_supports_historical_filtered_metadata() -> None:
+    """验证跳号的历史引用元数据也能按出现顺序连续重编号。"""
     content, citations = compact_knowledge_citation_labels(
         "排查步骤来自手册。[1] 区域故障需要报修。[4]",
         [
@@ -38,6 +40,7 @@ def test_compact_knowledge_citation_labels_supports_historical_filtered_metadata
 
 
 def test_compact_knowledge_citation_labels_preserves_range_order() -> None:
+    """验证区间引用按原文顺序编号，并去掉文末重复来源行。"""
     content, citations = compact_knowledge_citation_labels(
         "请假制度依据员工手册。[1]-[4]\n\n参考来源：[1] [2] [3] [4] [5]",
         [
@@ -51,6 +54,7 @@ def test_compact_knowledge_citation_labels_preserves_range_order() -> None:
 
 
 def test_compact_knowledge_citation_labels_removes_unsupported_model_labels() -> None:
+    """验证超出真实来源数量的模型引用标签被删除。"""
     content, citations = compact_knowledge_citation_labels(
         "制度正文。[1]\n\n参考来源：[1] [2] [3] [4]",
         [{"id": "kref_1", "label": "[1]", "title": "付款制度"}],
@@ -61,6 +65,7 @@ def test_compact_knowledge_citation_labels_removes_unsupported_model_labels() ->
 
 
 def test_compact_knowledge_citation_labels_removes_footer_without_sources() -> None:
+    """验证没有来源时整段参考来源页脚被移除。"""
     content, citations = compact_knowledge_citation_labels(
         "没有检索依据的回答。\n\n参考来源：[1] [2]",
         [],
@@ -71,6 +76,7 @@ def test_compact_knowledge_citation_labels_removes_footer_without_sources() -> N
 
 
 def test_compact_knowledge_citation_labels_keeps_sources_without_adding_a_footer() -> None:
+    """验证正文不含引用时保持正文不变，仅对来源重编号。"""
     content, citations = compact_knowledge_citation_labels(
         "制度规定七天内可以申请退款。",
         [
@@ -87,6 +93,7 @@ def test_compact_knowledge_citation_labels_keeps_sources_without_adding_a_footer
 
 
 def test_restore_truncated_email_from_unique_cited_evidence() -> None:
+    """验证被截断的邮箱能按唯一命中证据补全为完整地址。"""
     reply = "请将材料发送至 ops@example... [1]"
     citations = [
         {
@@ -102,6 +109,7 @@ def test_restore_truncated_email_from_unique_cited_evidence() -> None:
 
 
 def test_restore_truncated_email_keeps_ambiguous_prefix_unchanged() -> None:
+    """验证前缀匹配到多个候选时保持原文，不做猜测补全。"""
     reply = "联系 ops@example... [1]"
     citations = [
         {
@@ -114,6 +122,7 @@ def test_restore_truncated_email_keeps_ambiguous_prefix_unchanged() -> None:
 
 
 def test_knowledge_citations_use_evidence_pack_as_canonical_source() -> None:
+    """验证有证据包时以证据为权威引用来源，而非概念摘要。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -149,6 +158,7 @@ def test_knowledge_citations_use_evidence_pack_as_canonical_source() -> None:
 
 
 def test_knowledge_citations_fall_back_to_wiki_concepts_without_evidence() -> None:
+    """验证缺少证据包时回退到 wiki 概念生成引用。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -171,6 +181,7 @@ def test_knowledge_citations_fall_back_to_wiki_concepts_without_evidence() -> No
 
 
 def test_empty_evidence_does_not_block_concept_fallback() -> None:
+    """验证证据为空条目时仍能回退到概念引用。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -193,6 +204,7 @@ def test_empty_evidence_does_not_block_concept_fallback() -> None:
 
 
 def test_knowledge_citations_support_chunks_only_results() -> None:
+    """验证只返回 chunks 的历史结果也能生成证据引用。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -214,6 +226,7 @@ def test_knowledge_citations_support_chunks_only_results() -> None:
 
 
 def test_knowledge_citations_fall_back_to_okf_without_evidence_or_concepts() -> None:
+    """验证既无证据也无概念时回退到 OKF 引用。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -235,6 +248,7 @@ def test_knowledge_citations_fall_back_to_okf_without_evidence_or_concepts() -> 
 
 
 def test_knowledge_citations_apply_source_fallback_per_result() -> None:
+    """验证每条结果各自选择来源类型，不互相污染。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -268,6 +282,7 @@ def test_knowledge_citations_apply_source_fallback_per_result() -> None:
 
 
 def test_knowledge_citations_default_to_latest_result_like_answer_context() -> None:
+    """验证默认只取最新一次检索结果，与回答上下文的取值一致。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -296,6 +311,7 @@ def test_knowledge_citations_default_to_latest_result_like_answer_context() -> N
 
 
 def test_knowledge_citations_keep_distinct_chunks_in_the_same_section() -> None:
+    """验证同一章节下的不同片段各自保留为独立引用。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -319,6 +335,7 @@ def test_knowledge_citations_keep_distinct_chunks_in_the_same_section() -> None:
 
 
 def test_knowledge_citations_keep_distinct_okf_targets_for_one_concept() -> None:
+    """验证同一概念下的不同 OKF 目标分别保留为引用。"""
     citations = knowledge_citations_from_results(
         [
             {
@@ -345,6 +362,7 @@ def test_knowledge_citations_keep_distinct_okf_targets_for_one_concept() -> None
 
 
 def test_knowledge_citations_use_concept_content_instead_of_summary() -> None:
+    """验证概念引用优先使用完整 content，摘要单独保留。"""
     content = "完整 Content 段落。" * 120
     citations = knowledge_citations_from_results(
         [
@@ -369,6 +387,7 @@ def test_knowledge_citations_use_concept_content_instead_of_summary() -> None:
 
 
 def test_knowledge_citations_keep_long_evidence_excerpt_until_display_limit() -> None:
+    """验证未超显示上限的长证据片段原样保留、不被截断。"""
     excerpt = "引用片段" * 900
     citations = knowledge_citations_from_results(
         [
@@ -392,6 +411,7 @@ def test_knowledge_citations_keep_long_evidence_excerpt_until_display_limit() ->
 
 
 def test_knowledge_citations_cap_evidence_excerpt_at_display_limit() -> None:
+    """验证超过显示上限的证据片段被截断到上限长度。"""
     excerpt = "x" * (CITATION_EXCERPT_CHAR_LIMIT + 16)
     citations = knowledge_citations_from_results(
         [

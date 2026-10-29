@@ -22,6 +22,7 @@ LOG_DIR = RUN_DIR / "logs"
 
 
 def env_value(name: str, default: str) -> str:
+    """读取环境变量，为空时回退到默认值。"""
     return os.environ.get(name) or default
 
 
@@ -57,10 +58,12 @@ CORS_ORIGINS = env_value("CORS_ORIGINS", default_cors_origins)
 
 
 def url_host(host: str) -> str:
+    """把监听用的 0.0.0.0 换成可直连的 127.0.0.1。"""
     return "127.0.0.1" if host == "0.0.0.0" else host
 
 
 def log(message: str) -> None:
+    """追加带时间戳的日志到 supervisor.log，交互终端下同时打印。"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{stamp}] {message}"
@@ -71,6 +74,7 @@ def log(message: str) -> None:
 
 
 def remove_pid_file(path: Path, expected_pid: int | None) -> None:
+    """仅当 pid 文件记录的进程仍是 expected_pid 时才删除。"""
     if expected_pid is None:
         return
     try:
@@ -82,6 +86,7 @@ def remove_pid_file(path: Path, expected_pid: int | None) -> None:
 
 
 def remove_port_file(path: Path, expected_port: str) -> None:
+    """仅当端口文件内容仍是 expected_port 时才删除。"""
     try:
         current = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
@@ -92,6 +97,7 @@ def remove_port_file(path: Path, expected_port: str) -> None:
 
 @dataclass
 class Service:
+    """描述一个受管服务：启动命令、环境变量、健康检查与重启状态。"""
     name: str
     cwd: Path
     command: list[str]
@@ -105,17 +111,21 @@ class Service:
 
     @property
     def pid_file(self) -> Path:
+        """返回该服务的 pid 文件路径。"""
         return RUN_DIR / f"{self.name}.pid"
 
     @property
     def log_file(self) -> Path:
+        """返回该服务标准输出日志路径。"""
         return LOG_DIR / f"{self.name}.log"
 
     @property
     def err_file(self) -> Path:
+        """返回该服务标准错误日志路径。"""
         return LOG_DIR / f"{self.name}.err.log"
 
     def start(self) -> None:
+        """以独立进程组启动服务，重定向日志、写入 pid 文件并重置健康检查状态。"""
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         RUN_DIR.mkdir(parents=True, exist_ok=True)
         merged_env = os.environ.copy()
@@ -141,6 +151,7 @@ class Service:
         log(f"started {self.name} pid={self.process.pid}")
 
     def stop(self) -> None:
+        """按 pid 终止服务进程组，超时后强杀，并清理 pid 文件。"""
         pid = self.current_pid()
         if pid is None:
             return
@@ -178,6 +189,7 @@ class Service:
         remove_pid_file(self.pid_file, pid)
 
     def current_pid(self) -> int | None:
+        """返回仍存活的进程 id：优先取本次子进程，其次读 pid 文件。"""
         if self.process and self.process.poll() is None:
             return self.process.pid
         if not self.pid_file.exists():
@@ -190,9 +202,11 @@ class Service:
 
     @staticmethod
     def pid_alive(pid: int) -> bool:
+        """复用进程工具判断给定 pid 是否存活。"""
         return pid_alive(pid)
 
     def poll(self) -> None:
+        """轮询服务状态，进程退出时按配置重启，健康检查连续失败时也重启。"""
         if self.process is None:
             self.start()
             return
@@ -221,6 +235,7 @@ class Service:
                 self.start()
 
     def healthy(self) -> bool:
+        """请求健康检查地址，2xx/4xx 视为健康，异常或 5xx 视为不健康。"""
         if not self.health_url:
             return True
         response = None
@@ -240,6 +255,7 @@ class Service:
 
 
 def build_services() -> list[Service]:
+    """按单端口或前后端分离模式返回需要托管的服务列表。"""
     backend_python = _backend_python()
     if SINGLE_PORT:
         return [
@@ -296,18 +312,21 @@ def build_services() -> list[Service]:
 
 
 def _backend_python(platform: str | None = None) -> Path:
+    """返回后端虚拟环境中平台对应的 Python 解释器路径。"""
     platform = platform or sys.platform
     relative = Path("Scripts/python.exe") if platform == "win32" else Path("bin/python")
     return ROOT_DIR / "backend" / ".venv" / relative
 
 
 def _vite_executable(platform: str | None = None) -> Path:
+    """返回前端 node_modules 中平台对应的 vite 可执行文件路径。"""
     platform = platform or sys.platform
     name = "vite.cmd" if platform == "win32" else "vite"
     return ROOT_DIR / "frontend-enterprise" / "node_modules" / ".bin" / name
 
 
 def validate_prerequisites() -> None:
+    """校验 Python 与 vite 可执行文件及 node 是否就绪，缺失时抛出说明性错误。"""
     missing = [path for path in (_backend_python(), _vite_executable()) if not path.exists()]
     if missing:
         formatted = "\n".join(f"  - {path}" for path in missing)
@@ -317,6 +336,7 @@ def validate_prerequisites() -> None:
 
 
 def main() -> int:
+    """写入 pid 与端口文件、启动全部服务并循环巡检，收到信号后优雅停止。"""
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     supervisor_pid = os.getpid()
@@ -330,6 +350,7 @@ def main() -> int:
     stopping = False
 
     def handle_signal(signum: int, _frame: object) -> None:
+        """收到退出信号时置停止标记并记录日志。"""
         nonlocal stopping
         stopping = True
         log(f"received signal {signum}; stopping services")

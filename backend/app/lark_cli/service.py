@@ -92,6 +92,12 @@ def invoke_lark_cli(
     active_skill: Any | None = None,
     active_step_id: str | None = None,
 ) -> dict[str, Any]:
+    """执行一次 lark_cli 调用：凭据解析 → 策略裁决 → 确认闸 → 受信重组 argv → 执行。
+
+    读命令按 CLI 自带 Risk 分级放行；写命令必须先 --dry-run 预览，并由显式
+    授权 lark_cli 的 SOP 提交节点零参数重放。尚未产生外部副作用的失败统一
+    返回 INVALID_ARGUMENTS + subcode，便于调用方修正后重试。
+    """
     if not get_settings().lark_cli_enabled:
         return _precondition_failure(
             "LARK_CLI_DISABLED", "lark-cli 集成未启用（settings.lark_cli_enabled）。"
@@ -428,6 +434,7 @@ def _handle_config_init(binary: Any, home: Any, argv: list[str]) -> dict[str, An
 
 
 def _flag_value(argv: list[str], flag: str) -> str | None:
+    """取 argv 中 ``flag`` 之后的值；标志缺失或位于末尾时返回 None。"""
     for index, token in enumerate(argv[:-1]):
         if token == flag:
             return argv[index + 1]
@@ -558,6 +565,12 @@ def _translate(
     stashed_digest: str | None,
     stashed_body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """把 lark-cli 执行结果翻译成本工具的返回结构。
+
+    成功时附带 submission_digest / canonical_data / next_step 供提交节点重放；
+    失败时按信封 error 生成 LARK_CLI_<SUBTYPE> 错误码，并追加表单与 auth scopes
+    的纠偏指引。gated_write 在真实提交阶段失败时标记为不可重试。
+    """
     envelope = result.envelope
     if result.exit_code == 10:
         # 不应发生：--yes 由本模块注入。出现说明策略表与 CLI 风险面失配。
@@ -663,11 +676,13 @@ def _form_error_guidance(message: str, subtype: str) -> str:
 
 
 def _submission_uuid(task_frame_id: str, digest: str) -> str:
+    """由帧 id 与提交摘要派生 32 位幂等 uuid，让同一帧的重复提交命中同一次请求。"""
     seed = f"{task_frame_id}:{digest}".encode()
     return hashlib.sha256(seed).hexdigest()[:32]
 
 
 def _feishu_binding(db: Any, tenant_id: str, agent_id: str | None) -> ChannelBinding | None:
+    """选本租户的 active 飞书渠道绑定：优先绑定到该 Agent 的，否则取第一条。"""
     rows = db.exec(
         select(ChannelBinding).where(
             ChannelBinding.tenant_id == tenant_id,
@@ -685,12 +700,14 @@ def _feishu_binding(db: Any, tenant_id: str, agent_id: str | None) -> ChannelBin
 
 
 def _ensure_flag_pair(argv: list[str], flag: str, value: str) -> list[str]:
+    """argv 中已存在该标志时原样返回，否则在末尾追加 ``flag value`` 并返回新列表。"""
     if flag in argv:
         return argv
     return [*argv, flag, value]
 
 
 def _replace_flag_value(argv: list[str], flag: str, value: str) -> list[str]:
+    """替换 argv 中 ``flag`` 后紧跟的值；标志不存在时改为在末尾追加该对。"""
     result = list(argv)
     for index, token in enumerate(result[:-1]):
         if token == flag:
@@ -700,6 +717,7 @@ def _replace_flag_value(argv: list[str], flag: str, value: str) -> list[str]:
 
 
 def _precondition_failure(subcode: str, message: str) -> dict[str, Any]:
+    """构造"尚未产生副作用"的失败结果：主码 INVALID_ARGUMENTS，子码放 subcode。"""
     # 主码固定 INVALID_ARGUMENTS：见模块 docstring 的防重放声明约定。
     return {
         "success": False,

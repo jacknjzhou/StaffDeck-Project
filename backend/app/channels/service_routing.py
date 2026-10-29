@@ -18,6 +18,7 @@ from app.db.models import (
 COMMAND_PREFIX = "/"
 
 def help_text(channel: str) -> str:
+    """生成指定渠道的斜杠指令帮助文本，渠道名按 channel_label 本地化。"""
     label = channel_label(channel)
     return (
         "可用指令：\n"
@@ -37,6 +38,7 @@ HELP_TEXT = help_text("wechat")
 
 @dataclass
 class ChannelCommand:
+    """一条已解析的斜杠指令：kind 为指令类型，query 为切换/绑定等指令的附带参数。"""
     kind: str  # list/current/help/switch/bind/unbind/handoff_reply
     query: str = ""  # switch 的目标名字(可为空)
 
@@ -101,6 +103,7 @@ def mounted_agents(db: Session, binding: ChannelBinding) -> list[ChannelBindingA
 
 
 def default_agent_id(mounts: list[ChannelBindingAgent]) -> str:
+    """取挂载集中的默认员工；没有默认标记时回退到首个挂载项。"""
     for mount in mounts:
         if mount.is_default:
             return mount.agent_id
@@ -108,6 +111,7 @@ def default_agent_id(mounts: list[ChannelBindingAgent]) -> str:
 
 
 def agent_names(db: Session, tenant_id: str, agent_ids: list[str]) -> dict[str, str]:
+    """批量查询员工 id 到显示名的映射；agent_ids 为空时直接返回空映射。"""
     if not agent_ids:
         return {}
     rows = db.exec(
@@ -120,6 +124,7 @@ def agent_names(db: Session, tenant_id: str, agent_ids: list[str]) -> dict[str, 
 
 
 def _get_conv_state(db: Session, binding: ChannelBinding, external_conv_id: str) -> ChannelConvState | None:
+    """按 binding 与外部会话 id 查询路由指针行，尚未建立指针时返回 None。"""
     return db.exec(
         select(ChannelConvState).where(
             ChannelConvState.binding_id == binding.id,
@@ -194,7 +199,7 @@ def route_revision(
     binding: ChannelBinding,
     external_conv_id: str,
 ) -> tuple[str, int] | None:
-    """Return the current route pointer and its compare-and-set revision."""
+    """返回当前路由指针及其 compare-and-set 版本号；会话无指针时返回 None。"""
     state = _get_conv_state(db, binding, external_conv_id)
     if not state:
         return None
@@ -210,7 +215,7 @@ def compare_and_set_current_agent(
     expected_revision: int,
     agent_id: str,
 ) -> bool:
-    """Apply an automatic route only while the inspected route is still current."""
+    """仅当读到的指针仍未被改动且无有效手动保护窗时写入自动路由，返回是否写入成功。"""
     now = utc_now()
     result = db.exec(
         update(ChannelConvState)
@@ -242,6 +247,7 @@ def manual_pin_active(db: Session, binding: ChannelBinding, external_conv_id: st
 
 
 def _display_name(names: dict[str, str], agent_id: str) -> str:
+    """取员工显示名，映射里查不到时用 agent_id 兜底。"""
     return names.get(agent_id) or agent_id
 
 

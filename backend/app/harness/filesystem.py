@@ -30,10 +30,12 @@ _MAX_GREP_LINE_CHARS = 400
 
 
 class _FileArguments(BaseModel):
+    """文件工具参数模型的公共基类；禁止调用方传入未声明的额外字段。"""
     model_config = ConfigDict(extra="forbid")
 
 
 class ReadFileArguments(_FileArguments):
+    """read_file 的入参：目标路径、起始字节偏移、读取上限与续读令牌。"""
     path: str = Field(min_length=1)
     offset: int = Field(default=0, ge=0)
     max_bytes: int | None = Field(default=None, ge=1)
@@ -41,11 +43,13 @@ class ReadFileArguments(_FileArguments):
 
 
 class ExtractDocumentTextArguments(_FileArguments):
+    """extract_document_text 的入参：源文档路径与可选的抽取文本输出路径。"""
     path: str = Field(min_length=1)
     output_path: str | None = Field(default=None, min_length=1)
 
 
 class WriteFileArguments(_FileArguments):
+    """write_file 的入参：文件内容、是否创建父目录与可选的乐观并发 SHA-256。"""
     path: str = Field(min_length=1)
     content: str
     create_parents: bool = False
@@ -53,6 +57,7 @@ class WriteFileArguments(_FileArguments):
 
 
 class EditFileArguments(_FileArguments):
+    """edit_file 的入参：原文、替换文本、是否全量替换与期望的 SHA-256。"""
     path: str = Field(min_length=1)
     old_text: str = Field(min_length=1)
     new_text: str
@@ -61,18 +66,25 @@ class EditFileArguments(_FileArguments):
 
 
 class ListDirectoryArguments(_FileArguments):
+    """list_directory 的入参：目录路径、是否递归与最大返回条目数。"""
     path: str = "."
     recursive: bool = False
     max_entries: int | None = Field(default=None, ge=1)
 
 
 class GlobArguments(_FileArguments):
+    """glob 的入参：glob 模式、搜索起始目录与最大返回数量。"""
     pattern: str = Field(min_length=1)
     path: str = "."
     max_results: int | None = Field(default=None, ge=1)
 
 
 class GrepArguments(_FileArguments):
+    """grep 的入参：字面量模式、文件过滤 glob、大小写与结果上限。
+
+    regex 固定为 False：Python 回溯引擎无法限制单次匹配耗时，
+    只支持字面量，避免模型提供的模式拖死 worker。
+    """
     pattern: str = Field(min_length=1)
     path: str = "."
     file_glob: str | None = None
@@ -85,27 +97,32 @@ class GrepArguments(_FileArguments):
 
 
 class FileInfoArguments(_FileArguments):
+    """file_info 的入参：待查询的路径。"""
     path: str = Field(min_length=1)
 
 
 class PublishArtifactArguments(_FileArguments):
+    """publish_artifact 的入参：文件路径、展示名与下载描述。"""
     path: str = Field(min_length=1)
     display_name: str | None = Field(default=None, max_length=180)
     description: str | None = Field(default=None, max_length=500)
 
 
 class MakeDirectoryArguments(_FileArguments):
+    """mkdir 的入参：目录路径、是否创建父级与目录已存在时是否放行。"""
     path: str = Field(min_length=1)
     parents: bool = True
     exist_ok: bool = True
 
 
 class DeleteFileArguments(_FileArguments):
+    """delete_file 的入参：待删除路径与可选的期望 SHA-256。"""
     path: str = Field(min_length=1)
     expected_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
 
 
 class MoveFileArguments(_FileArguments):
+    """move_file 的入参：源/目标路径、覆盖策略与两侧的期望 SHA-256。"""
     source_path: str = Field(min_length=1)
     destination_path: str = Field(min_length=1)
     create_parents: bool = False
@@ -118,11 +135,20 @@ class MoveFileArguments(_FileArguments):
 
 
 class CopyFileArguments(MoveFileArguments):
-    pass
+    """copy_file 的入参；结构与 move_file 相同，语义为复制而非移动。"""
 
 
 class _Workspace:
+    """以受控方式访问 Harness 工作区的路径解析与文件校验器。
+
+    统一处理根目录校验、符号链接拒绝、配额与哈希校验，
+    使各工具处理器只需关注自身业务逻辑。
+    """
     def __init__(self, context: HarnessToolContext) -> None:
+        """解析并校验工作区根目录；根目录缺失时按需创建。
+
+        根目录为符号链接、不可用或不是目录时抛出 INVALID_WORKSPACE。
+        """
         root = context.workspace_root
         try:
             root.mkdir(parents=True, exist_ok=True)
@@ -153,6 +179,7 @@ class _Workspace:
         *,
         allow_root: bool = False,
     ) -> Path:
+        """把调用方路径解析为工作区内的绝对路径，并拒绝符号链接与内部回收站。"""
         candidate = _normalize_access_path(raw_path, root=self.root, allow_root=allow_root)
         if _TRASH_DIRECTORY in candidate.parts:
             raise HarnessExecutionError(
@@ -164,12 +191,14 @@ class _Workspace:
         return candidate
 
     def relative(self, path: Path) -> str:
+        """返回 path 相对工作区根目录的 POSIX 形式；工作区外路径原样返回。"""
         try:
             return path.relative_to(self.root).as_posix() or "."
         except ValueError:
             return str(path)
 
     def is_inside_workspace(self, path: Path) -> bool:
+        """判断 path 是否位于工作区根目录之内。"""
         try:
             path.relative_to(self.root)
         except ValueError:
@@ -177,6 +206,11 @@ class _Workspace:
         return True
 
     def require_file(self, path: Path) -> os.stat_result:
+        """校验 path 为普通文件并返回其 lstat 结果。
+
+        不存在、为符号链接或非普通文件时分别抛出 NOT_FOUND、
+        SYMLINK_NOT_ALLOWED、NOT_A_FILE。
+        """
         self._reject_symlink_components(path)
         try:
             metadata = path.lstat()
@@ -197,6 +231,11 @@ class _Workspace:
         return metadata
 
     def require_directory(self, path: Path) -> os.stat_result:
+        """校验 path 为真实目录并返回其 lstat 结果。
+
+        不存在、为符号链接或非目录时分别抛出 NOT_FOUND、
+        SYMLINK_NOT_ALLOWED、NOT_A_DIRECTORY。
+        """
         self._reject_symlink_components(path)
         try:
             metadata = path.lstat()
@@ -217,6 +256,7 @@ class _Workspace:
         return metadata
 
     def prepare_parent(self, path: Path, *, create: bool) -> None:
+        """确认目标父目录存在且不是符号链接；按需创建缺失的父级目录。"""
         parent = path.parent
         self._reject_symlink_components(parent)
         if not parent.exists():
@@ -244,6 +284,10 @@ class _Workspace:
         *,
         actual_sha256: str | None = None,
     ) -> str:
+        """校验文件 SHA-256 与调用方期望值一致，并返回实际哈希值。
+
+        不一致时抛出可重试的 HASH_MISMATCH，提示文件已被改动。
+        """
         actual = actual_sha256 or _sha256(path)
         if expected_sha256 and actual.lower() != expected_sha256.lower():
             raise HarnessExecutionError(
@@ -259,6 +303,7 @@ class _Workspace:
         return actual
 
     def ensure_file_size(self, size: int) -> None:
+        """确保文件大小不超过单文件上限，否则抛出 FILE_TOO_LARGE。"""
         if size > self.context.limits.max_file_bytes:
             raise HarnessExecutionError(
                 "FILE_TOO_LARGE",
@@ -276,6 +321,10 @@ class _Workspace:
         replacing_bytes: int,
         new_bytes: int,
     ) -> None:
+        """按替换后的字节数预判工作区配额，超限时抛出 WORKSPACE_QUOTA_EXCEEDED。
+
+        工作区外的路径不做配额检查。
+        """
         if not self.is_inside_workspace(path):
             return
         current = self.workspace_bytes()
@@ -292,6 +341,7 @@ class _Workspace:
             )
 
     def workspace_bytes(self) -> int:
+        """统计工作区内普通文件的总字节数，跳过符号链接与内部回收站目录。"""
         total = 0
         for directory, directory_names, file_names in os.walk(
             self.root,
@@ -316,6 +366,10 @@ class _Workspace:
         return total
 
     def trash_target(self, relative: Path, trash_id: str) -> Path:
+        """为相对路径分配独立回收站目录并返回其迁移目标路径。
+
+        回收站目录按需创建，目标目录已存在时复用同一个 trash_id。
+        """
         trash_root = self.root / _TRASH_DIRECTORY
         self._reject_symlink_components(trash_root)
         try:
@@ -336,6 +390,7 @@ class _Workspace:
         return target
 
     def iter_files(self, start: Path) -> Iterator[Path]:
+        """按确定顺序遍历 start 下的普通文件；start 为文件时只产出自身。"""
         metadata = start.lstat()
         if stat.S_ISREG(metadata.st_mode):
             yield start
@@ -362,6 +417,7 @@ class _Workspace:
                     yield path
 
     def _reject_symlink_components(self, path: Path) -> None:
+        """逐级检查路径各组件，发现符号链接即抛出 SYMLINK_NOT_ALLOWED。"""
         try:
             relative = path.relative_to(self.root)
             current = self.root
@@ -384,6 +440,7 @@ class _Workspace:
                 self._raise_symlink(current)
 
     def _raise_symlink(self, path: Path) -> None:
+        """抛出 SYMLINK_NOT_ALLOWED 并附带相对工作区的路径信息。"""
         raise HarnessExecutionError(
             "SYMLINK_NOT_ALLOWED",
             "Symbolic links are not allowed in Harness file-tool paths.",
@@ -395,6 +452,11 @@ def read_file(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """按字节区间读取 UTF-8 文本并返回续读游标。
+
+    偏移会前移到 UTF-8 字符边界，越界偏移收敛到文件末尾，
+    内容被截断时返回 continuation_token 供下次续读。
+    """
     args = _as(arguments, ReadFileArguments)
     workspace = _Workspace(context)
     path = workspace.resolve(args.path)
@@ -460,7 +522,7 @@ def read_file(
 
 
 def _align_utf8_offset(handle: Any, offset: int, size: int) -> int:
-    """Move a legacy byte offset to the next UTF-8 code-point boundary."""
+    """把旧的字节偏移推进到下一个 UTF-8 字符边界。"""
 
     if offset <= 0 or offset >= size:
         return offset
@@ -473,6 +535,7 @@ def _align_utf8_offset(handle: Any, offset: int, size: int) -> int:
 
 
 def _encode_read_continuation(*, path: str, sha256: str, offset: int) -> str:
+    """把路径、哈希与偏移编码为 URL 安全的 base64 续读令牌。"""
     payload = json.dumps(
         {"v": 1, "path": path, "sha256": sha256, "offset": offset},
         sort_keys=True,
@@ -482,6 +545,7 @@ def _encode_read_continuation(*, path: str, sha256: str, offset: int) -> str:
 
 
 def _decode_read_continuation(token: str) -> dict[str, Any]:
+    """解析并校验续读令牌，非法或版本不符时抛出 INVALID_CONTINUATION。"""
     try:
         padded = token + "=" * (-len(token) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
@@ -506,11 +570,10 @@ def extract_document_text(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
-    """Extract a supported document into a UTF-8 workspace file.
+    """把受支持的文档抽取为工作区内的 UTF-8 文件。
 
-    Binary documents deliberately do not flow through ``read_file``.  The
-    extracted text is persisted so the model can page through it with the
-    existing bounded text reader instead of receiving an unbounded payload.
+    二进制文档不经过 read_file；抽取结果落盘后由模型用受限的
+    文本读取工具分页查看，避免一次性返回超大内容。
     """
 
     args = _as(arguments, ExtractDocumentTextArguments)
@@ -575,6 +638,11 @@ def write_file(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """原子写入 UTF-8 文件，并返回创建标记与写入前后的哈希。
+
+    目标已存在时按期望 SHA-256 做乐观并发校验，
+    写入前统一检查单文件大小与工作区配额。
+    """
     args = _as(arguments, WriteFileArguments)
     workspace = _Workspace(context)
     path = workspace.resolve(args.path)
@@ -616,6 +684,11 @@ def edit_file(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """按精确文本替换文件内容，并返回替换次数与新旧哈希。
+
+    old_text 缺失，或多次命中却未开启 replace_all 时拒绝执行，
+    避免产生歧义编辑。
+    """
     args = _as(arguments, EditFileArguments)
     workspace = _Workspace(context)
     path = workspace.resolve(args.path)
@@ -664,6 +737,10 @@ def list_directory(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """列出目录条目并标注是否因上限而截断。
+
+    条目按名称排序；递归模式不跟随符号链接，但仍会列出链接自身。
+    """
     args = _as(arguments, ListDirectoryArguments)
     workspace = _Workspace(context)
     path = workspace.resolve(args.path, allow_root=True)
@@ -700,6 +777,10 @@ def glob_files(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """在起始目录下按 glob 模式查找路径。
+
+    模式只允许相对写法且不能越出工作区，结果按遍历顺序截断到上限。
+    """
     args = _as(arguments, GlobArguments)
     workspace = _Workspace(context)
     start = workspace.resolve(args.path, allow_root=True)
@@ -734,6 +815,11 @@ def grep_files(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """在 UTF-8 文本文件中做字面量检索并返回命中行。
+
+    超过读取上限的文件只搜索前半段，非 UTF-8 文件计入跳过数，
+    命中行文本会截断到 _MAX_GREP_LINE_CHARS。
+    """
     args = _as(arguments, GrepArguments)
     workspace = _Workspace(context)
     start = workspace.resolve(args.path, allow_root=True)
@@ -811,6 +897,10 @@ def file_info(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """返回路径的类型、大小、SHA-256 与修改时间。
+
+    仅接受普通文件与目录，符号链接和其他类型直接拒绝。
+    """
     args = _as(arguments, FileInfoArguments)
     workspace = _Workspace(context)
     path = workspace.resolve(args.path)
@@ -845,7 +935,11 @@ def publish_artifact(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
-    """Explicitly expose one verified final workspace file to the user."""
+    """把已校验的最终交付文件显式暴露给用户下载。
+
+    工作区外的文件会先复制到 published 目录再发布，
+    展示名与描述会过滤控制字符并截断到限长。
+    """
 
     args = _as(arguments, PublishArtifactArguments)
     workspace = _Workspace(context)
@@ -886,6 +980,10 @@ def make_directory(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """创建目录并返回是否为本次新建。
+
+    目录已存在时按 exist_ok 决定放行或抛出 ALREADY_EXISTS。
+    """
     args = _as(arguments, MakeDirectoryArguments)
     workspace = _Workspace(context)
     path = workspace.resolve(args.path)
@@ -919,6 +1017,10 @@ def delete_file(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """把文件软删除到 Harness 回收站，返回可恢复标记与哈希。
+
+    删除前按期望 SHA-256 校验；迁移失败时回退到 shutil.move。
+    """
     args = _as(arguments, DeleteFileArguments)
     workspace = _Workspace(context)
     path = workspace.resolve(args.path)
@@ -953,6 +1055,10 @@ def move_file(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """原子移动普通文件，并返回源、目标与目标原有哈希。
+
+    源文件按期望 SHA-256 校验；目标已存在时需显式 overwrite。
+    """
     args = _as(arguments, MoveFileArguments)
     workspace = _Workspace(context)
     source = workspace.resolve(args.source_path)
@@ -984,6 +1090,10 @@ def copy_file(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """把普通文件原子复制到目标位置，并返回新旧哈希。
+
+    复制前检查单文件大小、工作区配额与目标覆盖策略。
+    """
     args = _as(arguments, CopyFileArguments)
     workspace = _Workspace(context)
     source = workspace.resolve(args.source_path)
@@ -1020,7 +1130,7 @@ def copy_file(
 
 
 def register_file_tools(registry: HarnessRegistry) -> HarnessRegistry:
-    """Register the built-in typed filesystem tools on ``registry``."""
+    """把内置的强类型文件工具注册到 registry，并原样返回该 registry。"""
 
     path_contract = (
         "Relative paths start in the current TaskFrame workspace; absolute paths and "
@@ -1140,10 +1250,12 @@ def register_file_tools(registry: HarnessRegistry) -> HarnessRegistry:
 
 
 def build_file_tool_registry() -> HarnessRegistry:
+    """构造仅包含内置文件工具的新 HarnessRegistry。"""
     return register_file_tools(HarnessRegistry())
 
 
 def _as(arguments: BaseModel, expected: type[BaseModel]) -> Any:
+    """把通用参数模型断言为处理器期望的类型，否则抛出 INVALID_ARGUMENTS。"""
     if not isinstance(arguments, expected):
         raise HarnessExecutionError(
             "INVALID_ARGUMENTS",
@@ -1153,6 +1265,10 @@ def _as(arguments: BaseModel, expected: type[BaseModel]) -> Any:
 
 
 def _normalize_access_path(raw_path: str, *, root: Path, allow_root: bool) -> Path:
+    """把原始路径规范化为绝对路径，并拒绝空路径、空字节与根目录。
+
+    相对路径按工作区根目录拼接，沙箱工作区前缀会被剥离为相对形式。
+    """
     if "\x00" in raw_path:
         raise HarnessExecutionError("INVALID_PATH", "Path cannot contain a null byte.")
     if not raw_path.strip():
@@ -1183,6 +1299,7 @@ def _normalize_access_path(raw_path: str, *, root: Path, allow_root: bool) -> Pa
 
 
 def _normalize_glob(raw_pattern: str | None) -> str:
+    """规范化并校验 glob 模式，拒绝空模式、绝对路径与向上越界。"""
     if raw_pattern is None or not raw_pattern.strip() or "\x00" in raw_pattern:
         raise HarnessExecutionError("INVALID_PATTERN", "Glob pattern cannot be empty.")
     if PureWindowsPath(raw_pattern).drive:
@@ -1197,6 +1314,7 @@ def _normalize_glob(raw_pattern: str | None) -> str:
 
 
 def _strip_sandbox_workspace_prefix(raw_path: str) -> str:
+    """把沙箱工作区前缀路径改写为相对形式，其他路径原样返回。"""
     if raw_path == SANDBOX_WORKSPACE:
         return "."
     prefix = f"{SANDBOX_WORKSPACE}/"
@@ -1206,6 +1324,7 @@ def _strip_sandbox_workspace_prefix(raw_path: str) -> str:
 
 
 def _glob_matches(relative_path: str, pattern: str) -> bool:
+    """判断相对路径是否匹配 glob 模式，兼容 **/ 前缀与 fnmatch 语义。"""
     path = PurePosixPath(relative_path)
     if path.match(pattern):
         return True
@@ -1215,6 +1334,7 @@ def _glob_matches(relative_path: str, pattern: str) -> bool:
 
 
 def _iter_directory_entries(workspace: _Workspace, start: Path) -> Iterator[Path]:
+    """按名称排序遍历目录树，产出目录与文件并跳过内部回收站。"""
     for directory, directory_names, file_names in os.walk(
         start,
         topdown=True,
@@ -1241,6 +1361,7 @@ def _entry_payload(
     path: Path,
     metadata: os.stat_result,
 ) -> dict[str, Any]:
+    """把 stat 结果转换为条目字典，标注符号链接、目录或其他类型。"""
     if stat.S_ISLNK(metadata.st_mode):
         kind = "symlink"
         size: int | None = None
@@ -1261,6 +1382,7 @@ def _entry_payload(
 
 
 def _entry_limit(requested: int | None, context: HarnessToolContext) -> int:
+    """把请求的条目上限收敛到上下文允许的最大值。"""
     return min(requested or context.limits.max_entries, context.limits.max_entries)
 
 
@@ -1270,6 +1392,11 @@ def _grep_matcher(
     regex: bool,
     case_sensitive: bool,
 ) -> Any:
+    """构造逐行匹配器，返回首次命中的列索引，未命中返回 None。
+
+    regex 为真时抛出 REGEX_NOT_SUPPORTED；大小写不敏感时对
+    模式与每行同时 casefold。
+    """
     if regex:
         raise HarnessExecutionError(
             "REGEX_NOT_SUPPORTED",
@@ -1279,6 +1406,7 @@ def _grep_matcher(
     needle = pattern if case_sensitive else pattern.casefold()
 
     def literal_match(line: str) -> int | None:
+        """在被检索行中定位 needle，未命中时返回 None。"""
         haystack = line if case_sensitive else line.casefold()
         column = haystack.find(needle)
         return column if column >= 0 else None
@@ -1287,6 +1415,11 @@ def _grep_matcher(
 
 
 def _decode_utf8_chunk(raw: bytes) -> tuple[str, int]:
+    """解码 UTF-8 字节块，末尾截断的半个字符不计入消耗字节。
+
+    首字符即不完整时抛出 READ_CHUNK_TOO_SMALL，
+    其他非法编码抛出 UNSUPPORTED_ENCODING。
+    """
     try:
         return raw.decode("utf-8"), len(raw)
     except UnicodeDecodeError as exc:
@@ -1305,6 +1438,7 @@ def _decode_utf8_chunk(raw: bytes) -> tuple[str, int]:
 
 
 def _read_utf8_file(path: Path, max_bytes: int) -> str:
+    """读取 UTF-8 文本文件，并在此处统一转换大小与编码错误。"""
     try:
         metadata = path.stat()
         if metadata.st_size > max_bytes:
@@ -1326,6 +1460,7 @@ def _read_utf8_file(path: Path, max_bytes: int) -> str:
 
 
 def _sha256(path: Path) -> str:
+    """分块计算文件的 SHA-256 十六进制摘要。"""
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
@@ -1337,6 +1472,10 @@ def _sha256(path: Path) -> str:
 
 
 def _atomic_write(path: Path, content: bytes) -> None:
+    """先写同目录临时文件再 os.replace，保证写入的原子性。
+
+    异常路径下会清理临时文件，失败统一转换为 IO_ERROR。
+    """
     descriptor: int | None = None
     temporary_path: Path | None = None
     try:
@@ -1372,6 +1511,10 @@ def _prepare_destination(
     overwrite: bool,
     expected_sha256: str | None,
 ) -> str | None:
+    """校验复制/移动目标的覆盖条件并返回其原哈希。
+
+    目标不存在时返回 None；存在但未开启 overwrite 时抛出 ALREADY_EXISTS。
+    """
     if not destination.exists():
         if expected_sha256:
             raise HarnessExecutionError(
@@ -1393,6 +1536,7 @@ def _prepare_destination(
 
 
 def _different_paths(source: Path, destination: Path) -> None:
+    """确保源与目标路径不同，否则抛出 INVALID_ARGUMENTS。"""
     if source == destination:
         raise HarnessExecutionError(
             "INVALID_ARGUMENTS",
@@ -1401,6 +1545,7 @@ def _different_paths(source: Path, destination: Path) -> None:
 
 
 def _safe_artifact_text(value: str | None, max_length: int) -> str | None:
+    """去掉首尾空白与控制字符并按上限截断，空结果返回 None。"""
     if value is None:
         return None
     cleaned = "".join(
@@ -1412,6 +1557,7 @@ def _safe_artifact_text(value: str | None, max_length: int) -> str | None:
 
 
 def _io_error(message: str, exc: OSError) -> HarnessExecutionError:
+    """把 OSError 映射为带错误码与可重试标记的 HarnessExecutionError。"""
     if isinstance(exc, PermissionError):
         code = "PERMISSION_DENIED"
     elif isinstance(exc, FileExistsError):

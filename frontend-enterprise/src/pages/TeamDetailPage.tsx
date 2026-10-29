@@ -72,6 +72,7 @@ const TEAM_EVENT_TYPE_LABELS: Record<string, string> = {
   member_execution_skipped: '跳过重复成员执行',
 };
 
+/** 将团队事件类型编码转换为中文标签，未登记的编码原样返回。 */
 export function teamEventTypeLabel(eventType: string): string {
   return TEAM_EVENT_TYPE_LABELS[eventType] || eventType;
 }
@@ -124,6 +125,7 @@ type TeamLogPayload = {
   sessions?: TeamLogSession[];
 };
 
+/** 将任务优先级编码转换为中文（高/中/低），未知编码原样返回。 */
 export function taskPriorityLabel(priority: string): string {
   if (priority === 'high' || priority === 'urgent') return '高';
   if (priority === 'medium' || priority === 'normal') return '中';
@@ -155,11 +157,13 @@ const DEFAULT_REVIEW_BANNER = {
   quoteClass: 'border-[#a7adbb]',
 };
 
+/** 安全读取对象上的字符串字段，字段缺失或非字符串时返回空串。 */
 function textField(source: Record<string, unknown> | undefined, key: string): string {
   const value = source?.[key];
   return typeof value === 'string' ? value : '';
 }
 
+/** 按中英文逗号切分标签串、去除首尾空白并丢弃空项。 */
 function parseTags(raw: string): string[] {
   return raw
     .split(/[,，]/)
@@ -167,6 +171,12 @@ function parseTags(raw: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * 团队详情页：展示并管理单个团队的成员、设置、黑板、任务看板与动态。
+ *
+ * 进入时并行加载团队详情、任务、黑板、事件与员工列表；
+ * 支持任务详情弹窗、人工改判以及团队完整日志的查看与下载。
+ */
 export default function TeamDetailPage({
   currentUser,
   onLogout,
@@ -227,6 +237,7 @@ export default function TeamDetailPage({
     [team?.members],
   );
 
+/** 重算成员列表的横向滚动边界，仅在边界变化时更新状态以控制渐隐提示。 */
   const updateMemberScrollEdges = useCallback(() => {
     const node = memberScrollRef.current;
     if (!node) return;
@@ -268,6 +279,7 @@ export default function TeamDetailPage({
     };
   }, [teamMemberKey, updateMemberScrollEdges]);
 
+/** 拉取当前团队详情并写入 team 状态，失败时提示错误。 */
   const loadTeam = useCallback(async () => {
     try {
       const detail = await api.get<TeamRead>(`/api/enterprise/teams/${teamId}?tenant_id=${TENANT_ID}`);
@@ -277,6 +289,7 @@ export default function TeamDetailPage({
     }
   }, [teamId]);
 
+/** 拉取当前团队的任务列表并写入 tasks 状态，失败时提示错误。 */
   const loadTasks = useCallback(async () => {
     try {
       const rows = await api.get<TeamTaskRead[]>(`/api/enterprise/teams/${teamId}/tasks?tenant_id=${TENANT_ID}`);
@@ -286,6 +299,7 @@ export default function TeamDetailPage({
     }
   }, [teamId]);
 
+/** 拉取状态为 active 的黑板条目并写入 boardEntries 状态。 */
   const loadBoard = useCallback(async () => {
     try {
       const rows = await api.get<TeamBlackboardEntryRead[]>(
@@ -297,6 +311,7 @@ export default function TeamDetailPage({
     }
   }, [teamId]);
 
+/** 拉取最近 50 条团队事件；请求失败时静默清空动态列表。 */
   const loadEvents = useCallback(async () => {
     try {
       const rows = await api.get<TeamEventRead[]>(
@@ -349,6 +364,7 @@ export default function TeamDetailPage({
     return map;
   }, [team, agents]);
 
+/** 返回任务负责人的显示名，未分配或查不到时回退为员工编号。 */
   function assigneeName(task: TeamTaskRead): string {
     if (!task.assignee_agent_id) return '未分配';
     return memberNameByAgentId.get(task.assignee_agent_id) || task.assignee_agent_id;
@@ -359,6 +375,7 @@ export default function TeamDetailPage({
     return agents.filter((agent) => !agent.is_overall && !memberIds.has(agent.id));
   }, [agents, team]);
 
+/** 将下拉选中的员工加入团队，成功后清空选择并刷新团队详情。 */
   async function addMember() {
     if (!addAgentId) {
       notify.error('请选择要添加的员工');
@@ -380,6 +397,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 从团队移除指定成员，成功后刷新团队详情。 */
   async function removeMember(agentId: string) {
     try {
       await api.delete(`/api/enterprise/teams/${teamId}/members/${agentId}?tenant_id=${TENANT_ID}`);
@@ -390,6 +408,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 将指定成员设为项目领导，成功后刷新团队详情。 */
   async function promoteLeader(agentId: string) {
     try {
       await api.put(`/api/enterprise/teams/${teamId}/leader`, {
@@ -403,6 +422,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 校验并创建任务（可指定执行者或投入任务池竞标），成功后重置表单并刷新任务。 */
   async function createTask() {
     const title = newTaskTitle.trim();
     if (!title) {
@@ -433,6 +453,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 为当前团队创建或复用项目领导群聊会话，成功后跳转到聊天页。 */
   async function startTeamChat() {
     if (!teamId || startingChat) return;
     setStartingChat(true);
@@ -450,6 +471,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 打开完整日志弹窗并请求团队导出数据，失败时关闭弹窗并提示错误。 */
   async function openTeamLog() {
     if (!teamId || loadingTeamLog) return;
     setTeamLogOpen(true);
@@ -467,6 +489,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 将已加载的团队日志序列化为 JSON 文件并触发浏览器下载。 */
   function downloadTeamLog() {
     if (!teamLog) return;
     const blob = new Blob([JSON.stringify(teamLog, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -482,6 +505,7 @@ export default function TeamDetailPage({
     notify.success('群聊完整日志已下载');
   }
 
+/** 校验并新增黑板条目，成功后清空输入框并刷新黑板列表。 */
   async function addBoardEntry() {
     const content = boardContent.trim();
     if (!content) {
@@ -507,6 +531,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 切换黑板条目的置顶状态，成功后刷新黑板列表。 */
   async function togglePinEntry(entry: TeamBlackboardEntryRead) {
     try {
       await api.put(`/api/enterprise/teams/${teamId}/blackboard/${entry.id}`, {
@@ -520,12 +545,14 @@ export default function TeamDetailPage({
     }
   }
 
+/** 打开黑板条目编辑弹窗，并用条目内容与标签初始化表单。 */
   function openEditEntry(entry: TeamBlackboardEntryRead) {
     setEditingEntry(entry);
     setEditContent(entry.content);
     setEditTags(entry.tags.join(', '));
   }
 
+/** 保存黑板条目的内容与标签，成功后关闭弹窗并刷新列表。 */
   async function saveEditEntry() {
     const entry = editingEntry;
     if (!entry || savingEntry) return;
@@ -551,6 +578,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 二次确认后归档黑板条目，归档后条目不再展示。 */
   async function archiveBoardEntry(entry: TeamBlackboardEntryRead) {
     if (!window.confirm('确认归档该黑板条目？归档后不再展示。')) return;
     try {
@@ -564,6 +592,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 返回黑板条目来源的显示名（人/项目领导/成员名/成员）。 */
   function boardSourceLabel(entry: TeamBlackboardEntryRead): string {
     if (entry.source_type === 'human') return '人';
     if (entry.source_type === 'leader') return '项目领导';
@@ -573,6 +602,7 @@ export default function TeamDetailPage({
     return '成员';
   }
 
+/** 将黑板条目沉淀到知识库，处理中阻止重复提交并在成功后刷新列表。 */
   async function promoteBoardEntry(entry: TeamBlackboardEntryRead) {
     if (promotingEntryId) return;
     setPromotingEntryId(entry.id);
@@ -589,6 +619,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 返回团队事件触发者的显示名，按成员名、用户、系统、项目领导依次回退。 */
   function eventActorLabel(event: TeamEventRead): string {
     if (event.actor_id) {
       const name = memberNameByAgentId.get(event.actor_id);
@@ -600,6 +631,7 @@ export default function TeamDetailPage({
     return event.actor_type;
   }
 
+/** 校验并保存团队配置（并发上限、任务超时、竞标轮数），成功后刷新详情。 */
   async function saveTeamConfig() {
     if (!team || savingConfig) return;
     const concurrency = Number(configConcurrency);
@@ -633,6 +665,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 打开任务详情弹窗，先展示列表概要再异步加载完整详情。 */
   async function openTask(task: TeamTaskRead) {
     setActiveTask(task);
     setOverrideComment('');
@@ -648,6 +681,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 提交改判执行者，成功后关闭任务弹窗并刷新任务列表。 */
   async function awardOverride() {
     const task = activeTask;
     if (!task || awarding) return;
@@ -675,6 +709,7 @@ export default function TeamDetailPage({
     }
   }
 
+/** 按指定验收结论提交人工改判，成功后关闭任务弹窗并刷新任务列表。 */
   async function overrideTask(verdict: TeamReviewVerdict) {
     const task = activeTask;
     if (!task || overriding) return;
@@ -847,6 +882,7 @@ export default function TeamDetailPage({
               const leader = members.find((member) => member.role === 'leader');
               const others = members.filter((member) => member.role !== 'leader');
 
+/** 渲染单个成员卡片，项目领导额外展示皇冠标识与高亮样式。 */
               function memberNode(member: TeamMemberRead, isLeader: boolean) {
                 return (
                   <div className={cn(
@@ -1565,6 +1601,11 @@ export default function TeamDetailPage({
   );
 }
 
+/**
+ * 团队完整日志弹窗：展示统计概览与各成员会话，可展开查看消息与原始事件。
+ *
+ * 仅在导出数据就绪后渲染内容；下载按钮复用父组件传入的下载回调。
+ */
 function TeamLogDialog({
   open,
   loading,

@@ -24,6 +24,7 @@ PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "router_prompt.
 
 
 class Router:
+    """场景路由：调用 LLM 判定本轮应继续当前 SOP、开启新任务还是澄清，并做规则归一化。"""
     def decide(
         self,
         message: str,
@@ -33,6 +34,10 @@ class Router:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> RouterDecision:
+        """构造 Router 阶段的 LLM 载荷并生成 RouterDecision，再按可用 SOP 归一化。
+
+        模型输出不符合 ROUTER_OUTPUT_SCHEMA 时统一转成 LLMError，原有 LLMError 原样上抛。
+        """
         payload = stage_payload(
             phase="Router",
             user_message=message,
@@ -60,6 +65,11 @@ class Router:
     def _normalize_decision(
         self, decision: RouterDecision, session: ChatSession, available_skills: list[Skill]
     ) -> RouterDecision:
+        """把模型决策校正到当前会话与可用 SOP 范围内：未知 skill/step 与非法待补字段一律置空。
+
+        create_pending 会折叠成 start_new_task，目标 skill 缺失或待办 task 不匹配时改判
+        clarify，避免后续执行落空。
+        """
         self._strip_generated_message_slots(decision)
         decision.general_intent = " ".join(
             str(decision.general_intent or "").split()
@@ -132,6 +142,7 @@ class Router:
         return decision
 
     def _strip_generated_message_slots(self, decision: RouterDecision) -> None:
+        """就地剔除决策与各任务里的用户消息类槽位，避免把改写文本当成业务槽位持久化。"""
         decision.slot_hints = strip_router_generated_message_slots(decision.slot_hints)
         for task in [*decision.task_frames, *decision.pending_tasks, *decision.created_tasks]:
             task.slot_hints = strip_router_generated_message_slots(task.slot_hints)
@@ -139,6 +150,7 @@ class Router:
             update.slot_hints = strip_router_generated_message_slots(update.slot_hints)
 
     def _normalize_tasks(self, tasks, skills: dict[str, Skill]):
+        """过滤掉目标 SOP 不存在的任务，并为缺省 step 的任务补该 SOP 的起始节点。"""
         normalized_tasks = []
         for task in tasks:
             if not task.target_skill_id or task.target_skill_id not in skills:
@@ -156,6 +168,10 @@ class Router:
         task_frames: list[PendingTask],
         legacy_created_tasks: list[PendingTask],
     ) -> list[PendingTask]:
+        """把本轮决策与任务帧合并成待执行列表；非执行类决策（如 clarify）直接返回空列表。
+
+        首帧与主决策目标 SOP 不一致时把主帧插到最前，一致则把决策、step 与槽位合并进首帧。
+        """
         if decision.decision not in {"continue_active", "start_new_task", "switch_to_pending"}:
             return []
         primary = PendingTask(
@@ -184,6 +200,7 @@ class Router:
 
 
 def _first_node_id(skill: Skill) -> str | None:
+    """取 SOP 的入口节点：优先 start_node_id，否则退回 nodes 中首个带 node_id 的节点。"""
     content = skill.content_json or {}
     start_node_id = content.get("start_node_id")
     if isinstance(start_node_id, str) and start_node_id.strip():
@@ -197,10 +214,12 @@ def _first_node_id(skill: Skill) -> str | None:
 
 
 def _available_skill_payloads(available_skills: list[Skill]) -> list[dict[str, Any]]:
+    """批量把可用 SOP 转成路由提示词所需的精简结构。"""
     return [_skill_payload(skill) for skill in available_skills]
 
 
 def _skill_payload(skill: Skill) -> dict[str, Any]:
+    """抽取单个 SOP 的 skill_id、名称、描述与触发意图，并丢掉空字段。"""
     content = skill.content_json or {}
     return _without_empty(
         {
@@ -213,6 +232,7 @@ def _skill_payload(skill: Skill) -> dict[str, Any]:
 
 
 def _router_session_payload(session: ChatSession) -> dict[str, Any]:
+    """把当前会话投影成路由输入：活跃 SOP/步骤、槽位、待办、待补信息与状态。"""
     return _without_empty(
         {
             "active_skill_id": session.active_skill_id,
@@ -226,6 +246,7 @@ def _router_session_payload(session: ChatSession) -> dict[str, Any]:
 
 
 def _without_empty(value: dict[str, Any]) -> dict[str, Any]:
+    """去掉 None、空字符串、空列表与空字典的键，避免把空值喂给提示词。"""
     return {
         key: item
         for key, item in value.items()

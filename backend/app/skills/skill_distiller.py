@@ -53,17 +53,25 @@ FINAL_RESPONSE_INSTRUCTION_SUFFIX = "给用户明确最终回复；无法闭环�
 
 
 class SkillDistiller:
+    """把原始 SOP 文本蒸馏成可运行的 Skill Card，负责模型调用、结构归一与闭环校验。"""
+
     def distill(
         self, request: SkillDistillRequest, model_config: ModelConfig
     ) -> SkillDistillResponse:
+        """同步蒸馏技能：生成草稿、解析模型输出并做反思校验后返回完整响应。"""
         return self._generate_response(request, model_config)
 
     def distill_stream(
         self, request: SkillDistillRequest, model_config: ModelConfig
     ) -> SkillDistillResponse:
+        """流式蒸馏入口；当前复用同步生成路径，一次性返回完整结果，不做增量推送。"""
         return self._generate_response(request, model_config)
 
     def stream_text(self, request: SkillDistillRequest, model_config: ModelConfig):
+        """以事件流输出蒸馏过程：状态提示、增量文本、chunk_reset 与最终 complete。
+
+        模型输出解析或校验失败时依次降级为修复、分段生成、最低可运行草稿，并重置已下发文本。
+        """
         payload = self._payload(request)
         model_input = self._model_input(request, payload)
         chunks: list[str] = []
@@ -124,6 +132,7 @@ class SkillDistiller:
     def _generate_response(
         self, request: SkillDistillRequest, model_config: ModelConfig
     ) -> SkillDistillResponse:
+        """按首次生成 → 修复 → 分段生成 → 兜底草稿的顺序降级，最后统一做反思校验。"""
         payload = self._payload(request)
         model_input = self._model_input(request, payload)
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -156,6 +165,7 @@ class SkillDistiller:
         )
 
     def _response_from_text(self, text: str, request: SkillDistillRequest) -> SkillDistillResponse:
+        """从模型文本中提取 JSON 对象，并按请求上下文归一化为技能响应。"""
         raw = _raw_json_from_text(text)
         return self._normalize_response(raw, request)
 
@@ -168,6 +178,7 @@ class SkillDistiller:
         previous_error: str,
         request: SkillDistillRequest,
     ) -> SkillDistillResponse:
+        """带着上次输出与报错重试模型，最多 MODEL_REPAIR_ATTEMPTS 次；全失败时抛出最后一个错误。"""
         output = previous_output
         error = previous_error
         for attempt in range(MODEL_REPAIR_ATTEMPTS):
@@ -196,6 +207,10 @@ class SkillDistiller:
         request: SkillDistillRequest,
         previous_error: str,
     ) -> SkillDistillResponse:
+        """分段生成的兜底路径：先出大纲，再逐节点扩写，最后整体复核。
+
+        单个节点扩写失败只追加警告并保留大纲节点；复核输出不可解析时退回已复核草稿。
+        """
         outline_text = client.generate_text(
             prompt,
             {
@@ -271,6 +286,7 @@ class SkillDistiller:
             return reviewed
 
     def _payload(self, request: SkillDistillRequest) -> dict[str, Any]:
+        """构造发给模型的上下文：标题、业务领域、原文，以及按相关性裁剪后的能力目录。"""
         return {
             "title": request.title,
             "business_domain": request.business_domain,
@@ -296,6 +312,10 @@ class SkillDistiller:
         request: SkillDistillRequest,
         payload: dict[str, Any] | None = None,
     ) -> str:
+        """把请求与裁剪后的目录拼成模型输入文本；未传 payload 时现场构造。
+
+        总数用于提示还有多少低相关条目被省略，避免模型臆造未列出的能力。
+        """
         projected = payload or self._payload(request)
         return _distill_model_input(
             title=request.title,
@@ -312,6 +332,10 @@ class SkillDistiller:
     def _normalize_response(
         self, raw: dict[str, Any], request: SkillDistillRequest
     ) -> SkillDistillResponse:
+        """把模型原始 JSON 归一化为合法 Skill Card，并汇总所有降级警告。
+
+        补齐闭环节点与线性可达边、过滤不可用能力与未知工具，并统一 step id 避免重复。
+        """
         draft = raw.get("draft_skill") if isinstance(raw.get("draft_skill"), dict) else raw
         warnings = list(raw.get("warnings") or [])
         fallback = self._fallback_card(request)
@@ -420,6 +444,10 @@ class SkillDistiller:
     def _ensure_closed_loop_nodes(
         self, nodes: list[dict[str, Any]], request: SkillDistillRequest
     ) -> tuple[list[dict[str, Any]], list[str]]:
+        """保证流程能闭环：给工具步骤补 continue_flow 与指令约束，缺少最终回复时追加一个。
+
+        返回节点浅拷贝列表与相应警告，不会修改入参中的节点对象。
+        """
         normalized_nodes = [dict(node) for node in nodes]
         warnings: list[str] = []
         _attach_declared_confirmation_to_tool_steps(normalized_nodes)
@@ -459,6 +487,7 @@ class SkillDistiller:
     def _normalize_nodes(
         self, value: Any, fallback_nodes: list[SkillGraphNode]
     ) -> list[dict[str, Any]]:
+        """逐字段把模型节点回退到 fallback 节点，丢弃非 dict 项；结果为空时整体退回 fallback。"""
         if not isinstance(value, list):
             return [node.model_dump() for node in fallback_nodes]
         nodes: list[dict[str, Any]] = []
@@ -505,6 +534,7 @@ class SkillDistiller:
     def _normalize_edges(
         self, value: Any, nodes: list[dict[str, Any]], fallback_edges: list[Any]
     ) -> list[dict[str, Any]]:
+        """校验并归一化边：丢弃引用不存在节点的项，无有效边时退回 fallback 或按顺序串成默认链。"""
         node_ids = {str(node.get("node_id") or "") for node in nodes}
         edges: list[dict[str, Any]] = []
         if isinstance(value, list):
@@ -549,11 +579,13 @@ class SkillDistiller:
     def _fallback_response(
         self, request: SkillDistillRequest, warning: str
     ) -> SkillDistillResponse:
+        """构造只带一条警告的最低可运行响应，草稿来自规则兜底卡片。"""
         return SkillDistillResponse(
             draft_skill=self._fallback_card(request), warnings=_compact_warnings([warning])
         )
 
     def _fallback_card(self, request: SkillDistillRequest) -> SkillCard:
+        """用请求标题与原文生成规则兜底的两步 Skill Card：理解请求 → 反馈结果，不依赖模型输出。"""
         title = request.title.strip() or "新技能"
         raw = request.raw_content
         required_info: list[str] = []
@@ -618,6 +650,7 @@ class SkillDistiller:
 
 
 def _steps_have_tool_action(steps: list[dict[str, Any]]) -> bool:
+    """判断步骤列表中是否存在 call_tool: 动作。"""
     for step in steps:
         actions = step.get("allowed_actions", [])
         if isinstance(actions, list) and any(
@@ -628,10 +661,12 @@ def _steps_have_tool_action(steps: list[dict[str, Any]]) -> bool:
 
 
 def _ensure_adaptive_step_instruction(step: dict[str, Any]) -> None:
+    """给步骤指令追加自适应推进约束：已满足的内容不再重复追问。"""
     _append_instruction_suffix(step, ADAPTIVE_STEP_INSTRUCTION_SUFFIX)
 
 
 def _append_instruction_suffix(step: dict[str, Any], suffix: str) -> None:
+    """把后缀追加到步骤 instruction；已包含该后缀时保持不变，避免重复拼接。"""
     instruction = str(step.get("instruction") or "")
     if suffix in instruction:
         return
@@ -639,6 +674,7 @@ def _append_instruction_suffix(step: dict[str, Any], suffix: str) -> None:
 
 
 def _confirmation_fields(steps: list[dict[str, Any]]) -> list[str]:
+    """收集步骤 expected_user_info 中以 _confirmed 结尾的确认字段，按首次出现顺序去重。"""
     fields: list[str] = []
     for step in steps:
         expected = [str(field) for field in step.get("expected_user_info", [])]
@@ -649,10 +685,12 @@ def _confirmation_fields(steps: list[dict[str, Any]]) -> list[str]:
 
 
 def _steps_declare_confirmation(steps: list[dict[str, Any]]) -> bool:
+    """判断流程是否声明了显式确认字段，即存在 *_confirmed 槽位。"""
     return bool(_confirmation_fields(steps))
 
 
 def _attach_declared_confirmation_to_tool_steps(steps: list[dict[str, Any]]) -> None:
+    """给工具步骤追加调用前确认约束，只使用该步骤之前已声明的确认字段（就地修改）。"""
     confirmed_fields: list[str] = []
     for step in steps:
         if any(str(action).startswith("call_tool:") for action in step.get("allowed_actions", [])):
@@ -665,6 +703,7 @@ def _attach_declared_confirmation_to_tool_steps(steps: list[dict[str, Any]]) -> 
 def _append_tool_confirmation_instruction(
     step: dict[str, Any], confirmation_fields: list[str]
 ) -> None:
+    """把确认字段拼成调用前校验指令追加到步骤；没有确认字段时不改动步骤。"""
     if not confirmation_fields:
         return
     field_text = "、".join(f"{field}=true" for field in confirmation_fields)
@@ -672,6 +711,7 @@ def _append_tool_confirmation_instruction(
 
 
 def _last_step_allows_answer(steps: list[dict[str, Any]]) -> bool:
+    """判断最后一个步骤是否允许 answer_user，用于决定要不要补最终回复节点。"""
     if not steps:
         return False
     actions = [str(action) for action in steps[-1].get("allowed_actions", [])]
@@ -679,6 +719,7 @@ def _last_step_allows_answer(steps: list[dict[str, Any]]) -> bool:
 
 
 def _unique_step_id(steps: list[dict[str, Any]], base: str) -> str:
+    """生成不与现有节点冲突的 node_id：base 被占用时依次尝试 base_2、base_3……"""
     existing = {str(step.get("node_id") or "") for step in steps}
     if base not in existing:
         return base
@@ -691,6 +732,7 @@ def _unique_step_id(steps: list[dict[str, Any]], base: str) -> str:
 def _ensure_linear_reachability(
     nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
+    """为没有入边的节点补一条来自前一节点的默认推进边，保证流程从头到尾线性可达。"""
     if len(nodes) < 2:
         return edges
     existing = {
@@ -722,6 +764,7 @@ def _ensure_linear_reachability(
 
 
 def _unique_warnings(warnings: list[str]) -> list[str]:
+    """按首次出现顺序去重警告并丢弃空白项。"""
     deduped: list[str] = []
     for warning in warnings:
         text = str(warning).strip()
@@ -731,12 +774,14 @@ def _unique_warnings(warnings: list[str]) -> list[str]:
 
 
 def _compact_warnings(warnings: list[str]) -> list[str]:
+    """先压缩已知的冗长警告文案，再去重并丢弃空项。"""
     return _unique_warnings(
         [_compact_warning(str(warning)) for warning in warnings if str(warning).strip()]
     )
 
 
 def _compact_warning(warning: str) -> str:
+    """把内部冗长的固定警告改写为简短提示；未命中映射表时原样返回。"""
     text = warning.strip()
     replacements = (
         ("原始改写未包含工具步骤，已按可用工具补充闭环执行步骤。", "已补充工具执行步骤。"),
@@ -762,6 +807,10 @@ def _distill_model_input(
     available_knowledge_bases: Any,
     total_knowledge_base_count: int,
 ) -> str:
+    """拼装蒸馏提示的输入正文：标题、业务领域、原始流程与裁剪后的能力清单。
+
+    清单按工具、通用技能、知识库分段，并注明被省略的低相关条目数量。
+    """
     sections = [f"技能标题：{title.strip() or '新SOP'}"]
     if business_domain and business_domain.strip():
         sections.append(f"业务领域：{business_domain.strip()}")
@@ -852,6 +901,10 @@ def _compact_available_tools(
     *,
     source_text: str,
 ) -> list[dict[str, Any]]:
+    """按与原文的关键词及名称匹配度排序，截断描述与参数后保留最相关的工具。
+
+    同时受数量与字符预算限制，超出即停止追加；同分时保持原始顺序。
+    """
     source_terms = _tool_relevance_terms(source_text)
     ranked: list[tuple[int, int, dict[str, Any]]] = []
     seen_names: set[str] = set()
@@ -905,6 +958,10 @@ def _compact_named_capabilities(
     source_text: str,
     alias_fields: tuple[str, ...],
 ) -> list[dict[str, Any]]:
+    """通用技能与知识库的目录裁剪：按别名/描述相关性排序并截断，控制提示体积。
+
+    与工具裁剪共用数量与字符预算，缺少 id 时用 alias_fields 中的首个非空字段兜底。
+    """
     source_terms = _tool_relevance_terms(source_text)
     ranked: list[tuple[int, int, dict[str, Any]]] = []
     seen_ids: set[str] = set()
@@ -958,6 +1015,10 @@ def _compact_named_capabilities(
 
 
 def _compact_tool_input_schema(value: Any) -> dict[str, Any]:
+    """精简工具 input_schema：必填参数优先，最多保留 MODEL_TOOL_PARAMETER_LIMIT 个属性。
+
+    每个属性只留类型、描述与最多 8 个枚举值；非 dict 输入返回空 schema。
+    """
     if not isinstance(value, dict):
         return {}
     properties = value.get("properties") if isinstance(value.get("properties"), dict) else {}
@@ -991,6 +1052,7 @@ def _compact_tool_input_schema(value: Any) -> dict[str, Any]:
 
 
 def _model_tool_parameter_text(value: Any) -> str:
+    """把 input_schema 渲染成一行参数说明：名称、类型、必填/可选与描述。"""
     if not isinstance(value, dict):
         return ""
     properties = value.get("properties") if isinstance(value.get("properties"), dict) else {}
@@ -1009,6 +1071,7 @@ def _model_tool_parameter_text(value: Any) -> str:
 
 
 def _tool_relevance_terms(value: str) -> set[str]:
+    """提取相关性打分用的词元：英文数字段按 ≥2 长度切分，中文段滑窗切 2-3 字。"""
     lowered = value.lower()
     terms = {item for item in re.findall(r"[a-z0-9_]+", lowered) if len(item) >= 2}
     for segment in re.findall(r"[\u4e00-\u9fff]{2,}", value):
@@ -1018,15 +1081,18 @@ def _tool_relevance_terms(value: str) -> set[str]:
 
 
 def _limited_text(value: Any, limit: int) -> str:
+    """把任意值转成压缩空白后的字符串并按 limit 截断，用于控制提示体积。"""
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[:limit]
 
 
 def _request_text(request: Any) -> str:
+    """拼接请求标题与原始内容，作为能力相关性匹配的参照文本。"""
     return f"{_request_title(request)}\n{_request_raw_content(request)}"
 
 
 def _request_title(request: Any) -> str:
+    """取请求标题；标题缺失时退回 current_skill.name，再退回「新技能」。"""
     title = getattr(request, "title", None)
     if isinstance(title, str) and title.strip():
         return title.strip()
@@ -1036,6 +1102,7 @@ def _request_title(request: Any) -> str:
 
 
 def _request_raw_content(request: Any) -> str:
+    """取请求 raw_content；缺失时退回 instruction 文本，供蒸馏与能力匹配使用。"""
     raw_content = getattr(request, "raw_content", None)
     if isinstance(raw_content, str) and raw_content.strip():
         return raw_content
@@ -1044,6 +1111,7 @@ def _request_raw_content(request: Any) -> str:
 
 
 def _extract_json(text: str) -> str:
+    """剥离 Markdown 代码围栏并截取首个 { 到末个 } 之间的片段；找不到大括号时返回去空白文本。"""
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.strip("`").strip()
@@ -1057,6 +1125,7 @@ def _extract_json(text: str) -> str:
 
 
 def _raw_json_from_text(text: str) -> dict[str, Any]:
+    """把模型输出解析为 JSON 对象；解析结果不是 object 时抛出 ValueError。"""
     raw = json.loads(_extract_json(text))
     if not isinstance(raw, dict):
         raise ValueError("模型输出不是 JSON object")
@@ -1064,21 +1133,25 @@ def _raw_json_from_text(text: str) -> dict[str, Any]:
 
 
 def _serialize_response_for_stream(response: SkillDistillResponse) -> str:
+    """把响应序列化为缩进 2 的 JSON 文本，供流式接口按块下发。"""
     return json.dumps(response.model_dump(mode="json"), ensure_ascii=False, indent=2)
 
 
 def _chunk_text(text: str, size: int = 18):
+    """把文本按固定长度切块逐个产出，用于模拟流式输出。"""
     for index in range(0, len(text), size):
         yield text[index : index + size]
 
 
 def _string(value: Any, fallback: str | None = "") -> str:
+    """取去空白后的非空字符串；否则返回 fallback，fallback 为 None 时返回空串。"""
     if isinstance(value, str) and value.strip():
         return value.strip()
     return fallback or ""
 
 
 def _string_list(value: Any, fallback: list[str]) -> list[str]:
+    """把列表元素转成去空白字符串；没有有效元素时返回 fallback。"""
     if isinstance(value, list):
         items = [str(item).strip() for item in value if str(item).strip()]
         if items:
@@ -1087,6 +1160,7 @@ def _string_list(value: Any, fallback: list[str]) -> list[str]:
 
 
 def _string_dict(value: Any, fallback: dict[str, str]) -> dict[str, str]:
+    """把字典键值统一为字符串；结果为空时返回 fallback。"""
     if isinstance(value, dict):
         items = {str(key): str(item) for key, item in value.items() if str(key)}
         if items:
@@ -1100,6 +1174,10 @@ def _slot_filling_policy(
     steps: list[dict[str, Any]],
     fallback_policy: dict[str, Any],
 ) -> dict[str, Any]:
+    """合并模型给出的槽位策略与默认策略，并把所有步骤的 expected_user_info 汇入 target_info。
+
+    模型未提供策略时以 fallback_policy 为底；无论来源如何都强制开启多槽位抽取与跳过已满足步骤。
+    """
     has_explicit_policy = isinstance(value, dict)
     if has_explicit_policy:
         policy = dict(value)
@@ -1123,6 +1201,7 @@ def _slot_filling_policy(
 
 
 def _default_slot_filling_policy(expected_infos: list[str]) -> dict[str, Any]:
+    """生成默认槽位策略：每轮抽取全部可识别信息、支持一轮多槽位并跳过已满足步骤。"""
     return {
         "enabled": True,
         "multi_slot_per_turn": True,
@@ -1134,6 +1213,7 @@ def _default_slot_filling_policy(expected_infos: list[str]) -> dict[str, Any]:
 
 
 def _normalize_actions(actions: list[str]) -> list[str]:
+    """按首次出现顺序去重动作列表。"""
     normalized: list[str] = []
     for action in actions:
         if action not in normalized:
@@ -1142,6 +1222,7 @@ def _normalize_actions(actions: list[str]) -> list[str]:
 
 
 def _available_tool_names(available_tools: list[dict[str, Any]]) -> set[str]:
+    """收集已配置工具的名称集合，用于过滤模型臆造的工具调用。"""
     names: set[str] = set()
     for tool in available_tools:
         if not isinstance(tool, dict):
@@ -1157,6 +1238,10 @@ def _capability_alias_map(
     *,
     alias_fields: tuple[str, ...],
 ) -> dict[str, str]:
+    """建立能力别名到 canonical id 的映射，别名含 id、alias_fields 与 general_skill.<slug> 形式。
+
+    同时登记原始大小写与全小写键，便于后续大小写无关地解析能力引用。
+    """
     aliases: dict[str, str] = {}
     for value in values:
         if not isinstance(value, dict):
@@ -1186,6 +1271,7 @@ def _resolved_capability_refs(
     value: Any,
     aliases: dict[str, str],
 ) -> tuple[list[str], list[str]]:
+    """把能力引用解析为 canonical id，分别返回已解析与未知引用，两者都去重并保序。"""
     resolved: list[str] = []
     unknown: list[str] = []
     raw_values = value if isinstance(value, list) else []
@@ -1206,6 +1292,11 @@ def _normalize_node_capability_refs(
     nodes: list[dict[str, Any]],
     request: SkillDistillRequest,
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    """按请求目录校正每个节点的 capability_refs，剔除该员工不可用的能力引用。
+
+    call_tool: 动作会反推 tool_ids；原文显式提及且带强制语气的引用补进 required_*_ids，
+    未被模型挂载的则在最相关节点上补齐。
+    """
     catalogs = {
         "general_skill": _capability_alias_map(
             request.available_general_skills,
@@ -1341,6 +1432,10 @@ def _explicit_capability_mentions(
     source_text: str,
     alias_fields: tuple[str, ...],
 ) -> dict[str, bool]:
+    """扫描原文，返回被显式提及的能力 id 到「是否强制使用」的映射。
+
+    长别名优先匹配以减少短名误判，多个别名命中同一能力时按或运算合并强制标记。
+    """
     aliases = _capability_alias_map(values, alias_fields=alias_fields)
     source_lower = source_text.lower()
     mentions: dict[str, bool] = {}
@@ -1362,6 +1457,7 @@ def _explicit_capability_mentions(
 
 
 def _capability_mention_is_required(source_text: str, start: int, length: int) -> bool:
+    """检查提及位置前后 24 字符窗口内是否出现「必须/务必/需要使用」等强制措辞。"""
     window = source_text[max(0, start - 24) : min(len(source_text), start + length + 24)]
     return any(
         marker in window
@@ -1375,6 +1471,10 @@ def _capability_target_node_index(
     catalog: list[dict[str, Any]],
     field_name: str,
 ) -> int:
+    """为原文提及但模型未挂载的能力挑选挂载节点下标。
+
+    先选名称/指令中别名匹配最长的节点；无匹配则按能力类型退回动作类节点或知识检索类节点。
+    """
     capability = next(
         (item for item in catalog if str(item.get("id") or "").strip() == capability_id),
         {},
@@ -1435,6 +1535,7 @@ def _remove_unknown_tool_actions(
     available_tools: list[dict[str, Any]],
     retain_tool_names: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    """移除 allowed_actions 中未配置的 call_tool: 动作，并返回被移除的工具名（去重保序）。"""
     available_names = _available_tool_names(available_tools)
     retained_names = retain_tool_names or set()
     missing_names: list[str] = []
@@ -1461,6 +1562,7 @@ def _remove_unknown_tool_actions(
 
 
 def _tool_action_names_from_suggestions(suggestions: list[ToolSuggestion]) -> set[str]:
+    """从已匹配或新候选的工具建议中提取工具名，供未知工具动作过滤时保留。"""
     names: set[str] = set()
     for suggestion in suggestions:
         if suggestion.resolution_status not in {"existing", "new_candidate"}:
@@ -1475,6 +1577,7 @@ def _tool_action_names_from_suggestions(suggestions: list[ToolSuggestion]) -> se
 def _normalize_tool_suggestions(
     value: Any, request: Any, missing_tool_names: list[str]
 ) -> list[ToolSuggestion]:
+    """把模型的 tool_mentions 逐条解析为 ToolSuggestion，跳过无法识别与重名条目。"""
     suggestions: list[ToolSuggestion] = []
     seen: set[str] = set()
 
@@ -1494,6 +1597,7 @@ def _normalize_tool_suggestions(
 
 
 def _tool_resolution_warnings(suggestions: list[ToolSuggestion]) -> list[str]:
+    """为状态为 incomplete 的工具建议生成「提到了但当前不能新增」的警告文案。"""
     warnings: list[str] = []
     for suggestion in suggestions:
         if suggestion.resolution_status != "incomplete":
@@ -1505,6 +1609,10 @@ def _tool_resolution_warnings(suggestions: list[ToolSuggestion]) -> list[str]:
 
 
 def _tool_mention_to_resolution(item: dict[str, Any], request: Any) -> ToolSuggestion | None:
+    """把单条工具提及解析成 ToolSuggestion：优先匹配现有工具，否则按信息完整度归类。
+
+    未匹配且名称、展示名、地址全无时返回 None；信息不全时只有地址在原文出现过才保留 url。
+    """
     name = _string(item.get("name"), "") or _string(item.get("inferred_name"), "")
     display_name = _string(item.get("display_name"), "") or _string(item.get("label"), "")
     description = _string(item.get("description"), "") or _string(item.get("purpose"), "")
@@ -1596,6 +1704,7 @@ def _tool_mention_to_resolution(item: dict[str, Any], request: Any) -> ToolSugge
 def _tool_mention_missing_reasons(
     url: str, input_schema: Any, output_schema: Any, request: Any
 ) -> list[str]:
+    """列出新增工具候选缺失的信息：接口地址、输入结构、返回结构。"""
     reasons: list[str] = []
     if not url:
         reasons.append("缺少可访问接口地址或路径")
@@ -1611,6 +1720,7 @@ def _tool_mention_missing_reasons(
 def _match_available_tool(
     name: str, url: str, available_tools: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
+    """按工具名精确相等或 URL 候选有交集在已配置工具中查找匹配项；未命中返回 None。"""
     name_text = name.strip()
     url_candidates = set(_tool_url_candidates(url))
     for tool in available_tools:
@@ -1626,6 +1736,7 @@ def _match_available_tool(
 
 
 def _tool_name_from_url(url: str) -> str:
+    """从 URL 或路径推导工具名：把斜杠、连字符等非字母数字字符规整为下划线；为空时返回 tool_candidate。"""
     candidates = _tool_url_candidates(url)
     path = candidates[-1] if candidates else url
     text = path.strip("/").replace("-", "_").replace("/", ".")
@@ -1634,6 +1745,7 @@ def _tool_name_from_url(url: str) -> str:
 
 
 def _tool_suggestion_url_in_source(url: str, request: Any) -> bool:
+    """判断接口地址的任一候选是否出现在技能原文或上下文中，防止模型臆造地址。"""
     source = _tool_suggestion_source_text(request)
     if not source:
         return False
@@ -1641,6 +1753,7 @@ def _tool_suggestion_url_in_source(url: str, request: Any) -> bool:
 
 
 def _tool_suggestion_source_text(request: Any) -> str:
+    """汇总校验工具地址用的原文素材：请求文本字段、当前技能 JSON 与最近 12 条会话内容。"""
     parts: list[str] = []
     for attr in ("raw_content", "instruction", "title", "business_domain", "target_label"):
         value = getattr(request, attr, None)
@@ -1663,6 +1776,7 @@ def _tool_suggestion_source_text(request: Any) -> str:
 
 
 def _tool_url_candidates(url: str) -> list[str]:
+    """生成 URL 比对候选：完整串、路径、补前导斜杠形式，只保留路径长度 ≥3 的项并按长度降序。"""
     normalized = url.strip().strip("`'\"<>，。；;,")
     if not normalized:
         return []
@@ -1679,16 +1793,19 @@ def _tool_url_candidates(url: str) -> list[str]:
 
 
 def _tool_method(value: Any, fallback: str = "POST") -> str:
+    """把 HTTP 方法规范化为大写；不在 GET/POST/PUT/PATCH/DELETE 内时退回 POST。"""
     method = str(value or fallback or "POST").upper()
     return method if method in {"GET", "POST", "PUT", "PATCH", "DELETE"} else "POST"
 
 
 def _infer_goals(raw: str) -> list[str]:
+    """把原文按标点切句作为技能目标；切不出内容时返回固定的四步默认目标。"""
     clauses = [clause.strip() for clause in _split_clauses(raw) if clause.strip()]
     return clauses or ["理解用户诉求", "收集必要信息", "完成流程处理", "向用户反馈结果"]
 
 
 def _split_clauses(text: str) -> list[str]:
+    """把换行和中英文标点统一为逗号后切分为短句，供目标提取使用。"""
     normalized = (
         text.replace("\n", "，")
         .replace("；", "，")
@@ -1700,6 +1817,7 @@ def _split_clauses(text: str) -> list[str]:
 
 
 def _slugify(title: str, raw: str) -> str:
+    """把标题转成最长 48 字符的 ASCII slug；无 ASCII 字符时用标题+原文的 md5 前缀生成稳定 ID。"""
     ascii_slug = "".join(
         char.lower() if char.isalnum() else "_" for char in title if ord(char) < 128
     )

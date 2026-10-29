@@ -5,6 +5,7 @@ from app.distributed.lease import RedisLease
 
 
 def test_acquire_is_exclusive():
+    """验证同一 key 的租约互斥：持有期间他人获取失败，释放后才能被接管。"""
     client = fakeredis.FakeStrictRedis()
     a = RedisLease(client, "staffdeck:lease:api", ttl_seconds=60, holder="proc-a")
     b = RedisLease(client, "staffdeck:lease:api", ttl_seconds=60, holder="proc-b")
@@ -16,6 +17,7 @@ def test_acquire_is_exclusive():
 
 
 def test_release_only_by_owner():
+    """验证只有持有者能释放租约，非持有者释放不会删掉他人的锁。"""
     client = fakeredis.FakeStrictRedis()
     a = RedisLease(client, "staffdeck:lease:api", ttl_seconds=60, holder="proc-a")
     a.acquire()
@@ -27,6 +29,7 @@ def test_release_only_by_owner():
 
 
 def test_renew_extends_ttl():
+    """验证续期成功并将剩余 TTL 保持在正值，租约不会提前过期。"""
     import time
 
     client = fakeredis.FakeStrictRedis()

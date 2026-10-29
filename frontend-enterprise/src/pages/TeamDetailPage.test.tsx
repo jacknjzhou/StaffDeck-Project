@@ -55,6 +55,7 @@ const crowdedTeam: TeamRead = {
   ],
 };
 
+/** 构造任务数据，便于用例按需覆盖字段。 */
 function makeTask(overrides: Partial<TeamTaskRead>): TeamTaskRead {
   return {
     id: 'task-1',
@@ -85,6 +86,7 @@ const tasks: TeamTaskRead[] = [
   makeTask({ id: 'task-5', title: '竞标已裁决', status: 'pending', assignee_agent_id: 'agent-1' }),
 ];
 
+/** 构造竞标记录，便于用例按需覆盖字段。 */
 function makeBid(overrides: Partial<TeamTaskBidRead>): TeamTaskBidRead {
   return {
     id: 'bid-1',
@@ -148,6 +150,7 @@ const teamLog = {
   ],
 };
 
+/** 构造可返回 JSON 文本与 Blob 的成功响应桩。 */
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -158,6 +161,7 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+/** 构造团队黑板条目，便于用例按需覆盖字段。 */
 function makeEntry(overrides: Partial<TeamBlackboardEntryRead>): TeamBlackboardEntryRead {
   return {
     id: 'entry-1',
@@ -177,6 +181,7 @@ function makeEntry(overrides: Partial<TeamBlackboardEntryRead>): TeamBlackboardE
   };
 }
 
+/** 构造覆盖团队详情页各接口的 fetch 桩，可覆盖黑板、事件与任务数据。 */
 function stubDetailFetch(overrides?: {
   entries?: TeamBlackboardEntryRead[];
   events?: TeamEventRead[];
@@ -278,11 +283,13 @@ function stubDetailFetch(overrides?: {
   return fetchMock;
 }
 
+/** 回显当前路由路径与查询串，用于断言导航结果。 */
 function LocationEcho() {
   const location = useLocation();
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
 }
 
+/** 按指定初始路由渲染团队详情页。 */
 function renderDetail(initialEntry = '/enterprise/teams/team-1') {
   return render(
     <I18nProvider>
@@ -297,12 +304,14 @@ function renderDetail(initialEntry = '/enterprise/teams/team-1') {
   );
 }
 
+/** 每个用例结束后清理 DOM、全局桩与 spy。 */
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
+/** 在 jsdom 中补齐 Radix Select 依赖的 pointer capture API。 */
 beforeAll(() => {
   // Radix Select 在 jsdom 中需要 pointer capture API
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -311,6 +320,7 @@ beforeAll(() => {
 });
 
 describe('TeamDetailPage', () => {
+  /** 验证可在线查看团队完整日志，并保留 JSON 下载能力。 */
   it('opens the complete team execution log online and keeps JSON download available', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch();
@@ -341,6 +351,7 @@ describe('TeamDetailPage', () => {
     });
   });
 
+  /** 验证成员信息展示，且看板任务按状态分组。 */
   it('renders members and groups kanban tasks by status', async () => {
     stubDetailFetch();
     renderDetail();
@@ -363,6 +374,7 @@ describe('TeamDetailPage', () => {
     expect(within(progressColumn).getByText('投放分析')).toBeTruthy();
   });
 
+  /** 验证成员列表溢出时从左起始展示并给出横向滑动提示。 */
   it('starts an overflowed member list from the left and shows a horizontal scroll hint', async () => {
     vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockReturnValue(1000);
     vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(500);
@@ -389,6 +401,7 @@ describe('TeamDetailPage', () => {
     });
   });
 
+  /** 验证可从任务详情弹窗提交验收通过结论。 */
   it('submits an override verdict from the task detail dialog', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch();
@@ -413,6 +426,7 @@ describe('TeamDetailPage', () => {
     });
   });
 
+  /** 验证聊天内容不会出现在团队管理页面中。 */
   it('keeps chat content out of the management workspace', async () => {
     stubDetailFetch();
     renderDetail();
@@ -421,6 +435,7 @@ describe('TeamDetailPage', () => {
     expect(screen.queryByLabelText('团队群聊')).toBeNull();
   });
 
+  /** 验证可从团队详情发起持久化团队会话并跳转聊天页。 */
   it('starts the persistent team conversation from team details', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch({ onTlSession: () => ({ session_id: 'team-session-2' }) });
@@ -435,6 +450,7 @@ describe('TeamDetailPage', () => {
     );
   });
 
+  /** 验证黑板条目置顶优先展示，并显示标签与来源。 */
   it('renders blackboard entries pinned first with tags and sources', async () => {
     stubDetailFetch({
       entries: [
@@ -462,6 +478,7 @@ describe('TeamDetailPage', () => {
     expect(within(board).getAllByText('置顶').length).toBeGreaterThan(0);
   });
 
+  /** 验证黑板没有条目时展示空状态占位。 */
   it('shows an empty placeholder when the blackboard has no entries', async () => {
     stubDetailFetch();
     renderDetail();
@@ -470,6 +487,7 @@ describe('TeamDetailPage', () => {
     expect(await within(board).findByText('暂无黑板条目')).toBeTruthy();
   });
 
+  /** 验证可提交带标签的人工黑板条目。 */
   it('submits a human-written blackboard entry with tags', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch();
@@ -491,6 +509,7 @@ describe('TeamDetailPage', () => {
     expect(body.tags).toEqual(['risk', 'launch']);
   });
 
+  /** 验证确认后归档黑板条目并从列表移除。 */
   it('archives a blackboard entry after confirmation', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -515,6 +534,7 @@ describe('TeamDetailPage', () => {
     expect(within(board).getByText('暂无黑板条目')).toBeTruthy();
   });
 
+  /** 验证竞标中的任务展示在竞标列。 */
   it('renders the bidding column with bidding tasks', async () => {
     stubDetailFetch();
     renderDetail();
@@ -524,6 +544,7 @@ describe('TeamDetailPage', () => {
     expect(await within(biddingColumn).findByText('竞标方案')).toBeTruthy();
   });
 
+  /** 验证竞标竞技场展示血量条与胜者标识。 */
   it('renders the bidding arena with HP bars and the winner crown', async () => {
     const user = userEvent.setup();
     stubDetailFetch({
@@ -561,6 +582,7 @@ describe('TeamDetailPage', () => {
     expect(within(arena).getByText('方案具体')).toBeTruthy();
   });
 
+  /** 验证被淘汰的候选人有标记，无得分的历史竞标保持满血。 */
   it('marks eliminated candidates and shows full HP for legacy bids without scores', async () => {
     const user = userEvent.setup();
     stubDetailFetch({
@@ -593,6 +615,7 @@ describe('TeamDetailPage', () => {
     expect(within(arena).queryByText('胜者为王')).toBeNull();
   });
 
+  /** 验证未指定执行者时创建的任务进入竞标池。 */
   it('creates a task into the bidding pool without an assignee', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch();
@@ -617,6 +640,7 @@ describe('TeamDetailPage', () => {
     });
   });
 
+  /** 验证创建任务时可直接指派给指定成员。 */
   it('creates a task with direct assignment to a member', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch();
@@ -643,6 +667,7 @@ describe('TeamDetailPage', () => {
     });
   });
 
+  /** 验证竞标任务可提交改判执行者与改判说明。 */
   it('submits an award override for a bidding task', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch({
@@ -679,6 +704,7 @@ describe('TeamDetailPage', () => {
     });
   });
 
+  /** 验证打开带 ?task= 参数的链接时直接弹出任务详情。 */
   it('opens the task detail dialog from the ?task= query param', async () => {
     stubDetailFetch();
     renderDetail('/enterprise/teams/team-1?task=task-1');
@@ -688,6 +714,7 @@ describe('TeamDetailPage', () => {
     expect(within(dialog).getByText('submitted')).toBeTruthy();
   });
 
+  /** 验证保存团队设置时提交合并后的完整配置。 */
   it('saves team settings via PUT with the merged config', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch({
@@ -720,6 +747,7 @@ describe('TeamDetailPage', () => {
     });
   });
 
+  /** 验证黑板条目可沉淀到知识库，已沉淀的条目按钮置灰。 */
   it('promotes a blackboard entry and disables already promoted entries', async () => {
     const user = userEvent.setup();
     const fetchMock = stubDetailFetch({
@@ -750,6 +778,7 @@ describe('TeamDetailPage', () => {
     });
   });
 
+  /** 验证团队动态按任务分组，并可点击分组标题打开任务详情。 */
   it('groups team activity by task and opens the task from the group header', async () => {
     const user = userEvent.setup();
     const now = Date.now();
@@ -818,6 +847,7 @@ describe('TeamDetailPage', () => {
     expect(await within(dialog).findByText('周报已完成')).toBeTruthy();
   });
 
+  /** 验证验收结论以醒目横幅展示，并引用验收说明。 */
   it('renders the review verdict as a prominent banner with the comment quote', async () => {
     const user = userEvent.setup();
     stubDetailFetch({
@@ -840,6 +870,7 @@ describe('TeamDetailPage', () => {
     expect(quote.tagName).toBe('BLOCKQUOTE');
   });
 
+  /** 验证验收通过横幅展示，无结论时隐藏该区块。 */
   it('renders an approve banner and hides the section when there is no verdict', async () => {
     const user = userEvent.setup();
     stubDetailFetch({
@@ -863,6 +894,7 @@ describe('TeamDetailPage', () => {
     expect(within(dialog).queryByLabelText('验收结论')).toBeNull();
   });
 
+  /** 验证内部执行记录保留在任务详情内，不对外暴露入口。 */
   it('keeps internal execution records inside the task detail', async () => {
     const user = userEvent.setup();
     stubDetailFetch({
@@ -879,6 +911,7 @@ describe('TeamDetailPage', () => {
     expect(within(dialog).queryByRole('button', { name: '查看执行会话' })).toBeNull();
   });
 
+  /** 验证看板卡片展示创建时间并按最新优先排序。 */
   it('shows creation timestamps on kanban cards sorted newest first', async () => {
     stubDetailFetch({
       taskList: [
@@ -897,6 +930,7 @@ describe('TeamDetailPage', () => {
     expect(newer.compareDocumentPosition(older) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  /** 验证成员树展示员工头像与项目领导标记。 */
   it('renders the member tree with employee avatars', async () => {
     stubDetailFetch();
     renderDetail();

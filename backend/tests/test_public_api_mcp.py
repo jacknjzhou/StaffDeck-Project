@@ -17,6 +17,7 @@ FINANCE_AGENT = "agent_f2828efc2a2a476d"
 
 
 def _client(monkeypatch):
+    """构建带种子数据与管理员令牌的公共 API 测试客户端，返回客户端、引擎与令牌。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -29,6 +30,7 @@ def _client(monkeypatch):
     app = create_public_api_app()
 
     def override():
+        """用测试引擎为每个请求提供独立 Session。"""
         with Session(engine) as db:
             yield db
 
@@ -37,6 +39,7 @@ def _client(monkeypatch):
 
 
 def _key(client, token, scopes):
+    """创建指定作用域的 API 客户端与凭据，返回明文 API key。"""
     admin = {"Authorization": f"Bearer {token}"}
     client_id = client.post(
         "/api-clients", headers=admin, json={"name": "dc-mcp", "scopes": scopes}
@@ -49,12 +52,14 @@ def _key(client, token, scopes):
 
 
 def _rpc(client, auth, body, **kwargs):
+    """向 /mcp 发送带认证头的 JSON-RPC 请求。"""
     return client.post(
         "/mcp", headers={**auth, "Content-Type": "application/json"}, json=body, **kwargs
     )
 
 
 def test_mcp_requires_the_invoke_scope(monkeypatch):
+    """验证缺少 mcp:invoke 作用域的密钥调用 MCP 返回 403 与 INSUFFICIENT_SCOPE。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     response = _rpc(
@@ -67,7 +72,7 @@ def test_mcp_requires_the_invoke_scope(monkeypatch):
 
 
 def test_mcp_rejects_a_user_jwt(monkeypatch):
-    """The endpoint is API-key only: a browser session token must not reach it."""
+    """验证浏览器会话令牌被拒绝，MCP 端点只接受 API key。"""
     client, _engine, token = _client(monkeypatch)
     response = _rpc(
         client,
@@ -79,6 +84,7 @@ def test_mcp_rejects_a_user_jwt(monkeypatch):
 
 
 def test_initialize_issues_a_session_and_reports_capabilities(monkeypatch):
+    """验证 initialize 返回协商版本、tools 能力与服务信息，并下发 mcp-session-id 响应头。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke", "agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -105,6 +111,7 @@ def test_initialize_issues_a_session_and_reports_capabilities(monkeypatch):
 
 
 def test_initialize_negotiates_an_unknown_version_downwards(monkeypatch):
+    """验证未知协议版本降级到 2024-11-05。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = _rpc(
@@ -122,6 +129,7 @@ def test_initialize_negotiates_an_unknown_version_downwards(monkeypatch):
 
 
 def test_notification_gets_an_empty_accepted_response(monkeypatch):
+    """验证通知类请求返回 202 且响应体为空。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = _rpc(
@@ -134,6 +142,7 @@ def test_notification_gets_an_empty_accepted_response(monkeypatch):
 
 
 def test_tools_list_is_scoped_to_the_employee_in_meta(monkeypatch):
+    """验证 tools/list 按 _meta 中的员工返回 staffdeck_ 前缀工具，且不泄露凭据字段。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = _rpc(
@@ -155,6 +164,7 @@ def test_tools_list_is_scoped_to_the_employee_in_meta(monkeypatch):
 
 
 def test_tools_list_without_an_employee_is_refused(monkeypatch):
+    """验证缺少员工标识时 tools/list 返回 -32602 参数错误。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = _rpc(
@@ -167,6 +177,7 @@ def test_tools_list_without_an_employee_is_refused(monkeypatch):
 
 
 def test_tools_call_returns_a_call_tool_result(monkeypatch):
+    """验证 tools/call 返回 MCP CallToolResult 结构，包含 text 内容与 isError。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = _rpc(
@@ -190,6 +201,7 @@ def test_tools_call_returns_a_call_tool_result(monkeypatch):
 
 
 def test_tools_call_without_an_employee_is_refused(monkeypatch):
+    """验证缺少员工标识时 tools/call 返回 -32602。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = _rpc(
@@ -207,6 +219,7 @@ def test_tools_call_without_an_employee_is_refused(monkeypatch):
 
 
 def test_tools_call_requires_a_name(monkeypatch):
+    """验证 tools/call 未提供工具名时返回 -32602。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = _rpc(
@@ -224,6 +237,7 @@ def test_tools_call_requires_a_name(monkeypatch):
 
 
 def test_unknown_method_returns_method_not_found(monkeypatch):
+    """验证未知方法返回 -32601 method not found。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = _rpc(
@@ -236,6 +250,7 @@ def test_unknown_method_returns_method_not_found(monkeypatch):
 
 
 def test_get_is_not_supported(monkeypatch):
+    """验证 GET /mcp 不被支持，返回 405。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = client.get("/mcp", headers={"Authorization": f"Bearer {key}"})
@@ -243,6 +258,7 @@ def test_get_is_not_supported(monkeypatch):
 
 
 def test_every_call_is_audited(monkeypatch):
+    """验证每次 MCP 调用都会写入审计日志并记录员工 id。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     _rpc(
@@ -268,6 +284,7 @@ def test_every_call_is_audited(monkeypatch):
 
 
 def test_agent_path_scopes_tools_list_without_any_meta(monkeypatch):
+    """验证路径中的员工 id 可在不传 _meta 时限定 tools/list 范围。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = client.post(
@@ -281,6 +298,7 @@ def test_agent_path_scopes_tools_list_without_any_meta(monkeypatch):
 
 
 def test_agent_path_scopes_tools_call_without_any_meta(monkeypatch):
+    """验证路径员工可在不传 _meta 时执行 tools/call 并返回文本结果。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = client.post(
@@ -298,6 +316,7 @@ def test_agent_path_scopes_tools_call_without_any_meta(monkeypatch):
 
 
 def test_agent_path_wins_over_a_conflicting_meta(monkeypatch):
+    """验证路径员工优先于冲突的 _meta，按财务员工派发而非无工具的销售员工。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["mcp:invoke"])
     response = client.post(
@@ -320,6 +339,7 @@ def test_agent_path_wins_over_a_conflicting_meta(monkeypatch):
 
 
 def test_agent_path_rejects_an_employee_outside_the_credential_scope(monkeypatch):
+    """验证绑定到财务员工的密钥只能访问该员工，访问其他员工路径返回 403。"""
     client, _engine, token = _client(monkeypatch)
     admin = {"Authorization": f"Bearer {token}"}
     client_id = client.post(

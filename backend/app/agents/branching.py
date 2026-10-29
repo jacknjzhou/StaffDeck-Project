@@ -51,12 +51,17 @@ CREATOR_METADATA_KEYS = STANDARD_CREATOR_METADATA_KEYS + CREATOR_SOURCE_METADATA
 
 
 def _valid_creator_value(value: Any) -> bool:
+    """判断创作者字段是否为可直接落库的非空字符串。"""
     return isinstance(value, str) and bool(value.strip())
 
 
 def user_creator_metadata(
     user: object | None, extra: dict[str, Any] | None = None
 ) -> dict[str, Any]:
+    """用用户对象补全 owner/created_by 系列创作者元数据，并与 extra 合并。
+
+    user 为 None 时直接返回 extra 副本；缺失字段不回填，避免写入空串。
+    """
     metadata = dict(extra or {})
     if user is None:
         return metadata
@@ -83,7 +88,7 @@ def metadata_preserving_creator(
     existing: dict[str, Any] | None,
     replacement: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Replace editable metadata without changing the original creator."""
+    """用 replacement 覆盖可编辑元数据，但保留 existing 中的原创作者字段。"""
     metadata = dict(replacement or {})
     current = dict(existing or {})
     for key in CREATOR_METADATA_KEYS:
@@ -94,6 +99,7 @@ def metadata_preserving_creator(
 
 
 def get_overall_agent(db: Session, tenant_id: str) -> AgentProfile | None:
+    """取租户内未归档的整体 Agent，即开放广场资源的归属方。"""
     return db.exec(
         select(AgentProfile).where(
             AgentProfile.tenant_id == tenant_id,
@@ -104,6 +110,7 @@ def get_overall_agent(db: Session, tenant_id: str) -> AgentProfile | None:
 
 
 def get_agent(db: Session, tenant_id: str, agent_id: str | None) -> AgentProfile | None:
+    """按 id 取租户内未归档的 Agent；id 为空或已归档时返回 None。"""
     if not agent_id:
         return None
     return db.exec(
@@ -116,6 +123,7 @@ def get_agent(db: Session, tenant_id: str, agent_id: str | None) -> AgentProfile
 
 
 def _agent_creator_metadata(agent: AgentProfile | None) -> dict[str, Any]:
+    """从 Agent 元数据中筛出有效的创作者署名字段。"""
     if not agent:
         return {}
     source = dict(agent.metadata_json or {})
@@ -133,16 +141,22 @@ def _agent_private_metadata_for(
     agent_id: str,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """以 Agent 的创作者署名为底，构造该 Agent 的私有资源元数据。"""
     agent_metadata = _agent_creator_metadata(get_agent(db, tenant_id, agent_id))
     return agent_private_metadata(agent_id, {**agent_metadata, **(extra or {})})
 
 
 def is_overall_agent(db: Session, tenant_id: str, agent_id: str | None) -> bool:
+    """判断指定 Agent 是否为当前租户的整体 Agent。"""
     agent = get_agent(db, tenant_id, agent_id)
     return bool(agent and agent.is_overall)
 
 
 def require_overall_agent(db: Session, tenant_id: str, agent_id: str | None) -> None:
+    """校验操作者具备整体 Agent 权限，否则抛 403。
+
+    agent_id 为空且租户尚无整体 Agent 时直接放行，兼容初始化场景。
+    """
     if not agent_id and not get_overall_agent(db, tenant_id):
         return
     if not is_overall_agent(db, tenant_id, agent_id):
@@ -154,6 +168,7 @@ def require_overall_agent(db: Session, tenant_id: str, agent_id: str | None) -> 
 
 
 def open_gallery_metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """构造开放广场口径的元数据，并清除私有归属与来源标记。"""
     metadata = dict(extra or {})
     metadata["scope"] = OPEN_GALLERY_SCOPE
     metadata["visibility"] = OPEN_GALLERY_SCOPE
@@ -164,6 +179,7 @@ def open_gallery_metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]
 
 
 def agent_private_metadata(agent_id: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """构造 Agent 私有口径的元数据，写入归属 Agent 与来源标记。"""
     metadata = dict(extra or {})
     metadata["scope"] = AGENT_PRIVATE_SCOPE
     metadata["visibility"] = AGENT_PRIVATE_SCOPE
@@ -175,6 +191,7 @@ def agent_private_metadata(agent_id: str, extra: dict[str, Any] | None = None) -
 def mark_resource_open_gallery(
     resource: object, metadata_json: dict[str, Any] | None = None
 ) -> None:
+    """就地把资源 metadata_json 改写为开放广场口径；对象无该字段则跳过。"""
     if not hasattr(resource, "metadata_json"):
         return
     metadata = open_gallery_metadata(
@@ -188,6 +205,7 @@ def mark_resource_private_for_agent(
     agent_id: str,
     metadata_json: dict[str, Any] | None = None,
 ) -> None:
+    """就地把资源 metadata_json 改写为指定 Agent 的私有口径。"""
     if not hasattr(resource, "metadata_json"):
         return
     metadata = agent_private_metadata(
@@ -205,6 +223,7 @@ def ensure_open_gallery_binding(
     metadata_json: dict[str, Any] | None = None,
     revive: bool = False,
 ) -> None:
+    """确保资源在整体 Agent 上存在开放广场绑定；租户无整体 Agent 时静默跳过。"""
     overall = get_overall_agent(db, tenant_id)
     if overall:
         _ensure_binding(
@@ -225,6 +244,7 @@ def hide_open_gallery_binding(
     resource_type: str,
     resource_id: str,
 ) -> bool:
+    """把开放广场绑定标记为 deleted 以隐藏资源；无整体 Agent 时返回 False。"""
     overall = get_overall_agent(db, tenant_id)
     if not overall:
         return False
@@ -250,6 +270,7 @@ def ensure_private_resource_binding(
     metadata_json: dict[str, Any] | None = None,
     revive: bool = False,
 ) -> None:
+    """确保资源以 Agent 私有元数据建立到指定 Agent 的绑定。"""
     _ensure_binding(
         db,
         tenant_id,
@@ -268,6 +289,10 @@ def resource_binding_metadata(
     agent_id: str | None,
     resource_type: str,
 ) -> dict[str, dict[str, Any]]:
+    """按 resource_id 汇总某类资源的绑定元数据，供列表接口回填署名信息。
+
+    未给出有效 Agent 时退回整体 Agent；两者都不存在时返回空字典。
+    """
     agent = get_agent(db, tenant_id, agent_id)
     if not agent:
         agent = get_overall_agent(db, tenant_id)
@@ -287,6 +312,10 @@ def resource_binding_metadata(
 def is_open_gallery_resource(
     db: Session, tenant_id: str, resource_type: str, resource: object
 ) -> bool:
+    """判断资源是否通过整体 Agent 的开放广场绑定对外可见。
+
+    资源须属于当前租户，且整体绑定既未删除也未标记为私有。
+    """
     resource_id = getattr(resource, "id", None)
     if not resource_id or getattr(resource, "tenant_id", None) != tenant_id:
         return False
@@ -313,6 +342,7 @@ def is_bound_resource_visible_for_agent(
     resource: object,
     binding: AgentResourceBinding,
 ) -> bool:
+    """判断绑定下的资源对该 Agent 是否可见：先校验状态与租户，再看是否私有或仍在开放广场。"""
     if binding.status == "deleted":
         return False
     if getattr(resource, "tenant_id", None) != tenant_id:
@@ -327,6 +357,10 @@ def project_skill_with_branch(
     branch: AgentSkillBranch | None,
     binding_status: str | None = None,
 ) -> Skill:
+    """用 Agent 分支内容投影一份 Skill 视图，不改动库内原始记录。
+
+    投影结果附带 agent_branch_meta，用于暴露分支版本与同步状态。
+    """
     if not branch:
         return skill
     content = dict(branch.content_json or {})
@@ -364,6 +398,10 @@ def visible_skill_rows(
     agent_id: str | None = None,
     include_inactive: bool = True,
 ) -> list[Skill]:
+    """列出当前 Agent 可见的 Skill 行，整体 Agent 走开放广场口径。
+
+    非整体 Agent 只遍历自身绑定并投影分支；include_inactive 为 False 时过滤停用项。
+    """
     agent = get_agent(db, tenant_id, agent_id)
     if not agent or agent.is_overall:
         status_clause = (
@@ -415,6 +453,7 @@ def visible_skill_rows(
 def visible_published_skills(
     db: Session, tenant_id: str, agent_id: str | None = None
 ) -> list[Skill]:
+    """在可见 Skill 中只保留已发布状态的项。"""
     return [
         skill
         for skill in visible_skill_rows(db, tenant_id, agent_id)
@@ -425,6 +464,10 @@ def visible_published_skills(
 def visible_skill(
     db: Session, tenant_id: str, skill_id: str, agent_id: str | None = None
 ) -> Skill | None:
+    """按 skill_id 取当前 Agent 可见的单个 Skill，不可见时返回 None。
+
+    非整体 Agent 还会校验 active 绑定与分支状态，并返回分支投影。
+    """
     skill = db.exec(
         select(Skill).where(Skill.tenant_id == tenant_id, Skill.skill_id == skill_id)
     ).first()
@@ -468,6 +511,10 @@ def visible_tool_rows(
     agent_id: str | None = None,
     include_inactive: bool = True,
 ) -> list[Tool]:
+    """列出当前 Agent 可见的工具，整体 Agent 仅返回开放广场工具。
+
+    include_inactive 为 False 时还要求工具及其 MCP server 处于启用状态。
+    """
     agent = get_agent(db, tenant_id, agent_id)
     if agent_id and not agent:
         return []
@@ -508,6 +555,7 @@ def visible_tool_rows(
 
 
 def _tool_runtime_enabled(db: Session, row: Tool) -> bool:
+    """判断工具运行时是否可用：自身启用，且所属 MCP server 同租户并启用。"""
     if not row.enabled:
         return False
     if not row.mcp_server_id:
@@ -525,7 +573,7 @@ def visible_general_skill_rows(
     tenant_id: str,
     agent_id: str | None = None,
 ) -> list[GeneralSkill]:
-    """Published general skills the caller's agent may actually use."""
+    """列出已发布且当前 Agent 实际可用的通用技能。"""
     agent = get_agent(db, tenant_id, agent_id)
     if agent_id and not agent:
         return []
@@ -565,6 +613,10 @@ def ensure_agent_skill_branch(
     skill: Skill,
     metadata_json: dict[str, Any] | None = None,
 ) -> AgentSkillBranch:
+    """取 Agent 的 Skill 分支，缺失时按整体版本初始化并落一条初始版本记录。
+
+    已存在的分支会补齐私有元数据；本函数只 flush，由调用方提交。
+    """
     branch = db.exec(
         select(AgentSkillBranch).where(
             AgentSkillBranch.tenant_id == tenant_id,
@@ -608,6 +660,10 @@ def update_branch_skill(
     content: dict[str, Any],
     change_summary: str = "分支改写",
 ) -> AgentSkillBranch:
+    """用新内容改写 Agent 分支并登记新版本，同步状态置为 diverged。
+
+    版本号经 next_unique_branch_version 去重，分支状态保持不变。
+    """
     branch = ensure_agent_skill_branch(db, tenant_id, agent_id, skill)
     previous_status = branch.status
     next_version = next_unique_branch_version(db, branch, str(content.get("version") or ""))
@@ -625,6 +681,10 @@ def update_branch_skill(
 def sync_branch_from_overall(
     db: Session, tenant_id: str, agent_id: str, skill: Skill
 ) -> AgentSkillBranch:
+    """把整体 Skill 的最新版本同步进 Agent 分支并登记一条同步版本记录。
+
+    仅允许已发布且在开放广场的 Skill，否则抛 400。
+    """
     if skill.status != "published" or not is_open_gallery_resource(db, tenant_id, "skill", skill):
         from fastapi import HTTPException
 
@@ -643,6 +703,10 @@ def sync_branch_from_overall(
 
 
 def promote_branch_to_overall(db: Session, tenant_id: str, branch: AgentSkillBranch) -> Skill:
+    """把 Agent 分支内容推送到整体 Skill，发布新版本并回写分支基线。
+
+    同时补一条 SkillVersion，并确保开放广场绑定存在。
+    """
     skill = db.exec(
         select(Skill).where(Skill.tenant_id == tenant_id, Skill.skill_id == branch.skill_id)
     ).first()
@@ -686,6 +750,10 @@ def promote_branch_to_overall(db: Session, tenant_id: str, branch: AgentSkillBra
 def rollback_branch(
     db: Session, tenant_id: str, agent_id: str, skill_id: str, version: str
 ) -> AgentSkillBranch:
+    """把 Agent 分支回滚到指定历史版本，并按基线版本重算同步状态。
+
+    分支或版本记录不存在时抛 404，且不会新增版本记录。
+    """
     branch = db.exec(
         select(AgentSkillBranch).where(
             AgentSkillBranch.tenant_id == tenant_id,
@@ -720,6 +788,7 @@ def rollback_branch(
 def branch_versions(
     db: Session, tenant_id: str, agent_id: str, skill_id: str
 ) -> list[AgentSkillBranchVersion]:
+    """按创建时间倒序列出该 Agent 某个 Skill 的分支历史版本。"""
     return list(
         db.exec(
             select(AgentSkillBranchVersion)
@@ -739,6 +808,7 @@ def visible_knowledge_base_ids(
     agent_id: str | None = None,
     include_inactive: bool = False,
 ) -> list[str]:
+    """取当前 Agent 可见知识库的 id 列表。"""
     return list(visible_knowledge_base_versions(db, tenant_id, agent_id, include_inactive).keys())
 
 
@@ -748,6 +818,10 @@ def visible_knowledge_base_versions(
     agent_id: str | None = None,
     include_inactive: bool = False,
 ) -> dict[str, KnowledgeBaseVersion]:
+    """取当前 Agent 可见知识库对应的版本记录，键为知识库 id。
+
+    整体 Agent 走开放广场口径；非整体 Agent 需知识分支与绑定均可见。
+    """
     agent = get_agent(db, tenant_id, agent_id)
     if not agent or agent.is_overall:
         status_clause = (
@@ -811,6 +885,7 @@ def visible_knowledge_base_version_ids(
     agent_id: str | None = None,
     include_inactive: bool = False,
 ) -> list[str]:
+    """取可见知识库版本记录的 id 列表。"""
     return [
         row.id
         for row in visible_knowledge_base_versions(
@@ -822,6 +897,10 @@ def visible_knowledge_base_version_ids(
 def ensure_knowledge_base_version(
     db: Session, kb: KnowledgeBase, version: str | None = None
 ) -> KnowledgeBaseVersion:
+    """取知识库指定版本的记录，缺失时按知识库当前字段补建并 flush。
+
+    version 为空时使用知识库元数据里的 current_version。
+    """
     normalized_version = version or _current_knowledge_version(kb)
     row = db.exec(
         select(KnowledgeBaseVersion).where(
@@ -855,6 +934,10 @@ def _apply_knowledge_version_metadata(
     version: KnowledgeBaseVersion,
     metadata_json: dict[str, Any] | None,
 ) -> None:
+    """把上传携带的元数据合并进知识库版本记录并刷新时间戳。
+
+    metadata_json 为空时直接返回；非整体 Agent 走私有口径，其余走开放广场口径。
+    """
     if not metadata_json:
         return
     merged = {**(version.metadata_json or {}), **metadata_json}
@@ -873,6 +956,10 @@ def knowledge_version_for_upload(
     agent_id: str | None,
     metadata_json: dict[str, Any] | None = None,
 ) -> KnowledgeBaseVersion:
+    """为一次知识库上传定位目标版本，必要时新建分支版本并克隆资产。
+
+    非整体 Agent 会推进分支 head_version 并置为 diverged；知识库不可用时抛 404。
+    """
     kb = db.get(KnowledgeBase, knowledge_base_id)
     if not kb or kb.tenant_id != tenant_id or kb.status == "archived":
         from fastapi import HTTPException
@@ -907,6 +994,10 @@ def ensure_agent_private_knowledge_branch(
     knowledge_base: KnowledgeBase,
     metadata_json: dict[str, Any] | None = None,
 ) -> AgentKnowledgeBranch:
+    """把知识库标记为 Agent 私有，并把其知识分支重置到当前版本。
+
+    会同步写入私有绑定、版本元数据与分支状态，事务由调用方提交。
+    """
     mark_resource_private_for_agent(knowledge_base, agent_id, metadata_json)
     ensure_private_resource_binding(
         db,
@@ -937,6 +1028,10 @@ def sync_knowledge_branch_from_overall(
     agent_id: str,
     knowledge_base_id: str,
 ) -> AgentKnowledgeBranch:
+    """把整体知识库的当前版本同步进 Agent 知识分支。
+
+    知识库已停用或不在开放广场时抛 400。
+    """
     kb = _get_knowledge_base(db, tenant_id, knowledge_base_id)
     if kb.status != "active" or not is_open_gallery_resource(db, tenant_id, "knowledge_base", kb):
         from fastapi import HTTPException
@@ -962,6 +1057,10 @@ def promote_knowledge_branch_to_overall(
     agent_id: str,
     knowledge_base_id: str,
 ) -> KnowledgeBaseVersion:
+    """把 Agent 知识分支内容推送到整体知识库，发布新版本并同步分支基线。
+
+    文档、桶、分块与概念等资产会重挂到新版本，并刷新开放广场绑定。
+    """
     kb = _get_knowledge_base(db, tenant_id, knowledge_base_id)
     branch = db.exec(
         select(AgentKnowledgeBranch).where(
@@ -1006,6 +1105,7 @@ def rollback_knowledge_branch(
     knowledge_base_id: str,
     version: str,
 ) -> AgentKnowledgeBranch:
+    """把 Agent 知识分支回滚到指定版本，并按基线版本重算同步状态。"""
     kb = _get_knowledge_base(db, tenant_id, knowledge_base_id)
     target = ensure_knowledge_base_version(db, kb, version)
     branch = _ensure_knowledge_branch(db, tenant_id, agent_id, kb)
@@ -1019,10 +1119,9 @@ def rollback_knowledge_branch(
 def model_for_agent(
     db: Session, tenant_id: str, agent_id: str | None, role: str = "default"
 ) -> ResolvedModelConfig | None:
-    """Resolve every employee task through the tenant's enabled default model.
+    """把员工的每次任务统一解析到租户启用的默认模型。
 
-    ``agent_id`` and ``role`` remain in the signature for call-site compatibility. Employee-level
-    model bindings are intentionally no longer part of runtime model selection.
+    agent_id 与 role 仅为兼容既有调用方保留，不再参与运行时模型选择。
     """
     _ = agent_id, role
     model = db.exec(
@@ -1038,10 +1137,15 @@ def model_for_agent(
 def _runtime_model(
     db: Session, tenant_id: str, model: ModelConfig
 ) -> ResolvedModelConfig:
+    """把模型配置解析为运行时使用的 ResolvedModelConfig。"""
     return resolve_model_config_for_runtime(db, tenant_id, model.id)
 
 
 def copy_overall_scope_to_agent(db: Session, tenant_id: str, agent: AgentProfile) -> None:
+    """把开放广场的 Skill 与通用技能复制为指定 Agent 的私有绑定。
+
+    每个被复制的 Skill 都会同时初始化一条 Agent 分支。
+    """
     skills = db.exec(
         select(Skill).where(Skill.tenant_id == tenant_id, Skill.status == "published")
     ).all()
@@ -1078,6 +1182,7 @@ def copy_overall_scope_to_agent(db: Session, tenant_id: str, agent: AgentProfile
 
 
 def copy_open_gallery_tools_to_agent(db: Session, tenant_id: str, agent: AgentProfile) -> None:
+    """把开放广场工具复制为指定 Agent 的绑定，绑定状态跟随工具启用状态。"""
     tools = db.exec(select(Tool).where(Tool.tenant_id == tenant_id)).all()
     for tool in tools:
         if not is_open_gallery_resource(db, tenant_id, "tool", tool):
@@ -1094,6 +1199,10 @@ def copy_open_gallery_tools_to_agent(db: Session, tenant_id: str, agent: AgentPr
 
 
 def next_branch_version(version: str, requested_version: str | None = None) -> str:
+    """计算下一个分支版本号：优先采用合法的显式版本，否则在基线上递增。
+
+    显式版本与当前版本相同或不是语义化版本时忽略。
+    """
     requested = (requested_version or "").strip()
     if _is_semver(requested) and requested != version:
         return requested
@@ -1104,6 +1213,10 @@ def next_branch_version(version: str, requested_version: str | None = None) -> s
 def next_unique_branch_version(
     db: Session, branch: AgentSkillBranch, requested_version: str | None = None
 ) -> str:
+    """返回分支历史中尚未占用的版本号，冲突时在基线上继续递增。
+
+    候选版本先由 next_branch_version 依请求版本或当前 head 推导。
+    """
     candidate = next_branch_version(branch.head_version, requested_version)
     while db.exec(
         select(AgentSkillBranchVersion).where(
@@ -1118,6 +1231,7 @@ def next_unique_branch_version(
 
 
 def next_global_version(version: str) -> str:
+    """按语义化版本规则升级：三段纯数字时进位为 x.(y+1).0，否则追加 .1。"""
     parts = version.split(".")
     if len(parts) >= 3 and all(part.isdigit() for part in parts[:3]):
         return f"{parts[0]}.{int(parts[1]) + 1}.0"
@@ -1125,11 +1239,16 @@ def next_global_version(version: str) -> str:
 
 
 def _is_semver(version: str) -> bool:
+    """判断版本号是否为三段纯数字的语义化版本。"""
     parts = version.split(".")
     return len(parts) == 3 and all(part.isdigit() for part in parts)
 
 
 def _ensure_branch_version(db: Session, branch: AgentSkillBranch, change_summary: str) -> None:
+    """为分支当前 head 补登一条分支版本记录，已存在则跳过。
+
+    只写新增记录，不提交事务。
+    """
     existing = db.exec(
         select(AgentSkillBranchVersion).where(
             AgentSkillBranchVersion.tenant_id == branch.tenant_id,
@@ -1157,15 +1276,18 @@ def _ensure_branch_version(db: Session, branch: AgentSkillBranch, change_summary
 
 
 def _binding_status_from_resource_status(status: str | None) -> str:
+    """把资源状态映射为绑定状态：active/published 视为 active，其余为 inactive。"""
     return "active" if status in {"active", "published"} else "inactive"
 
 
 def _resource_metadata(resource: object) -> dict[str, Any]:
+    """安全读取资源的 metadata_json，缺失或非字典时返回空字典。"""
     metadata = getattr(resource, "metadata_json", None)
     return dict(metadata) if isinstance(metadata, dict) else {}
 
 
 def _metadata_is_private(metadata: dict[str, Any]) -> bool:
+    """判断元数据是否带有 Agent 私有口径标记。"""
     return (
         metadata.get("scope") == AGENT_PRIVATE_SCOPE
         or metadata.get("visibility") == AGENT_PRIVATE_SCOPE
@@ -1175,6 +1297,7 @@ def _metadata_is_private(metadata: dict[str, Any]) -> bool:
 
 
 def _binding_is_private(binding: AgentResourceBinding) -> bool:
+    """判断绑定是否携带私有元数据。"""
     metadata = dict(binding.metadata_json or {})
     return _metadata_is_private(metadata)
 
@@ -1189,6 +1312,10 @@ def _ensure_binding(
     metadata_json: dict[str, Any] | None = None,
     revive: bool = False,
 ) -> None:
+    """建立或更新一条 Agent 资源绑定，按需保留已删除状态与原创作者字段。
+
+    revive 为 False 时不会把 deleted 绑定改回可用状态，只补空元数据。
+    """
     existing = db.exec(
         select(AgentResourceBinding).where(
             AgentResourceBinding.tenant_id == tenant_id,
@@ -1232,6 +1359,7 @@ def _ensure_binding(
 def _ensure_knowledge_branch(
     db: Session, tenant_id: str, agent_id: str, kb: KnowledgeBase
 ) -> AgentKnowledgeBranch:
+    """取 Agent 的知识分支，缺失时以 1.0.0 为基线补建并加入会话。"""
     branch = db.exec(
         select(AgentKnowledgeBranch).where(
             AgentKnowledgeBranch.tenant_id == tenant_id,
@@ -1255,6 +1383,7 @@ def _ensure_knowledge_branch(
 
 
 def _get_knowledge_base(db: Session, tenant_id: str, knowledge_base_id: str) -> KnowledgeBase:
+    """取当前租户下未归档的知识库，不存在时抛 404。"""
     kb = db.get(KnowledgeBase, knowledge_base_id)
     if not kb or kb.tenant_id != tenant_id or kb.status == "archived":
         from fastapi import HTTPException
@@ -1264,12 +1393,14 @@ def _get_knowledge_base(db: Session, tenant_id: str, knowledge_base_id: str) -> 
 
 
 def _current_knowledge_version(kb: KnowledgeBase) -> str:
+    """读取知识库元数据中的 current_version，缺失时回退到 1.0.0。"""
     metadata = kb.metadata_json or {}
     version = metadata.get("current_version") if isinstance(metadata, dict) else None
     return str(version or "1.0.0")
 
 
 def _next_knowledge_branch_version(branch: AgentKnowledgeBranch) -> str:
+    """在 Agent 知识分支上递增出下一个分支版本号。"""
     prefix = (
         f"{_knowledge_branch_root_version(branch)}-branch."
         f"{_safe_version_id(branch.agent_id)}."
@@ -1282,6 +1413,7 @@ def _next_knowledge_branch_version(branch: AgentKnowledgeBranch) -> str:
 
 
 def _knowledge_branch_root_version(branch: AgentKnowledgeBranch) -> str:
+    """剥离分支标记后取知识分支的根版本，结果为空时回退到 1.0.0。"""
     marker = f"-branch.{_safe_version_id(branch.agent_id)}."
     base_version = branch.base_version.split(marker, 1)[0].strip()
     return base_version or "1.0.0"
@@ -1294,6 +1426,7 @@ def _retag_knowledge_version(
     source_version_id: str,
     target_version_id: str,
 ) -> None:
+    """把文档、桶、分块、概念与发现建议从源版本改挂到目标版本。"""
     tables = (
         KnowledgeDocument,
         KnowledgeBucket,
@@ -1322,6 +1455,10 @@ def clone_knowledge_version_assets(
     source_version_id: str,
     target_version_id: str,
 ) -> None:
+    """把源知识库版本的资产克隆到目标版本，供分支改写与发布复用。
+
+    目标版本已有文档时改为按文件名匹配复用；已存在的概念只改挂文档与来源引用。
+    """
     if source_version_id == target_version_id:
         return
 
@@ -1538,6 +1675,7 @@ def clone_knowledge_version_assets(
 def _remap_source_refs(
     source_refs: list[dict[str, Any]], document_id_map: dict[str, str]
 ) -> list[dict[str, Any]]:
+    """复制来源引用，并按旧到新的文档 id 映射改写其中的 document_id。"""
     rows: list[dict[str, Any]] = []
     for source_ref in source_refs:
         if not isinstance(source_ref, dict):
@@ -1551,4 +1689,5 @@ def _remap_source_refs(
 
 
 def _safe_version_id(value: str) -> str:
+    """把任意字符串转成只含字母、数字与下划线的版本 id 片段。"""
     return "".join(ch if ch.isalnum() else "_" for ch in value)

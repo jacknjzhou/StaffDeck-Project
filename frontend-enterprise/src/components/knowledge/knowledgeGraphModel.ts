@@ -43,6 +43,12 @@ export type BuildKnowledgeGraphOptions = {
 const EXTERNAL_SCHEME = /^[a-z][a-z\d+.-]*:/i;
 const DEFAULT_PREVIEW_CHARACTER_LIMIT = 1_200;
 
+/**
+ * 由知识概念列表构建图模型：过滤概念、解析内部链接、收集外部 / 未解析链接并统计度数。
+ *
+ * 默认跳过 archived 概念，可用 includeArchived 保留；conceptIds 用于只保留指定概念；
+ * 非字符串 target、自环与重复边会被忽略；返回节点、边、id 索引与四项统计数。
+ */
 export function buildKnowledgeGraph(
   concepts: KnowledgeConceptRead[],
   options: BuildKnowledgeGraphOptions = {},
@@ -122,6 +128,7 @@ export function buildKnowledgeGraph(
   };
 }
 
+/** 判断概念是否命中搜索词：空关键词恒为真，否则在标题、概念 id 与 frontmatter 标签中做不区分大小写的子串匹配。 */
 export function knowledgeConceptMatches(concept: KnowledgeConceptRead, rawQuery: string): boolean {
   const query = rawQuery.trim().toLocaleLowerCase();
   if (!query) return true;
@@ -131,6 +138,11 @@ export function knowledgeConceptMatches(concept: KnowledgeConceptRead, rawQuery:
     .some((value) => String(value).toLocaleLowerCase().includes(query));
 }
 
+/**
+ * 生成概念预览用的 Markdown：优先取 description，缺失时退回首段正文。
+ *
+ * 会剥离 OKF frontmatter、去掉与标题重复的首个标题，并在块边界截断到字符上限。
+ */
 export function knowledgeConceptPreviewMarkdown(
   concept: KnowledgeConceptRead,
   characterLimit = DEFAULT_PREVIEW_CHARACTER_LIMIT,
@@ -141,12 +153,19 @@ export function knowledgeConceptPreviewMarkdown(
   return truncateMarkdownAtBlockBoundary(withoutDuplicateTitle, characterLimit);
 }
 
+/** 返回度数最高的非归档节点；度数相同时按 id 字典序取首个，无可用节点时返回 undefined。 */
 export function highestDegreeActiveNode(model: KnowledgeGraphModel): KnowledgeGraphNode | undefined {
   return [...model.nodes]
     .filter((node) => node.concept.status !== 'archived')
     .sort((left, right) => right.degree - left.degree || left.id.localeCompare(right.id))[0];
 }
 
+/**
+ * 解析链接目标：带协议、以 // 开头或为空的 target 视为外部链接，其余按内部概念路径解析。
+ *
+ * 内部链接会去掉锚点、查询串与 .md 后缀，并按源概念所在目录处理相对路径与 ..；
+ * 仅含锚点或查询串时指向源概念自身，非法百分号编码保留原文以便报告为未解析。
+ */
 export function resolveKnowledgeLink(
   sourceConceptId: string,
   rawTarget: string,
@@ -179,12 +198,18 @@ export function resolveKnowledgeLink(
   return { kind: 'internal', conceptId: parts.join('/') };
 }
 
+/** 去掉正文开头的 OKF YAML frontmatter（由 --- 包围的块）并修剪首尾空白。 */
 function stripOkfFrontmatter(markdown: string): string {
   return markdown
     .replace(/^\uFEFF?---[ \t]*\n[\s\S]*?\n---[ \t]*(?:\n|$)/, '')
     .trim();
 }
 
+/**
+ * 归一化预览 Markdown：统一换行、把紧跟在行内的标题 / 列表标记拆到新行，并修复被压平的表格。
+ *
+ * 用于容忍知识库中按段落存储导致的标记粘连；返回修剪首尾空白后的结果。
+ */
 function normalizePreviewMarkdown(markdown: string): string {
   const normalized = markdown
     .replace(/\r\n/g, '\n')
@@ -195,6 +220,11 @@ function normalizePreviewMarkdown(markdown: string): string {
   return repairFlattenedTables(normalized);
 }
 
+/**
+ * 修复被压平成一行的 Markdown 表格：定位分隔行后回溯表头，再按列数重新切分数据行。
+ *
+ * 无法可靠判断表格边界时跳过该处继续向后扫描；返回重建后的全文。
+ */
 function repairFlattenedTables(markdown: string): string {
   let result = markdown;
   const separatorPattern = /\|\s*:?-{1,}:?\s*(?:\|\s*:?-{1,}:?\s*)+\|/;
@@ -243,14 +273,21 @@ function repairFlattenedTables(markdown: string): string {
   return result.trim();
 }
 
+/** 按 | 切分表格行并丢弃空单元格，用于还原表头与数据行的列内容。 */
 function tableCells(value: string): string[] {
   return value.split('|').map((cell) => cell.trim()).filter(Boolean);
 }
 
+/** 把单元格数组还原为 `| a | b |` 形式的 Markdown 表格行。 */
 function markdownTableRow(cells: string[]): string {
   return `| ${cells.join(' | ')} |`;
 }
 
+/**
+ * 取首个非空行起始的内容段：若以标题开头，则截取到同级或更高级的下一个标题之前。
+ *
+ * 无标题时截取到下一个标题前；全文为空时返回空串。
+ */
 function firstMeaningfulMarkdownSection(markdown: string): string {
   const lines = normalizePreviewMarkdown(markdown).split('\n');
   const firstLineIndex = lines.findIndex((line) => line.trim());
@@ -276,6 +313,11 @@ function firstMeaningfulMarkdownSection(markdown: string): string {
   return lines.slice(firstLineIndex, endIndex).join('\n').trim();
 }
 
+/**
+ * 去掉正文开头与概念标题重复的标题行；标题后带额外文字时只保留额外的文字。
+ *
+ * 比较标题时会忽略反引号等强调符号、多余空白与大小写；无标题或无标题文本时原样返回。
+ */
 function removeDuplicateLeadingHeading(markdown: string, title: string): string {
   const normalized = normalizePreviewMarkdown(markdown);
   const lines = normalized.split('\n');
@@ -299,6 +341,7 @@ function removeDuplicateLeadingHeading(markdown: string, title: string): string 
   return normalized;
 }
 
+/** 归一化标题文本：去掉强调符号、压缩空白并转小写，用于重复标题判断。 */
 function normalizeHeadingText(value: string): string {
   return value
     .replace(/[`*_~]/g, '')
@@ -307,6 +350,11 @@ function normalizeHeadingText(value: string): string {
     .toLocaleLowerCase();
 }
 
+/**
+ * 按块（段落 / 围栏代码块）边界把 Markdown 截断到字符上限，避免切断行内标记。
+ *
+ * 超限时保留首个块，之后整块纳入直到越界；未超限或上限非正时原样返回。
+ */
 function truncateMarkdownAtBlockBoundary(markdown: string, characterLimit: number): string {
   const normalized = normalizePreviewMarkdown(markdown);
   if (!normalized || normalized.length <= characterLimit || characterLimit <= 0) return normalized;
@@ -323,11 +371,13 @@ function truncateMarkdownAtBlockBoundary(markdown: string, characterLimit: numbe
   return included.join('\n\n').trim();
 }
 
+/** 按空行切分 Markdown 块，围栏代码块内部的空行不参与切分。 */
 function markdownBlocks(markdown: string): string[] {
   const lines = markdown.split('\n');
   const blocks: string[] = [];
   let current: string[] = [];
   let inFence = false;
+  /** 把当前累积的行作为一个块写入结果并重置缓冲，空块被丢弃。 */
   const flush = () => {
     const block = current.join('\n').trim();
     if (block) blocks.push(block);
@@ -346,10 +396,12 @@ function markdownBlocks(markdown: string): string[] {
   return blocks;
 }
 
+/** 生成「标签 + 目标」去重键，用空字符分隔以避免不同字段拼接后互相冲突。 */
 function relationKey(label: unknown, target: unknown): string {
   return `${stringField(label)}\u0000${stringField(target)}`;
 }
 
+/** 安全读取字符串字段：非字符串一律返回空串，字符串则修剪首尾空白。 */
 function stringField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }

@@ -27,6 +27,7 @@ LOCAL_SESSION = "local-session-d5-e2e"
 
 
 def _client() -> tuple[TestClient, dict[str, str], object]:
+    """建内存库、灌种子数据并签发 API 凭证，返回客户端、鉴权头与引擎。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -39,6 +40,7 @@ def _client() -> tuple[TestClient, dict[str, str], object]:
     app = create_public_api_app()
 
     def override():
+        """为每个请求新建会话，避免跨请求复用同一个数据库连接。"""
         with Session(engine) as db:
             yield db
 
@@ -93,6 +95,7 @@ def _events() -> list[dict]:
 
 
 def main() -> None:
+    """按客户端真实顺序跑完整回流链路，逐步打印响应并断言每步结果。"""
     client, auth, engine = _client()
 
     print("\n== 1. 建远端会话（客户端第一步，按 external_session_id 幂等）==")

@@ -16,6 +16,7 @@ from app.harness import (
 
 
 def test_file_tool_registry_exposes_exact_model_tool_names() -> None:
+    """验证内置文件工具注册表暴露的工具名与顺序精确固定,且 schema 均为 object 类型。"""
     registry = build_file_tool_registry()
 
     assert registry.names() == (
@@ -40,7 +41,9 @@ def test_file_tool_registry_exposes_exact_model_tool_names() -> None:
 
 
 def test_registry_rejects_duplicate_and_invalid_names() -> None:
+    """验证注册表对重复工具名与含路径片段的非法工具名都抛出 ValueError。"""
     class Arguments(BaseModel):
+        """无参数模型,用于让注册校验聚焦在工具名而非参数定义上。"""
         model_config = ConfigDict(extra="forbid")
 
     registry = HarnessRegistry()
@@ -70,6 +73,7 @@ def test_registry_rejects_duplicate_and_invalid_names() -> None:
 def test_executor_returns_structured_validation_and_missing_tool_errors(
     tmp_path: Path,
 ) -> None:
+    """验证执行器把参数校验失败与工具缺失分别映射为结构化错误码与错误详情。"""
     executor = HarnessExecutor(build_file_tool_registry())
     context = _context(tmp_path)
 
@@ -96,7 +100,9 @@ def test_executor_returns_structured_validation_and_missing_tool_errors(
 
 
 def test_executor_enforces_json_result_size(tmp_path: Path) -> None:
+    """验证工具返回值超过 max_result_bytes 时被拒绝并返回 RESULT_TOO_LARGE。"""
     class Arguments(BaseModel):
+        """无参工具的参数模型,便于构造只受结果大小限制的调用。"""
         model_config = ConfigDict(extra="forbid")
 
     registry = HarnessRegistry()
@@ -131,11 +137,13 @@ def test_executor_enforces_json_result_size(tmp_path: Path) -> None:
 
 
 def test_context_requires_an_absolute_workspace() -> None:
+    """验证构造工具上下文时传入相对工作区路径会被拒绝。"""
     with pytest.raises(ValueError, match="workspace_root must be absolute"):
         HarnessToolContext(run_id="run", workspace_root=Path("relative"))
 
 
 def _context(tmp_path: Path) -> HarnessToolContext:
+    """基于临时目录构造已解析的绝对工作区上下文,供工具执行用例使用。"""
     return HarnessToolContext(
         run_id="run",
         task_frame_id="frame",

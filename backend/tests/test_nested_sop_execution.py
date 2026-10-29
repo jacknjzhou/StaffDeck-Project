@@ -15,6 +15,7 @@ from app.tools.tool_schema import ToolCall, ToolResult
 
 @pytest.fixture
 def setup_nested(monkeypatch, tmp_path):
+    """提供内嵌子 SOP 的父技能、子技能与真实工具,并指向临时数据目录。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     engine = create_engine("sqlite://", poolclass=StaticPool)
     SQLModel.metadata.create_all(engine)
@@ -77,6 +78,7 @@ def setup_nested(monkeypatch, tmp_path):
 
 
 def make_invoker(db, skill, step="nested::child::lookup"):
+    """按技能与步骤构建能力清单,再包装成 harness 能力调用器。"""
     manifest = CapabilityManifestBuilder(db).build("tenant", "agent", skill, step)
     return HarnessCapabilityInvoker(
         db,
@@ -96,6 +98,10 @@ def make_invoker(db, skill, step="nested::child::lookup"):
 @pytest.mark.parametrize("grant", ["parent", "child"])
 @pytest.mark.parametrize("protocol", ["http", "mcp", "a2a", "detached"])
 def test_nested_grant_reaches_real_executor_dispatch(setup_nested, monkeypatch, grant, protocol):
+    """验证父级或子级授权都能让嵌套步骤真正走执行器分发。
+
+    http、mcp、a2a 与 detached 四种协议都必须观察到实际分发。
+    """
     db, tool, skill = setup_nested
     tool.allowed_skills_json = [grant]
     tool.tool_type = "http" if protocol == "detached" else protocol
@@ -106,6 +112,7 @@ def test_nested_grant_reaches_real_executor_dispatch(setup_nested, monkeypatch, 
     dispatched = []
 
     def fake_dispatch(self, row, arguments, **kwargs):
+        """替身分发,记录被调用的工具行并返回成功结果。"""
         dispatched.append(row.id)
         return ToolResult(tool_name=row.name, success=True, data={"ok": True})
 
@@ -114,6 +121,7 @@ def test_nested_grant_reaches_real_executor_dispatch(setup_nested, monkeypatch, 
     elif protocol == "http":
 
         def send(_self, method, url, **kwargs):
+            """拦下 HTTP 请求,记录工具 id 并返回 200 成功响应。"""
             dispatched.append(tool.id)
             return httpx.Response(200, json={"ok": True}, request=httpx.Request(method, url))
 
@@ -129,6 +137,7 @@ def test_nested_grant_reaches_real_executor_dispatch(setup_nested, monkeypatch, 
 
 
 def test_child_grant_does_not_leak_to_parent_sibling_node(setup_nested):
+    """验证子流程授权不会外溢到父技能的同级节点,清单与执行器都拒绝。"""
     db, tool, skill = setup_nested
     # Even a parent grant cannot bypass the node-specific capability_refs.
     tool.allowed_skills_json = ["parent"]
@@ -147,6 +156,7 @@ def test_child_grant_does_not_leak_to_parent_sibling_node(setup_nested):
 
 
 def test_unrelated_grant_and_untrusted_arguments_cannot_authorize(setup_nested):
+    """验证无关授权与调用参数里的授权声明都无法通过校验。"""
     db, tool, skill = setup_nested
     tool.allowed_skills_json = ["unrelated"]
     db.add(tool)
@@ -163,12 +173,14 @@ def test_unrelated_grant_and_untrusted_arguments_cannot_authorize(setup_nested):
 
 
 def test_direct_executor_preserves_parent_only_check_without_context(setup_nested):
+    """验证缺少 SOP 授权上下文时,执行器只按父技能保守校验并拒绝。"""
     db, tool, _ = setup_nested
     result = ToolExecutor(db).execute("tenant", ToolCall(name=tool.name), active_skill_id="parent")
     assert result.error.code == "NOT_ALLOWED"
 
 
 def test_context_cannot_be_reused_for_other_parent_or_tenant(setup_nested):
+    """验证授权上下文不能换用到其他父技能或租户,跨租户直接抛错。"""
     db, tool, skill = setup_nested
     context = current_sop_tool_authorization("tenant", skill, "nested::child::lookup")
     result = ToolExecutor(db).execute(
@@ -180,6 +192,7 @@ def test_context_cannot_be_reused_for_other_parent_or_tenant(setup_nested):
 
 
 def test_live_revocation_is_checked_before_nested_dispatch(setup_nested):
+    """验证嵌套分发前会实时复检授权,撤销后返回 CAPABILITY_AUTHORIZATION_REVOKED。"""
     db, tool, skill = setup_nested
     invoker = make_invoker(db, skill)
     tool.allowed_skills_json = ["unrelated"]
@@ -192,6 +205,7 @@ def test_live_revocation_is_checked_before_nested_dispatch(setup_nested):
 
 @pytest.mark.parametrize("grant", ["parent", "child", "leaf"])
 def test_deep_nested_grants_reach_executor(setup_nested, monkeypatch, grant):
+    """验证三层嵌套展开后,任一层授权都能让叶子能力通过执行器调用。"""
     db, tool, _ = setup_nested
     leaf = Skill(
         tenant_id="tenant",

@@ -29,6 +29,7 @@ from app.security.auth import create_access_token
 
 
 def _test_engine():
+    """创建内存 SQLite 引擎并建好全部表，供各测试用例相互隔离地使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -39,10 +40,12 @@ def _test_engine():
 
 
 def _make_client(engine):
+    """搭建挂载渠道路由的测试客户端，并用内存会话覆盖 get_session 依赖。"""
     app = FastAPI()
     app.include_router(channels_api.router)
 
     def override_get_session():
+        """为每个请求提供独立的内存数据库会话，替换应用真实会话依赖。"""
         with Session(engine) as session:
             yield session
 
@@ -51,6 +54,7 @@ def _make_client(engine):
 
 
 def _seed_users(engine) -> dict[str, User]:
+    """写入演示租户、三个用户与一个员工档案，返回用户供鉴权与归属断言使用。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         owner = User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x")
@@ -72,6 +76,7 @@ def _seed_users(engine) -> dict[str, User]:
 
 
 def _auth(user: User) -> dict[str, str]:
+    """按用户签发访问令牌，拼成 Bearer 请求头。"""
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
@@ -82,6 +87,7 @@ def _seed_binding(
     status: str = "pending",
     channel: str = "wechat",
 ) -> str:
+    """插入一条指定员工、状态与渠道的绑定，返回其主键。"""
     with Session(engine) as db:
         binding = ChannelBinding(
             tenant_id="tenant_demo",
@@ -96,6 +102,7 @@ def _seed_binding(
 
 
 def test_endpoints_require_authentication() -> None:
+    """验证未携带令牌访问渠道接口时统一返回 401。"""
     engine = _test_engine()
     client = _make_client(engine)
     response = client.get("/api/enterprise/channels?tenant_id=tenant_demo")
@@ -103,6 +110,7 @@ def test_endpoints_require_authentication() -> None:
 
 
 def test_wechat_kf_credentials_bind_account_to_selected_agent(monkeypatch) -> None:
+    """验证微信客服凭据接口把账号绑定到所选员工、激活绑定并加密保存凭据。"""
     engine = _test_engine()
     users = _seed_users(engine)
     with Session(engine) as db:
@@ -152,6 +160,7 @@ def test_wechat_kf_credentials_bind_account_to_selected_agent(monkeypatch) -> No
 
 
 def test_wechat_kf_callback_config_can_be_created_before_secret() -> None:
+    """验证微信客服可先建回调配置：返回 32 位令牌与 43 位密钥，绑定仍为 pending。"""
     engine = _test_engine()
     users = _seed_users(engine)
     with Session(engine) as db:
@@ -189,6 +198,7 @@ def test_wechat_kf_callback_config_can_be_created_before_secret() -> None:
 
 
 def test_wechat_kf_credentials_reuse_prepared_callback_secrets(monkeypatch) -> None:
+    """验证提交凭据时复用此前生成的回调令牌与密钥，仅更新 secret。"""
     engine = _test_engine()
     users = _seed_users(engine)
     aes_key = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
@@ -241,6 +251,7 @@ def test_wechat_kf_credentials_reuse_prepared_callback_secrets(monkeypatch) -> N
 
 
 def test_non_creator_cannot_create_binding() -> None:
+    """验证非创建者创建绑定返回 403，创建者与管理员均可建出 pending 绑定。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)
@@ -270,6 +281,7 @@ def test_non_creator_cannot_create_binding() -> None:
 
 
 def test_unsupported_channel_rejected() -> None:
+    """验证不支持的渠道（如 slack）创建绑定时返回 400。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)
@@ -283,6 +295,7 @@ def test_unsupported_channel_rejected() -> None:
 
 
 def test_create_binding_generates_default_name() -> None:
+    """验证未指定名称时按「渠道名 + 12 位时间戳」生成默认名称。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)
@@ -298,6 +311,7 @@ def test_create_binding_generates_default_name() -> None:
 
 
 def test_create_binding_with_custom_name() -> None:
+    """验证自定义名称去除首尾空白后返回并落库。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)
@@ -321,6 +335,7 @@ def test_create_binding_with_custom_name() -> None:
 
 
 def test_create_binding_blank_name_falls_back_to_default() -> None:
+    """验证仅含空白字符的名称回退为默认名称。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)
@@ -335,6 +350,7 @@ def test_create_binding_blank_name_falls_back_to_default() -> None:
 
 
 def test_create_binding_rejects_long_name() -> None:
+    """验证接入名称超过 50 字时返回 400 并提示「接入名称」。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)
@@ -349,6 +365,7 @@ def test_create_binding_rejects_long_name() -> None:
 
 
 def test_tenant_mismatch_forbidden() -> None:
+    """验证查询其他租户的绑定列表返回 403。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)
@@ -361,6 +378,7 @@ def test_tenant_mismatch_forbidden() -> None:
 
 
 def test_binding_read_never_leaks_credentials() -> None:
+    """验证绑定列表不泄露凭据：响应既无密文也无明文令牌，仅暴露安全配置字段。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine, status="active")
@@ -385,6 +403,7 @@ def test_binding_read_never_leaks_credentials() -> None:
 
 
 class _FakeWeChatClient:
+    """微信客户端替身：记录调用参数并返回预设状态，避免测试发起真实网络请求。"""
     _DEFAULT_STATUS_RESPONSE: dict = {
         "status": "confirmed",
         "bot_token": "ilinkbot_secret_token",
@@ -396,6 +415,7 @@ class _FakeWeChatClient:
     qrcode_status_response: dict = dict(_DEFAULT_STATUS_RESPONSE)
 
     def __init__(self, base_url: str):
+        """保存基地址、初始化调用记录，并把实例登记到 instances 便于断言。"""
         self.base_url = base_url
         self.qrcode_calls: list[dict] = []
         self.status_calls: list[dict] = []
@@ -403,21 +423,25 @@ class _FakeWeChatClient:
 
     @classmethod
     def reset(cls, status_response: dict | None = None) -> None:
+        """清空实例列表并重置二维码状态响应，让每个用例从干净状态开始。"""
         cls.instances = []
         cls.qrcode_status_response = (
             status_response if status_response is not None else dict(cls._DEFAULT_STATUS_RESPONSE)
         )
 
     def get_bot_qrcode(self, local_token_list: list[str] | None = None) -> dict:
+        """记录传入的本地令牌列表，返回固定二维码与图片地址。"""
         self.qrcode_calls.append({"local_token_list": local_token_list})
         return {"qrcode": "qrc_1", "qrcode_img_content": "https://weixin.qq.com/x/abc"}
 
     def get_qrcode_status(self, qrcode: str, verify_code: str | None = None, **kwargs) -> dict:
+        """记录轮询参数并返回用例预先设定的状态响应。"""
         self.status_calls.append({"qrcode": qrcode, "verify_code": verify_code})
         return dict(type(self).qrcode_status_response)
 
 
 def test_qrcode_confirm_activates_binding(monkeypatch) -> None:
+    """验证扫码确认后绑定变为 active 并返回 ilink_bot_id，响应与密文均不含 token 明文。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -457,6 +481,7 @@ def test_qrcode_confirm_activates_binding(monkeypatch) -> None:
 
 
 def test_qrcode_confirm_timeout_keeps_pending_config(monkeypatch) -> None:
+    """验证确认超时、长轮询停不下来时返回 409，绑定仍为 pending 且不写凭据。"""
     import app.channels
 
     engine = _test_engine()
@@ -465,14 +490,18 @@ def test_qrcode_confirm_timeout_keeps_pending_config(monkeypatch) -> None:
     calls: list[str] = []
 
     class SpyManager:
+        """记录型长轮询管理器替身，模拟停止超时以便断言暂停与恢复的调用顺序。"""
         def pause_binding(self, bid):
+            """记录暂停调用，模拟管理器收到暂停指令。"""
             calls.append(f"pause:{bid}")
 
         def wait_binding_stopped(self, bid, timeout_seconds=5.0):
+            """记录等待调用并返回未停止，触发确认超时分支。"""
             calls.append(f"wait:{bid}")
             return False
 
         def resume_binding(self, bid, *, start=True):
+            """记录恢复调用及是否重启，验证失败路径的恢复参数。"""
             calls.append(f"resume:{bid}:{start}")
 
     _FakeWeChatClient.reset()
@@ -500,6 +529,7 @@ def test_qrcode_confirm_timeout_keeps_pending_config(monkeypatch) -> None:
 
 
 def test_binded_redirect_commit_failure_restores_old_ingress(monkeypatch) -> None:
+    """验证 binded_redirect 落库失败时返回 409，并恢复旧凭据与配置版本。"""
     import app.channels
 
     engine = _test_engine()
@@ -515,20 +545,25 @@ def test_binded_redirect_commit_failure_restores_old_ingress(monkeypatch) -> Non
     calls: list[str] = []
 
     class SpyManager:
+        """记录型长轮询管理器替身，模拟可正常停止以便断言恢复流程。"""
         def pause_binding(self, bid):
+            """记录暂停调用，模拟管理器收到暂停指令。"""
             calls.append(f"pause:{bid}")
 
         def wait_binding_stopped(self, bid, timeout_seconds=5.0):
+            """记录等待调用并返回已停止，继续执行确认流程。"""
             calls.append(f"wait:{bid}")
             return True
 
         def resume_binding(self, bid, *, start=True):
+            """记录恢复调用及是否重启，确认失败后按原状态恢复。"""
             calls.append(f"resume:{bid}:{start}")
 
     original_commit = Session.commit
     failed = False
 
     def fail_first_commit(session):
+        """让第一次提交抛出完整性错误以模拟写库失败，之后恢复正常提交。"""
         nonlocal failed
         if not failed:
             failed = True
@@ -560,6 +595,7 @@ def test_binded_redirect_commit_failure_restores_old_ingress(monkeypatch) -> Non
 
 
 def test_qrcode_endpoints_reject_non_creator(monkeypatch) -> None:
+    """验证非创建者调用二维码生成接口返回 403。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -574,6 +610,7 @@ def test_qrcode_endpoints_reject_non_creator(monkeypatch) -> None:
 
 
 def test_delete_binding(monkeypatch) -> None:
+    """验证删除绑定：非创建者 403；未完成投递与入站事件标记失败并可被管理员审计。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine, status="active")
@@ -672,6 +709,7 @@ def test_delete_binding(monkeypatch) -> None:
 
 
 def test_delete_wechat_kf_binding_releases_account_for_rebinding(monkeypatch) -> None:
+    """验证删除微信客服绑定会释放 open_kfid，使同一账号可绑定到新绑定。"""
     engine = _test_engine()
     users = _seed_users(engine)
     first_id = _seed_binding(engine, status="active")
@@ -717,6 +755,7 @@ def test_delete_wechat_kf_binding_releases_account_for_rebinding(monkeypatch) ->
 
 
 def test_wechat_kf_account_update_and_delete_api(monkeypatch) -> None:
+    """验证微信客服账号修改与删除接口返回最新账号列表并从库中删除记录。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine, channel="wechat_kf", status="active")
@@ -758,6 +797,7 @@ def test_wechat_kf_account_update_and_delete_api(monkeypatch) -> None:
 
 
 def test_deliveries_listing(monkeypatch) -> None:
+    """验证投递列表返回分页字段与记录内容，非创建者访问返回 403。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine, status="active")
@@ -801,6 +841,7 @@ def test_deliveries_listing(monkeypatch) -> None:
 
 
 def test_qrcode_passes_existing_credentials_in_local_token_list(monkeypatch) -> None:
+    """验证已有凭据会作为 local_token_list 传给二维码接口。"""
     from app.channels.crypto import encrypt_channel_secret
 
     engine = _test_engine()
@@ -827,6 +868,7 @@ def test_qrcode_passes_existing_credentials_in_local_token_list(monkeypatch) -> 
 
 
 def test_qrcode_without_credentials_sends_empty_token_list(monkeypatch) -> None:
+    """验证无凭据时向二维码接口传空令牌列表。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -843,6 +885,7 @@ def test_qrcode_without_credentials_sends_empty_token_list(monkeypatch) -> None:
 
 
 def test_qrcode_status_passthrough_and_verify_code(monkeypatch) -> None:
+    """验证二维码状态透传上游状态与 verify_code，未确认时不返回绑定。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -864,6 +907,7 @@ def test_qrcode_status_passthrough_and_verify_code(monkeypatch) -> None:
 
 
 def test_scaned_but_redirect_stores_and_reuses_redirect_baseurl(monkeypatch) -> None:
+    """验证 scaned_but_redirect 保存跳转域名，并让后续轮询使用该域名。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -893,6 +937,7 @@ def test_scaned_but_redirect_stores_and_reuses_redirect_baseurl(monkeypatch) -> 
 
 
 def test_confirmed_clears_redirect_baseurl(monkeypatch) -> None:
+    """验证确认成功后清除二维码跳转域名配置。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -921,6 +966,7 @@ def test_confirmed_clears_redirect_baseurl(monkeypatch) -> None:
 
 
 def test_binded_redirect_activates_with_existing_credentials(monkeypatch) -> None:
+    """验证已有凭据时 binded_redirect 直接激活绑定并清除会话过期标记。"""
     from app.channels.crypto import encrypt_channel_secret
 
     engine = _test_engine()
@@ -954,6 +1000,7 @@ def test_binded_redirect_activates_with_existing_credentials(monkeypatch) -> Non
 
 
 def test_binded_redirect_without_credentials_passthrough(monkeypatch) -> None:
+    """验证无凭据时 binded_redirect 原样透传，绑定保持 pending。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -975,6 +1022,7 @@ def test_binded_redirect_without_credentials_passthrough(monkeypatch) -> None:
 
 
 def test_list_bindings_visibility_scoped_for_non_admin() -> None:
+    """验证非管理员列表只显示自己创建的绑定，管理员可看到全部。"""
     engine = _test_engine()
     users = _seed_users(engine)
     with Session(engine) as db:
@@ -1020,6 +1068,7 @@ def test_list_bindings_visibility_scoped_for_non_admin() -> None:
 
 
 def test_list_bindings_exposes_creator_name() -> None:
+    """验证列表返回创建者显示名，创建者已被删除时回退为 None。"""
     engine = _test_engine()
     users = _seed_users(engine)
     with Session(engine) as db:
@@ -1049,6 +1098,7 @@ def test_list_bindings_exposes_creator_name() -> None:
 
 
 def test_create_binding_returns_creator_name() -> None:
+    """验证创建绑定响应携带创建者 ID 与显示名。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)
@@ -1063,6 +1113,7 @@ def test_create_binding_returns_creator_name() -> None:
 
 
 def test_list_bindings_with_agent_id_unchanged() -> None:
+    """验证带 agent_id 查询走 viewer 校验、不按创建者过滤，非 viewer 仍 403。"""
     engine = _test_engine()
     users = _seed_users(engine)
     with Session(engine) as db:
@@ -1103,6 +1154,7 @@ def test_list_bindings_with_agent_id_unchanged() -> None:
 
 
 def _seed_conversations(engine, binding_id: str) -> None:
+    """写入私聊、群聊与 legacy 会话及消息，覆盖会话列表的筛选与排序场景。"""
     from datetime import datetime
 
     from app.db.models import ChannelIdentity, ChatSession, Message
@@ -1227,6 +1279,7 @@ def _seed_conversations(engine, binding_id: str) -> None:
 
 
 def test_list_channel_conversations_shape_and_order() -> None:
+    """验证会话列表字段与按更新时间倒序，覆盖名称回退、消息数与摘要截断。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1269,6 +1322,7 @@ def test_list_channel_conversations_shape_and_order() -> None:
 
 
 def test_list_channel_conversations_excludes_other_bindings() -> None:
+    """验证会话列表排除其他绑定、其他员工与 web 渠道的会话。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1286,6 +1340,7 @@ def test_list_channel_conversations_excludes_other_bindings() -> None:
 
 
 def test_list_channel_conversation_messages_order_and_404() -> None:
+    """验证消息按创建时间升序、附件仅保留安全字段，跨绑定或不存在的会话返回 404。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1416,6 +1471,7 @@ def test_list_channel_conversation_messages_includes_attachments() -> None:
 
 
 def test_channel_conversations_require_manager() -> None:
+    """验证非管理员访问会话列表与会话消息均返回 403。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1438,6 +1494,7 @@ def test_channel_conversations_require_manager() -> None:
 
 
 def test_put_binding_auto_route_only() -> None:
+    """验证仅传 auto_route 时只改该配置，员工挂载集保持默认。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1458,6 +1515,7 @@ def test_put_binding_auto_route_only() -> None:
 
 
 def test_put_binding_agents_only() -> None:
+    """验证仅传 agents 时更新挂载集，未传的 auto_route 不被写入。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1478,6 +1536,7 @@ def test_put_binding_agents_only() -> None:
 
 
 def test_put_binding_agents_and_auto_route_together() -> None:
+    """验证同时传 agents 与 auto_route 时两者一并生效。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1495,6 +1554,7 @@ def test_put_binding_agents_and_auto_route_together() -> None:
 
 
 def test_put_binding_empty_update_400() -> None:
+    """验证空请求体更新返回 400。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1509,6 +1569,7 @@ def test_put_binding_empty_update_400() -> None:
 
 
 def test_put_binding_rename() -> None:
+    """验证重命名去除首尾空白并落库，后续不带 name 的更新不影响已有名称。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1535,6 +1596,7 @@ def test_put_binding_rename() -> None:
 
 
 def test_put_binding_rename_rejects_blank_and_long_name() -> None:
+    """验证重命名为空白或超过 50 字时返回 400。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1556,6 +1618,7 @@ def test_put_binding_rename_rejects_blank_and_long_name() -> None:
 
 
 def test_put_binding_rename_requires_manager() -> None:
+    """验证非管理员重命名返回 403 且名称不变。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1572,6 +1635,7 @@ def test_put_binding_rename_requires_manager() -> None:
 
 
 def test_put_binding_default_handoff_assignee() -> None:
+    """验证设置与清空默认人工处理人，响应返回处理人 ID 与显示名。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1607,6 +1671,7 @@ def test_put_binding_default_handoff_assignee() -> None:
 
 
 def test_put_binding_default_handoff_assignee_rejects_unknown_user() -> None:
+    """验证默认人工处理人为不存在的用户时返回 400。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1621,6 +1686,7 @@ def test_put_binding_default_handoff_assignee_rejects_unknown_user() -> None:
 
 
 def test_put_binding_default_handoff_assignee_rejects_channel_customer() -> None:
+    """验证默认人工处理人不能是渠道来源的客户用户，返回 400。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1908,6 +1974,7 @@ def test_put_wecom_default_handoff_assignee_channel_variant_requires_scope_ident
 
 
 def test_conversations_pagination() -> None:
+    """验证会话列表分页：默认值、翻页、越界为空以及非法参数返回 422。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -1949,6 +2016,7 @@ def test_conversations_pagination() -> None:
 
 
 def test_deliveries_pagination() -> None:
+    """验证投递列表分页与创建时间倒序，非法 limit 返回 422，非创建者 403。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine, status="active")
@@ -2008,6 +2076,7 @@ def test_deliveries_pagination() -> None:
 
 
 def _seed_delivery_days(engine, binding_id: str) -> None:
+    """按三天分布写入投递记录，供按天分组与分页用例使用。"""
     from datetime import datetime
 
     # 时间取正午附近,避免时区换算跨日影响断言
@@ -2039,6 +2108,7 @@ def _seed_delivery_days(engine, binding_id: str) -> None:
 
 
 def test_deliveries_days_grouping_and_order() -> None:
+    """验证按天分组的天数汇总、每日条数与组内倒序明细。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine, status="active")
@@ -2064,6 +2134,7 @@ def test_deliveries_days_grouping_and_order() -> None:
 
 
 def test_deliveries_days_pagination_boundaries() -> None:
+    """验证按天分组分页边界：翻页、越界为空以及非法参数返回 422。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine, status="active")
@@ -2102,6 +2173,7 @@ def test_deliveries_days_pagination_boundaries() -> None:
 
 
 def test_deliveries_days_requires_manager() -> None:
+    """验证非管理员访问投递按天分组接口返回 403。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine, status="active")
@@ -2119,6 +2191,7 @@ def test_deliveries_days_requires_manager() -> None:
 
 
 def test_binding_manager_not_drifted_by_default_agent() -> None:
+    """验证绑定管理权限只看创建者与管理员，不随默认员工归属漂移。"""
     engine = _test_engine()
     users = _seed_users(engine)
     with Session(engine) as db:
@@ -2201,6 +2274,7 @@ def test_binding_manager_not_drifted_by_default_agent() -> None:
 
 
 def test_scaned_but_redirect_rejects_untrusted_host(monkeypatch) -> None:
+    """验证不可信的跳转域名返回 502 且不写入跳转配置。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -2222,6 +2296,7 @@ def test_scaned_but_redirect_rejects_untrusted_host(monkeypatch) -> None:
 
 
 def test_scaned_but_redirect_accepts_official_subdomain(monkeypatch) -> None:
+    """验证官方子域名被接受并保存为 https 基地址。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -2244,6 +2319,7 @@ def test_scaned_but_redirect_accepts_official_subdomain(monkeypatch) -> None:
 
 
 def test_confirmed_sanitizes_baseurl(monkeypatch) -> None:
+    """验证确认时非法 baseurl 回退官方默认，合法子域规范化为 https://{host}。"""
     engine = _test_engine()
     users = _seed_users(engine)
     binding_id = _seed_binding(engine)
@@ -2293,6 +2369,7 @@ def test_confirmed_sanitizes_baseurl(monkeypatch) -> None:
 
 
 def test_post_binding_allows_multiple_bindings_per_agent_channel() -> None:
+    """验证同一员工同一渠道可重复创建多个绑定，各自 ID 不同。"""
     engine = _test_engine()
     users = _seed_users(engine)
     client = _make_client(engine)

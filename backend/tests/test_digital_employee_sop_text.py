@@ -4,6 +4,7 @@ from app.digital_employees.sop_text import effective_hint, render_sop_content
 
 
 def _card(**overrides):
+    """构造一份完整的 SOP 卡片字典，并允许用关键字参数覆盖任意字段。"""
     card = {
         "skill_id": "expense_over_limit_approval",
         "name": "报销超标审批",
@@ -42,6 +43,7 @@ def _card(**overrides):
 
 
 def test_render_includes_goal_steps_and_rules():
+    """验证渲染结果包含目标、编号步骤、节点指令、响应规则与连线标签。"""
     text = render_sop_content(_card())
     assert "判断是否超标" in text
     assert "1. 确认金额" in text
@@ -51,6 +53,7 @@ def test_render_includes_goal_steps_and_rules():
 
 
 def test_render_survives_legacy_card_without_optional_fields():
+    """验证缺少可选字段的历史卡片仍能渲染步骤，且正文不重复标题。"""
     text = render_sop_content(
         {
             "skill_id": "legacy",
@@ -65,11 +68,13 @@ def test_render_survives_legacy_card_without_optional_fields():
 
 
 def test_render_never_raises_on_garbage():
+    """验证空字典或结构损坏时返回固定提示，而不是抛异常。"""
     assert render_sop_content({}) == "（SOP 结构缺失，无法渲染）"
     assert render_sop_content({"nodes": "not-a-list"}) == "（SOP 结构缺失，无法渲染）"
 
 
 def test_effective_hint_prefers_explicit_override():
+    """验证显式覆盖优先；hybrid 未标注或取值未知时降级为本地执行。"""
     assert effective_hint("hybrid", "remote") == "remote"
     assert effective_hint("hybrid", "local") == "local"
     assert effective_hint("local", None) == "local"

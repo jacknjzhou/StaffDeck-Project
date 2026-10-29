@@ -5,15 +5,15 @@ import { Paginator } from '@/components/Paginator';
 import { UnderlineTabs, type UnderlineTabItem } from '@/components/ui';
 
 export type TaskSectionProps<TFilter extends string, TRow> = {
-  /** Leading header icon (14px). */
+  /** 头部前置图标（14px）。 */
   icon: ReactNode;
   title: string;
   filterTabs: UnderlineTabItem<TFilter>[];
   filter: TFilter;
   onFilterChange: (value: TFilter) => void;
-  /** All filtered rows — drives the mobile list and paginator visibility. */
+  /** 全部筛选后的行数据——决定移动端列表与分页器是否展示。 */
   rows: TRow[];
-  /** Rows for the current page — drives the desktop table. */
+  /** 当前页的行数据——供桌面端表格渲染。 */
   pagedRows: TRow[];
   columns: DataTableColumn<TRow>[];
   rowKey: (row: TRow, index: number) => string | number;
@@ -25,14 +25,16 @@ export type TaskSectionProps<TFilter extends string, TRow> = {
   page: number;
   pageCount: number;
   onPageChange: (page: number) => void;
-  /** Mobile (<768px) card renderer for a single row. */
+  /** 移动端（<768px）单行卡片渲染函数。 */
   renderMobileCard: (row: TRow) => ReactNode;
 };
 
 /**
- * A titled list section used on the scheduled-tasks page: header (icon + title),
- * an underline filter tab bar, a responsive mobile card list, and a desktop
- * `DataTable` with a `Paginator`. Both the task list and the execution log use it.
+ * 定时任务页面使用的带标题列表区块：头部（图标 + 标题）、下划线筛选标签栏、
+ * 移动端卡片列表，以及桌面端 `DataTable` + `Paginator` 组合。任务列表与执行日志均复用。
+ *
+ * - 移动端渲染全部 `rows`，桌面端仅渲染 `pagedRows`，分页由父组件控制。
+ * - 无数据时显示 `emptyText`，且 `rows` 为空时隐藏分页器。
  */
 export function TaskSection<TFilter extends string, TRow>({
   icon,

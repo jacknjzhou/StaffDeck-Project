@@ -65,7 +65,7 @@ _READ_ONLY_SYSTEM_PATHS = (
 )
 _SANDBOX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 class ExecCommandArguments(BaseModel):
-    """Typed arguments for the isolated Bash command capability."""
+    """exec_command 的入参模型：一条 Shell 程序及其超时与输出上限。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -84,6 +84,11 @@ class ExecCommandArguments(BaseModel):
 
 @dataclass(frozen=True)
 class _BoundedProcessResult:
+    """沙箱子进程的不可变执行结果。
+
+    除退出码与输出外还保留原始字节数、截断标记与隔离模式，供上层区分超时、
+    失败以及输出是否被裁剪。
+    """
     returncode: int
     stdout: bytes
     stderr: bytes
@@ -98,12 +103,14 @@ class _BoundedProcessResult:
 
 @dataclass
 class _CaptureBudget:
+    """stdout 与 stderr 共享的总捕获字节预算，超限后只记录截断标记。"""
     limit: int
     captured_bytes: int = 0
     truncated: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def append(self, target: bytearray, chunk: bytes) -> None:
+        """在锁内把 chunk 追加到目标缓冲，累计超限后置 truncated 并停止写入。"""
         with self.lock:
             remaining = max(0, self.limit - self.captured_bytes)
             accepted = min(remaining, len(chunk))
@@ -116,6 +123,7 @@ class _CaptureBudget:
 
 @dataclass
 class _StreamCapture:
+    """单条输出流的捕获缓冲与已读取总字节数（含被截断部分）。"""
     content: bytearray = field(default_factory=bytearray)
     total_bytes: int = 0
 
@@ -124,13 +132,11 @@ def exec_command(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
-    """Execute one bounded platform-shell program in the TaskFrame workspace.
+    """在 TaskFrame 工作区内执行一条受限的平台 Shell 程序。
 
-    The model supplies only the shell program. Every process argument that
-    creates the sandbox is trusted and passed separately to ``subprocess``.
-    An administrator decides whether the extra OS sandbox is enabled. When it
-    is disabled, the process still receives bounded time/output and a dedicated
-    workspace, but runs directly on the host.
+    模型只提供 Shell 程序文本；构造沙箱所需的进程参数全部由服务端可信代码
+    单独传给 subprocess。是否启用额外的操作系统沙箱由管理员配置决定：未启用
+    时仍受执行时长、输出上限与独立工作区约束，但直接运行在宿主机上。
     """
 
     args = _as_exec_arguments(arguments)
@@ -243,7 +249,11 @@ def exec_command(
 
 
 def _command_for_sandbox_workspace(command: str, backend: str) -> str:
-    """Make the stable model-visible /workspace path work on non-mount sandboxes."""
+    """把模型可见的稳定 /workspace 别名改写为当前后端可解析的路径。
+
+    Windows 上同时识别被模型写成盘符或反斜杠形式的 workspace 路径；Bubblewrap
+    直接挂载该别名，因此保持原样；其余后端统一改写为当前工作目录 "."。
+    """
 
     if sys.platform == "win32":
         # Models sometimes translate the stable /workspace alias into a
@@ -267,7 +277,7 @@ def _command_for_sandbox_workspace(command: str, backend: str) -> str:
 
 
 def register_command_tools(registry: HarnessRegistry) -> HarnessRegistry:
-    """Register high-leverage command execution on an explicit registry."""
+    """把 exec_command 能力注册到显式传入的注册表并返回该注册表。"""
 
     registry.register(
         name="exec_command",
@@ -307,7 +317,11 @@ def run_sandboxed_process(
     env_path_keys: tuple[str, ...] = (),
     is_cancelled: Callable[[], bool] | None = None,
 ) -> _BoundedProcessResult:
-    """Run a fixed argv through the same OS sandbox as ``exec_command``."""
+    """沿用 exec_command 的同一套操作系统沙箱运行可信运行器组装的 argv。
+
+    argv 不来自模型，因此不做 Shell 语法校验；沙箱模式下会重映射参数、环境变量
+    与 stdin JSON 中的工作区路径，避免宿主绝对路径泄漏进沙箱。
+    """
     if not argv or any("\x00" in str(item) for item in argv):
         raise HarnessExecutionError(
             "INVALID_ARGUMENTS", "Sandbox argv cannot be empty or contain NUL bytes."
@@ -419,10 +433,12 @@ def run_sandboxed_process(
 
 
 def build_command_tool_registry() -> HarnessRegistry:
+    """创建一个只注册命令执行能力的新注册表，供独立调用方使用。"""
     return register_command_tools(HarnessRegistry())
 
 
 def _as_exec_arguments(arguments: BaseModel) -> ExecCommandArguments:
+    """把通用入参模型收敛为 ExecCommandArguments，类型不符时抛 INVALID_ARGUMENTS。"""
     if not isinstance(arguments, ExecCommandArguments):
         raise HarnessExecutionError(
             "INVALID_ARGUMENTS",
@@ -432,6 +448,10 @@ def _as_exec_arguments(arguments: BaseModel) -> ExecCommandArguments:
 
 
 def _prepare_workspace(context: HarnessToolContext) -> Path:
+    """创建并校验任务工作区目录，返回解析后的真实路径。
+
+    拒绝符号链接工作区、非目录目标与解析失败，避免后续挂载被指向宿主的其他位置。
+    """
     root = context.workspace_root
     try:
         root.mkdir(parents=True, exist_ok=True)
@@ -459,6 +479,7 @@ def _prepare_workspace(context: HarnessToolContext) -> Path:
 
 
 def _reject_workspace_symlinks(root: Path) -> None:
+    """递归扫描工作区，发现任何符号链接即以 SYMLINK_NOT_ALLOWED 拒绝执行。"""
     try:
         for directory, directory_names, file_names in os.walk(
             root,
@@ -489,6 +510,7 @@ def _reject_workspace_symlinks(root: Path) -> None:
 
 
 def _bubblewrap_executable() -> str:
+    """校验并返回可信的 Bubblewrap 可执行文件路径，不可用时 fail-closed 报错。"""
     if not sys.platform.startswith("linux"):
         raise HarnessExecutionError(
             "SANDBOX_UNAVAILABLE",
@@ -515,6 +537,7 @@ def _bubblewrap_executable() -> str:
 
 
 def _seatbelt_executable() -> str:
+    """返回 macOS 上可信的 sandbox-exec 路径，平台或文件不满足时拒绝执行。"""
     if sys.platform != "darwin":
         raise HarnessExecutionError("SANDBOX_UNAVAILABLE", "Seatbelt is only available on macOS.")
     executable = shutil.which("sandbox-exec")
@@ -530,6 +553,11 @@ def _write_srt_settings(
     allowed_domains: tuple[str, ...] = (),
     sandbox_temp: Path | None = None,
 ) -> Path:
+    """生成 SRT 运行所需的 JSON 策略文件并返回其临时路径。
+
+    按网络模式写入域名规则，并显式拒绝读取 SSH/AWS 凭据、数据库文件与用户数据
+    目录；调用方负责在使用后删除该临时文件。
+    """
     if network_mode not in {"all", "allowlist", "deny"}:
         raise HarnessExecutionError("SANDBOX_POLICY_INVALID", "Unknown sandbox network policy.")
     if network_mode == "deny":
@@ -608,6 +636,7 @@ def _write_srt_settings(
 
 
 def _create_srt_temp_directory() -> tempfile.TemporaryDirectory[str]:
+    """创建 SRT 专用临时目录，前缀保持简短以适配 Unix 域套接字路径长度上限。"""
     try:
         # Keep the prefix short because SRT appends Unix-domain socket names;
         # Linux limits the complete socket path to roughly 108 bytes.
@@ -621,6 +650,7 @@ def _create_srt_temp_directory() -> tempfile.TemporaryDirectory[str]:
 
 
 def _srt_supports_allow_all() -> bool:
+    """检查已安装的 SRT 是否带 allow-all-domains 补丁，决定 all 网络模式能否启用。"""
     resolved = resolve_srt()
     if resolved is None:
         return False
@@ -636,6 +666,7 @@ def _srt_supports_allow_all() -> bool:
 
 
 def _srt_argv(*, settings_path: Path, command: str) -> list[str]:
+    """拼装调用 SRT 的完整 argv，Windows 用 PowerShell 编码脚本，其他平台用 Bash。"""
     resolved = resolve_srt()
     if resolved is None:
         raise HarnessExecutionError("SANDBOX_UNAVAILABLE", "SRT executable is unavailable.")
@@ -654,6 +685,11 @@ def _srt_argv(*, settings_path: Path, command: str) -> list[str]:
 
 
 def _windows_powershell_command(command: str) -> str:
+    """把命令包装成输出 UTF-8 的 PowerShell -EncodedCommand 调用。
+
+    顺带把 python/python3 指向随包运行时；用 UTF-16LE + Base64 编码可避免引号与
+    控制字符在命令行参数层被破坏。
+    """
     # Windows PowerShell inherits the machine code page for redirected output;
     # force UTF-8 so the harness' UTF-8 decoder preserves non-ASCII results.
     runtime_alias = ""
@@ -677,6 +713,7 @@ def _windows_powershell_command(command: str) -> str:
 
 
 def _unsandboxed_argv(command: str) -> list[str]:
+    """返回不经 OS 沙箱的执行 argv，Windows 走 PowerShell，其余平台走 Bash。"""
     if sys.platform == "win32":
         encoded = _windows_powershell_command(command).split()[-1]
         return [_WINDOWS_POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
@@ -684,7 +721,7 @@ def _unsandboxed_argv(command: str) -> list[str]:
 
 
 def _bundled_runtime_root() -> Path | None:
-    """Return the frozen app's bundled Python directory, when present."""
+    """返回打包版 Windows 应用内置的 Python 运行时目录，未安装时返回 None。"""
     if sys.platform != "win32":
         return None
     root = Path(sys.executable).resolve().parent / "runtime"
@@ -702,6 +739,11 @@ def _bubblewrap_argv(
     network_mode: str = "deny",
     sandbox_cwd: str = SANDBOX_WORKSPACE,
 ) -> list[str]:
+    """构造 Bubblewrap 或 Seatbelt 的沙箱 argv。
+
+    只读绑定系统运行时必需路径，并把工作区可写挂载到 /workspace；网络按
+    network_mode 断开或放行，域名白名单则直接拒绝（仅 SRT 支持该策略）。
+    """
     if network_mode not in {"all", "allowlist", "deny"}:
         raise HarnessExecutionError("SANDBOX_POLICY_INVALID", "Unknown sandbox network policy.")
     if backend == "seatbelt":
@@ -820,6 +862,7 @@ def _bubblewrap_argv(
 
 
 def _managed_process_environment(env: dict[str, str] | None) -> dict[str, str]:
+    """收敛子进程环境变量：仅保留系统基线变量与白名单内的业务键。"""
     if sys.platform == "win32":
         system_keys = {
             "APPDATA",
@@ -865,6 +908,11 @@ def _run_bounded_process(
     env: dict[str, str] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
 ) -> _BoundedProcessResult:
+    """启动子进程并施加超时、输出上限与取消检查，返回有界执行结果。
+
+    stdout/stderr 由守护线程持续排空，避免管道写满阻塞子进程；超时或取消时先
+    关闭托管进程再回收读取线程，保证不残留后台进程与线程。
+    """
     started = time.monotonic()
     try:
         managed_process = ManagedProcess.start(
@@ -965,6 +1013,7 @@ def _drain_stream(
     capture: _StreamCapture,
     budget: _CaptureBudget,
 ) -> None:
+    """持续读取输出流直到 EOF，累计总字节数并受共享预算限制写入缓冲。"""
     try:
         while True:
             chunk = stream.read(8192)
@@ -977,6 +1026,7 @@ def _drain_stream(
 
 
 def _validate_command(command: str) -> None:
+    """校验 POSIX Shell 程序，拒绝变量展开、命令替换、后台执行与内部路径访问。"""
     if not command or not command.strip():
         raise _command_denied("Command cannot be empty.")
     if "\x00" in command:
@@ -1017,6 +1067,10 @@ def _validate_command(command: str) -> None:
 
 
 def _validate_windows_command(command: str) -> None:
+    """校验 Windows PowerShell 程序，拒绝 heredoc、&& 链式与宿主档案路径展开。
+
+    同时拦截 py 启动器与超长命令，避免模型在 Windows 上沿用 Bash 写法而静默失败。
+    """
     if not command or not command.strip():
         raise _command_denied("Command cannot be empty.")
     if "\x00" in command:
@@ -1047,6 +1101,7 @@ def _validate_windows_command(command: str) -> None:
         raise _command_denied("Host profile path expansion is not allowed.")
 
 def _validate_path_token(token: str) -> None:
+    """拒绝引用 Harness 内部回收站路径的 token，包括 VAR=path 形式的赋值。"""
     candidates = [token]
     if "=" in token:
         candidates.extend(part for part in token.split("=")[1:] if part)
@@ -1057,10 +1112,12 @@ def _validate_path_token(token: str) -> None:
 
 
 def _is_shell_operator(token: str) -> bool:
+    """判断 token 是否完全由 Shell 控制操作符组成（如 &&、|、重定向符号）。"""
     return bool(token) and all(character in ";&|<>()" for character in token)
 
 
 def _command_denied(message: str) -> HarnessExecutionError:
+    """构造统一的 COMMAND_DENIED 错误，保证拒绝原因对模型可见。"""
     return HarnessExecutionError("COMMAND_DENIED", message)
 
 

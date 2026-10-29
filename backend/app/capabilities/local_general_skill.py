@@ -28,7 +28,7 @@ LOCAL_GENERAL_SKILL_PACKAGE_CONTRACT = "1"
 
 @dataclass(frozen=True)
 class GeneralSkillRuntimeSnapshot:
-    """Runner input frozen in memory for the lifetime of one invocation."""
+    """一次调用生命周期内冻结在内存中的 Runner 输入快照。"""
 
     tenant_id: str
     slug: str
@@ -47,16 +47,18 @@ class GeneralSkillRuntimeSnapshot:
 
 
 class LocalGeneralSkillCatalog:
-    """Compatibility Provider backed by existing rows; it never executes code."""
+    """基于既有数据行的兼容 Provider，只做列表与取包，从不执行代码。"""
 
     provider_id = LOCAL_GENERAL_SKILL_PROVIDER_ID
 
     def __init__(self, db: Any) -> None:
+        """绑定查询所用的数据库会话。"""
         self.db = db
 
     def list_published(
         self, context: CapabilityContext
     ) -> Sequence[GeneralSkillSummary]:
+        """列出当前上下文可见的已发布技能摘要，逐行交由 _is_visible 判定可见性。"""
         rows = self.db.exec(
             select(GeneralSkill).where(
                 GeneralSkill.tenant_id == context.tenant_id,
@@ -74,6 +76,7 @@ class LocalGeneralSkillCatalog:
         context: CapabilityContext,
         resource_ref: GeneralSkillResourceRef,
     ) -> GeneralSkillPackage | None:
+        """按资源引用取技能包；引用与行内版本、摘要或契约版本不一致时返回 None。"""
         if resource_ref.catalog_binding_id != self.provider_id:
             return None
         row = self.db.get(GeneralSkill, resource_ref.package_id)
@@ -95,6 +98,10 @@ class LocalGeneralSkillCatalog:
         return package
 
     def _is_visible(self, context: CapabilityContext, row: GeneralSkill) -> bool:
+        """判断技能是否对当前 Agent 可见。
+
+        总览 Agent 与查不到的 Agent 走开放画廊判定；其余要求存在 active 绑定并通过绑定可见性校验。
+        """
         agent = self.db.get(AgentProfile, context.agent_id)
         if not agent or agent.tenant_id != context.tenant_id or agent.is_overall:
             return is_open_gallery_resource(
@@ -122,6 +129,7 @@ class LocalGeneralSkillCatalog:
 
 
 def package_from_row(row: GeneralSkill) -> GeneralSkillPackage:
+    """由数据行构造技能包，按规范化内容计算 sha256 摘要，入口文件优先 SKILL.md。"""
     files = _files_from_row(row)
     version = _package_version(row)
     canonical = {
@@ -168,6 +176,7 @@ def resource_ref_from_row(
     *,
     catalog_binding_id: str = LOCAL_GENERAL_SKILL_PROVIDER_ID,
 ) -> GeneralSkillResourceRef:
+    """生成资源引用；非本地 Provider 且 metadata 内 provider_resource_ref 完整时优先采用。"""
     metadata = row.metadata_json if isinstance(row.metadata_json, Mapping) else {}
     configured = metadata.get("provider_resource_ref")
     if (
@@ -202,6 +211,7 @@ def runtime_snapshot_from_package(
     row: GeneralSkill,
     package: GeneralSkillPackage,
 ) -> GeneralSkillRuntimeSnapshot:
+    """把包与数据行转成不可变运行快照，文件与各 JSON 字段均以 MappingProxyType 包装。"""
     files = tuple(
         MappingProxyType(
             {
@@ -232,10 +242,12 @@ def runtime_snapshot_from_package(
 
 
 def local_runtime_snapshot(row: GeneralSkill) -> GeneralSkillRuntimeSnapshot:
+    """直接由数据行生成运行快照。"""
     return runtime_snapshot_from_package(row, package_from_row(row))
 
 
 def _summary(row: GeneralSkill) -> GeneralSkillSummary:
+    """由数据行构造列表用的技能摘要，版本与摘要复用 package_from_row 的结果。"""
     package = package_from_row(row)
     return GeneralSkillSummary(
         slug=row.slug,
@@ -247,6 +259,7 @@ def _summary(row: GeneralSkill) -> GeneralSkillSummary:
 
 
 def _package_version(row: GeneralSkill) -> str:
+    """取 metadata 中的 version；缺失时回退 updated_at 的 ISO 时间，再缺失用 legacy-v1。"""
     metadata = row.metadata_json if isinstance(row.metadata_json, Mapping) else {}
     configured = str(metadata.get("version") or "").strip()
     if configured:
@@ -256,6 +269,7 @@ def _package_version(row: GeneralSkill) -> str:
 
 
 def _files_from_row(row: GeneralSkill) -> tuple[GeneralSkillFile, ...]:
+    """把 skill_files_json 解析成文件列表；无有效文件时回退为单个 SKILL.md。"""
     raw_files = row.skill_files_json
     files: list[GeneralSkillFile] = []
     if isinstance(raw_files, Sequence) and not isinstance(raw_files, (str, bytes)):

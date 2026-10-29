@@ -43,6 +43,7 @@ def _make_session(
     title: str,
     created_at: datetime,
 ) -> ChatSession:
+    """写入一条团队或普通会话记录，返回该会话对象。"""
     session = ChatSession(
         id=session_id,
         tenant_id="tenant_demo",
@@ -67,6 +68,7 @@ def _make_message(
     created_at: datetime,
     metadata: dict | None = None,
 ) -> Message:
+    """写入一条指定角色与时间的消息，供摘要和排序断言使用。"""
     row = Message(
         id=message_id,
         tenant_id="tenant_demo",
@@ -91,6 +93,7 @@ def test_member_task_and_tl_review_sessions_carry_team_id(monkeypatch: pytest.Mo
         _stub_start_wakeup(monkeypatch)
 
         def fake_turn(*args, **kw):
+            """模拟成员执行与 TL 验收的回合输出，返回带验收 JSON 的文本。"""
             if kw["agent"].id == "agent_tl":
                 return '验收通过\n```json\n{"team_review": {"verdict": "approve", "comment": "通过"}}\n```'
             return "执行报告:已完成"
@@ -131,6 +134,7 @@ def test_bid_request_and_award_sessions_carry_team_id(monkeypatch: pytest.Monkey
         _stub_start_wakeup(monkeypatch)
 
         def fake_turn(*args, **kw):
+            """模拟竞标陈述与 TL 裁决的回合输出。"""
             agent_id = kw["agent"].id
             if agent_id == "agent_tl":
                 return _award_reply("agent_a")
@@ -167,6 +171,7 @@ def test_bid_score_session_carries_team_id(monkeypatch: pytest.MonkeyPatch) -> N
         _stub_start_wakeup(monkeypatch)
 
         def fake_turn(*args, **kw):
+            """模拟竞标陈述与 TL 打分的回合输出。"""
             agent_id = kw["agent"].id
             if agent_id == "agent_tl":
                 return _score_reply(("agent_a", 9.0), ("agent_b", 8.0))
@@ -295,6 +300,7 @@ def test_conversations_endpoint_kinds_preview_order_isolation() -> None:
 
 
 def test_conversations_expose_member_question_waiting_for_user_input() -> None:
+    """验证成员待补充信息的会话透出 needs_input 与待答问题，且不污染摘要。"""
     with _test_session() as db:
         team = _seed_team(db)
         base = datetime(2026, 1, 1, 12, 0, 0)
@@ -344,6 +350,7 @@ def test_conversations_expose_member_question_waiting_for_user_input() -> None:
 
 
 def test_conversation_stream_returns_incremental_member_reply() -> None:
+    """验证会话流式接口拼接增量片段，结束后状态转为 completed。"""
     with _test_session() as db:
         team = _seed_team(db)
         base = datetime(2026, 1, 1, 12, 0, 0)
@@ -469,6 +476,7 @@ def test_conversation_messages_endpoint_order_and_isolation() -> None:
 
 
 def test_conversation_messages_reuse_chat_metadata_and_hide_only_team_control_json() -> None:
+    """验证消息端点复用聊天元数据，仅隐藏团队控制用 JSON 代码块。"""
     with _test_session() as db:
         team = _seed_team(db)
         base = datetime(2026, 1, 1, 12, 0, 0)
@@ -533,6 +541,7 @@ def test_chat_turn_allows_tenant_member_on_team_session(monkeypatch: pytest.Monk
         monkeypatch.setattr(chat_api, "_schedule_session_title_summary", lambda *a, **kw: None)
 
         def fake_handle_turn(self, request):
+            """返回固定回复的假回合处理，避免触发真实 AgentLoop。"""
             return ChatTurnResponse(
                 reply="收到,先讨论。",
                 session_id=request.session_id,

@@ -21,14 +21,22 @@ SYNC_FLAG = "deepchat_sync_enabled"
 
 
 def content_hash(value: str) -> str:
-    """Short, stable digest of a concept body: deepchat compares these to skip work."""
+    """计算 concept 正文的短摘要：取 UTF-8 内容的 SHA-256 十六进制前 16 位。
+
+    DeepChat 比对摘要判断内容是否变化，从而跳过重复下载。
+    """
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def build_knowledge_packages(
     principal: PublicPrincipal, agent: AgentProfile, db: Session
 ) -> list[dict[str, Any]]:
-    """Every knowledge base this employee can use, unless explicitly opted out."""
+    """构建该数字员工可同步的全部知识包。
+
+    同步默认开启：只有版本 metadata 中 deepchat_sync_enabled 显式为 False 才排除。
+    对每个可见版本先补齐 OKF concept，再汇总 concept 的 id、类型、标题、摘要与
+    字节大小，并附上版本号、configHash 与 bundle 导出地址。
+    """
     versions = visible_knowledge_base_versions(db, principal.tenant_id, agent.id)
     packages: list[dict[str, Any]] = []
     for kb_id, version in sorted(versions.items()):
@@ -66,6 +74,11 @@ def build_knowledge_packages(
 def build_knowledge_package_list(
     principal: PublicPrincipal, agent: AgentProfile, db: Session
 ) -> dict[str, Any]:
+    """组装知识包列表，并生成 configVersion（形如 kv1:<12 位摘要>）。
+
+    摘要取值于各知识包 knowledgeBaseId 与 configHash 排序后的 JSON，只要内容不变
+    该版本号就保持稳定。
+    """
     packages = build_knowledge_packages(principal, agent, db)
     seed = json.dumps(
         sorted((item["knowledgeBaseId"], item["configHash"]) for item in packages),
@@ -81,6 +94,7 @@ def select_package(
     db: Session,
     knowledge_base_id: str,
 ) -> dict[str, Any] | None:
+    """在重建出的知识包中按 knowledge_base_id 查找，未命中或被 opt-out 排除时返回 None。"""
     return next(
         (
             package
@@ -98,6 +112,11 @@ def select_concept(
     knowledge_base_id: str,
     concept_id: str,
 ) -> KnowledgeConcept | None:
+    """读取知识包内单个 concept。
+
+    先确认该知识库确实已同步给员工（含 opt-out 判断），再按租户、知识库、版本、
+    concept_id 取 status 为 active 的记录；任一环节不满足则返回 None。
+    """
     if select_package(principal, agent, db, knowledge_base_id) is None:
         return None
     versions = visible_knowledge_base_versions(db, principal.tenant_id, agent.id)
@@ -118,6 +137,7 @@ def select_concept(
 def concept_rows(
     db: Session, tenant_id: str, knowledge_base_id: str, version_id: str
 ) -> list[KnowledgeConcept]:
+    """按租户、知识库与版本列出 status 为 active 的 concept，并按 concept_id 升序返回。"""
     return list(
         db.exec(
             select(KnowledgeConcept)
@@ -133,6 +153,7 @@ def concept_rows(
 
 
 def _package_hash(version: str, entries: list[dict[str, Any]]) -> str:
+    """对版本号与各 concept 的 id/摘要生成带 sha256: 前缀的 16 位配置摘要。"""
     seed = json.dumps(
         {"version": version, "concepts": [(item["conceptId"], item["hash"]) for item in entries]},
         separators=(",", ":"),
@@ -141,6 +162,10 @@ def _package_hash(version: str, entries: list[dict[str, Any]]) -> str:
 
 
 def _bundle_url(agent_id: str, knowledge_base_id: str) -> str:
+    """拼接该知识包的 OKF bundle 导出地址。
+
+    基地址取自 settings.normalized_tool_base_url，路径带数字员工与知识库 id。
+    """
     base = get_settings().normalized_tool_base_url
     return (
         f"{base}/api/v1/digital-employees/{agent_id}"

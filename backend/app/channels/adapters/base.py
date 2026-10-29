@@ -97,10 +97,12 @@ class ChannelInbound:
 
     @property
     def conv_key(self) -> str:
+        """会话键：群聊取 group_id，私聊取 session_id，两者都用于拼外部会话 id。"""
         return self.group_id or self.session_id
 
     @property
     def external_conv_id(self) -> str:
+        """拼出跨绑定稳定的外部会话 id：渠道_[作用域_]group|p2p_<对方 id>。"""
         if self.is_group:
             if self.account_scope:
                 return f"{self.channel}_{self.account_scope}_group_{self.conv_key}"
@@ -113,7 +115,8 @@ class ChannelInbound:
 class ChannelAdapter(Protocol):
     """渠道适配器协议:归一化 + 出站 + 可选 typing + ingress 生命周期。"""
 
-    def normalize(self, raw: dict[str, Any]) -> ChannelInbound | None: ...
+    def normalize(self, raw: dict[str, Any]) -> ChannelInbound | None:
+        """把渠道原始帧归一化成 ChannelInbound；非本渠道或无需处理的消息返回 None。"""
 
     def send(
         self,
@@ -122,13 +125,20 @@ class ChannelAdapter(Protocol):
         text: str,
         *,
         idempotency_key: str | None = None,
-    ) -> str | None: ...
+    ) -> str | None:
+        """发送一条文本消息，返回渠道侧消息 id（如飞书 message_id）供调用方关联回复。
+
+        不支持回传 id 的适配器（wechat/wecom）返回 None。
+        """
+
     # 返回值:投递消息在渠道侧的 id(如飞书 message_id),供调用方关联回复;
     # 不支持返回 id 的适配器(wechat/wecom)返回 None。
 
-    def start_ingress(self, binding_id: str) -> None: ...
+    def start_ingress(self, binding_id: str) -> None:
+        """为该绑定启动入站接收器（长连接或回调注册），由调用方保证幂等。"""
 
-    def stop_ingress(self, binding_id: str) -> None: ...
+    def stop_ingress(self, binding_id: str) -> None:
+        """停止该绑定的入站接收器；尚未启动时应安全返回。"""
 
 
 class ChannelReactionAdapter(Protocol):
@@ -150,24 +160,28 @@ class ChannelReactionAdapter(Protocol):
         binding: ChannelBinding,
         target: dict[str, Any],
         token: str,
-    ) -> str | None: ...
+    ) -> str | None:
+        """给目标消息挂上 token 标记，返回可供撤回的 handle；不支持时返回 None。"""
 
     def remove_reaction(
         self,
         binding: ChannelBinding,
         target: dict[str, Any],
         handle: str,
-    ) -> None: ...
+    ) -> None:
+        """按 add_reaction 返回的 handle 撤回标记；远端标记已消失应视为成功。"""
 
 
 _adapters: dict[str, ChannelAdapter] = {}
 
 
 def register_channel_adapter(channel: str, adapter: ChannelAdapter) -> None:
+    """登记（或覆盖）某渠道的适配器实例，供 get_channel_adapter 查表使用。"""
     _adapters[channel] = adapter
 
 
 def get_channel_adapter(channel: str) -> ChannelAdapter:
+    """按渠道名取已登记的适配器；该渠道未注册时抛 ValueError。"""
     adapter = _adapters.get(channel)
     if adapter is None:
         raise ValueError(f"未注册的渠道适配器: {channel}")

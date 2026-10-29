@@ -13,7 +13,7 @@ import profileImage from "@/assets/onboarding-profile.png";
 
 export const ONBOARDING_SEEN_KEY = "staffdeck_onboarding_guide_seen";
 
-/** Custom event that lets any part of the app re-open the onboarding guide. */
+/** 自定义事件，允许应用任意位置重新打开新手引导。 */
 export const OPEN_ONBOARDING_EVENT = "staffdeck-open-onboarding";
 export const OPEN_QUICK_START_EVENT = "staffdeck-open-quick-start";
 
@@ -85,6 +85,11 @@ const STEPS: GuideStep[] = [
   },
 ];
 
+/**
+ * 新手引导弹窗：首次访问时自动打开，也可通过自定义事件重复唤起。
+ *
+ * 关闭时写入 localStorage 已读标记并派发快速开始事件，引导用户进入后续流程。
+ */
 export default function OnboardingGuide() {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
@@ -106,16 +111,19 @@ export default function OnboardingGuide() {
     return () => window.removeEventListener(OPEN_ONBOARDING_EVENT, reopen);
   }, []);
 
+  /** 结束引导：记录已读标记、关闭弹窗并派发快速开始事件。 */
   function finish() {
     window.localStorage.setItem(ONBOARDING_SEEN_KEY, "1");
     setOpen(false);
     window.dispatchEvent(new Event(OPEN_QUICK_START_EVENT));
   }
 
+  /** 切换到上一步，已在第一步时保持不变。 */
   function goPrev() {
     setStep((prev) => Math.max(0, prev - 1));
   }
 
+  /** 切换到下一步；处于最后一步时结束引导。 */
   function goNext() {
     if (step >= STEPS.length - 1) {
       finish();
@@ -124,6 +132,7 @@ export default function OnboardingGuide() {
     }
   }
 
+  /** 响应弹窗开关变化：关闭时按结束引导处理，打开时同步为展开状态。 */
   function handleOpenChange(next: boolean) {
     if (!next) finish();
     else setOpen(true);

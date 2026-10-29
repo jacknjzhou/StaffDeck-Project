@@ -38,14 +38,17 @@ from app.tools.tool_schema import (
 
 
 def _admin_user() -> User:
+    """构造租户管理员用户，用于需要管理员权限的 MCP 接口调用。"""
     return User(id="user_admin", tenant_id="tenant_demo", username="ops", role="admin", password_hash="test")
 
 
 def _member_user() -> User:
+    """构造普通成员用户，用于验证成员可执行的发现类接口。"""
     return User(id="user_member", tenant_id="tenant_demo", username="member", role="member", password_hash="test")
 
 
 def test_discover_builtin_mcp_server_lists_tools() -> None:
+    """验证内置 MCP 服务可被成员发现，并返回 echo 等工具及其入参 schema。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -67,6 +70,7 @@ def test_discover_builtin_mcp_server_lists_tools() -> None:
 
 
 def test_discover_stdio_mcp_server_lists_tools() -> None:
+    """验证通过 stdio 子进程启动的 MCP 服务也能被发现并列出工具。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -90,6 +94,7 @@ def test_discover_stdio_mcp_server_lists_tools() -> None:
 
 
 def test_mcp_apps_negotiation_preserves_metadata_and_resource() -> None:
+    """验证 MCP Apps 协商后保留 app 元数据、只读注解与工具结果 meta，并能读取资源。"""
     config = {
         "transport": "stdio",
         "command": sys.executable,
@@ -115,6 +120,7 @@ def test_mcp_apps_negotiation_preserves_metadata_and_resource() -> None:
 
 
 def test_mcp_apps_capability_is_not_advertised_when_disabled() -> None:
+    """验证关闭 apps_mode 时不会对外声明 MCP Apps 扩展能力。"""
     discovery = discover_mcp_server(
         {
             "transport": "stdio",
@@ -128,6 +134,7 @@ def test_mcp_apps_capability_is_not_advertised_when_disabled() -> None:
 
 
 def test_mcp_app_resource_limit_is_ten_mib() -> None:
+    """验证 MCP App 资源上限为 10 MiB，超限时抛出含 10 MiB 提示的客户端错误。"""
     assert MCP_APP_RESOURCE_MAX_BYTES == 10 * 1024 * 1024
     accepted = "x" * (2 * 1024 * 1024 + 1)
     text, _meta = _extract_app_resource(
@@ -160,6 +167,7 @@ def test_mcp_app_resource_limit_is_ten_mib() -> None:
 
 
 def test_synced_mcp_app_renders_and_calls_read_only_tool() -> None:
+    """验证同步后的 MCP App 工具可渲染卡片资源，并能在应用内调用只读工具。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -240,6 +248,7 @@ def test_synced_mcp_app_renders_and_calls_read_only_tool() -> None:
 
 
 def test_mcp_app_side_effect_call_requires_confirmation() -> None:
+    """验证可能产生副作用且未标注只读的应用内工具调用会要求用户确认。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -309,6 +318,7 @@ def test_mcp_app_side_effect_call_requires_confirmation() -> None:
 
 
 def test_mcp_app_sop_specific_call_requires_active_sop() -> None:
+    """验证 SOP 专属工具在未处于对应 SOP 上下文时调用会返回 403。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -380,6 +390,7 @@ def test_mcp_app_sop_specific_call_requires_active_sop() -> None:
 
 
 def test_sync_mcp_tools_imports_tools_and_executes() -> None:
+    """验证同步会导入指定工具、建立广场绑定，并能通过工具执行器成功调用。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True))
@@ -438,6 +449,7 @@ def test_sync_mcp_tools_imports_tools_and_executes() -> None:
 
 
 def test_disabled_mcp_server_blocks_imported_tool_execution() -> None:
+    """验证 MCP 服务被禁用后，其已导入工具的执行会返回 MCP_ERROR。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         server = MCPServer(
@@ -477,6 +489,7 @@ def test_disabled_mcp_server_blocks_imported_tool_execution() -> None:
 
 
 def test_sync_mcp_tools_preserves_execution_policy() -> None:
+    """验证重复同步不会覆盖工具上已配置的执行策略（如超时时间）。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         server = MCPServer(
@@ -513,6 +526,7 @@ def test_sync_mcp_tools_preserves_execution_policy() -> None:
 
 
 def test_sync_mcp_tools_scoped_to_employee_binds_privately() -> None:
+    """验证在员工范围内同步只建立私有绑定，工具对该员工可见但不进入工具广场。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True))
@@ -551,6 +565,7 @@ def test_sync_mcp_tools_scoped_to_employee_binds_privately() -> None:
 
 
 def test_sync_is_idempotent_and_updates_schema() -> None:
+    """验证重复同步具备幂等性：首次导入全部工具，再次同步只更新不新增。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -589,6 +604,7 @@ def test_sync_is_idempotent_and_updates_schema() -> None:
 
 
 def test_discover_saved_server_marks_imported() -> None:
+    """验证发现已保存的服务时会标记哪些工具已导入，并返回对应 tool_id。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -702,6 +718,7 @@ def test_discover_saved_server_marks_imported_in_current_employee_scope() -> Non
 
 
 def test_delete_mcp_server_removes_tools() -> None:
+    """验证租户级删除服务时，服务记录与其导入的工具都会被清除。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -737,6 +754,7 @@ def test_delete_mcp_server_removes_tools() -> None:
 
 
 def test_delete_mcp_server_in_employee_scope_only_unbinds() -> None:
+    """验证员工范围删除只解除绑定并返回 hidden，不删除租户级服务与工具。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True))
@@ -812,6 +830,7 @@ def test_resync_restores_tools_removed_from_employee() -> None:
 
 
 def test_delete_mcp_server_in_employee_scope_without_tools_returns_404() -> None:
+    """验证员工范围下删除未绑定任何工具的服务时返回 404。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_employee", tenant_id="tenant_demo", name="数字员工", is_overall=False))
@@ -840,14 +859,17 @@ def test_delete_mcp_server_in_employee_scope_without_tools_returns_404() -> None
 
 
 def _mock_mcp_server_path() -> Path:
+    """返回测试用 stdio MCP 服务脚本路径，用于启动子进程服务。"""
     return Path(__file__).resolve().parents[1] / "mock_servers" / "mcp_stdio_server.py"
 
 
 def _mock_mcp_apps_server_path() -> Path:
+    """返回测试用 MCP Apps stdio 服务脚本路径，用于验证应用资源与协商。"""
     return Path(__file__).resolve().parents[1] / "mock_servers" / "mcp_apps_stdio_server.py"
 
 
 def _test_session():
+    """创建基于内存 SQLite 的共享连接会话，保证每个用例的数据互相隔离。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

@@ -28,6 +28,7 @@ from app.db.models import (
 
 
 def _test_engine():
+    """创建内存 SQLite 引擎并建表，供单个用例隔离使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -38,6 +39,7 @@ def _test_engine():
 
 
 def _p2p_message(event_id: str, text: str) -> dict:
+    """构造符合微信私聊结构的事件载荷，用于驱动入站处理。"""
     return {
         "message_id": event_id,
         "from_user_id": "user_ab12cd34@im.wechat",
@@ -52,6 +54,7 @@ def _p2p_message(event_id: str, text: str) -> dict:
 
 
 def _group_message(event_id: str, text: str) -> dict:
+    """在私聊载荷基础上补充群号，构造微信群聊事件。"""
     msg = _p2p_message(event_id, text)
     msg["group_id"] = "room_123456"
     msg["session_id"] = "room_123456"
@@ -59,6 +62,7 @@ def _group_message(event_id: str, text: str) -> dict:
 
 
 def _seed_binding(engine) -> str:
+    """写入租户与 active 的微信渠道绑定，返回绑定 ID。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         binding = ChannelBinding(
@@ -74,6 +78,7 @@ def _seed_binding(engine) -> str:
 
 
 def _load_binding(engine, binding_id: str) -> ChannelBinding:
+    """读取绑定并转为游离对象，避免会话关闭后属性失效。"""
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         db.expunge(binding)
@@ -81,6 +86,7 @@ def _load_binding(engine, binding_id: str) -> ChannelBinding:
 
 
 def _seed_web_user(engine, user_id: str = "user_web", username: str = "zhangsan") -> None:
+    """写入一个网页端账号，作为绑定码的码主。"""
     with Session(engine) as db:
         db.add(
             User(
@@ -131,6 +137,7 @@ def _seed_lazy_history(engine, lazy: User) -> None:
 
 
 def _make_lazy_account(engine) -> User:
+    """预置按渠道身份懒建的成员账号及身份行，模拟绑定前状态。"""
     with Session(engine) as db:
         lazy = User(
             id="user_lazy",
@@ -158,18 +165,22 @@ def _make_lazy_account(engine) -> User:
 
 
 class RecordingAgentLoop:
+    """记录每次被调用的轮次请求，替代真实 AgentLoop 执行。"""
     calls: list = []
 
     def __init__(self, db, *, event_sink=None):
+        """保存数据库会话，供 handle_turn 提交使用。"""
         self.db = db
 
     def handle_turn(self, request):
+        """记录请求并提交事务，模拟一次正常的智能体轮次。"""
         type(self).calls.append(request)
         self.db.commit()
 
 
 @pytest.fixture(autouse=True)
 def _fake_agent_loop(monkeypatch):
+    """安装伪 AgentLoop 并重置绑定失败计数，保证用例互不影响。"""
     RecordingAgentLoop.calls = []
     intake_module._bind_failures.clear()
     monkeypatch.setattr(agent_loop_module, "AgentLoop", RecordingAgentLoop)
@@ -182,6 +193,7 @@ def _fake_agent_loop(monkeypatch):
 
 
 def test_parse_bind_commands() -> None:
+    """验证中英文绑定与解绑指令都能解析出正确类型和参数。"""
     cmd = parse_command("/绑定 123456")
     assert cmd.kind == "bind" and cmd.query == "123456"
     alias = parse_command("/BIND 654321")
@@ -196,6 +208,7 @@ def test_parse_bind_commands() -> None:
 
 
 def test_user_source_backfill_marks_wechat_accounts(monkeypatch, tmp_path) -> None:
+    """验证迁移会按用户名回填 source，且重复执行保持幂等。"""
     from sqlalchemy import text as sa_text
 
     from app.db import database
@@ -251,6 +264,7 @@ def test_user_source_backfill_marks_wechat_accounts(monkeypatch, tmp_path) -> No
 
 
 def test_list_users_hides_channel_accounts_by_default() -> None:
+    """验证用户列表默认隐藏渠道懒建账号，成员也看不到他人的渠道身份。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -327,6 +341,7 @@ def test_list_users_hides_channel_accounts_by_default() -> None:
 
 
 def test_create_bind_code_invalidates_stale_codes() -> None:
+    """验证同一账号重新生成绑定码会作废旧码，只保留最新一条。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -350,6 +365,7 @@ def test_create_bind_code_invalidates_stale_codes() -> None:
 
 
 def test_bind_code_generation_retries_tenant_code_collision(monkeypatch) -> None:
+    """验证租户内绑定码冲突时会重试并生成不同的码。"""
     import app.api.channels as channels_api
 
     engine = _test_engine()
@@ -376,6 +392,7 @@ def test_bind_code_generation_retries_tenant_code_collision(monkeypatch) -> None
 
 
 def test_bind_code_is_claimed_once_under_concurrency(tmp_path) -> None:
+    """验证并发认领同一绑定码时只有一个身份成功，另一条收到失效提示。"""
     db_path = tmp_path / "bind-code.db"
     engine = create_engine(
         f"sqlite:///{db_path}",
@@ -399,6 +416,7 @@ def test_bind_code_is_claimed_once_under_concurrency(tmp_path) -> None:
     errors: list[Exception] = []
 
     def bind(external_id: str, event_id: str) -> None:
+        """并发线程入口：同一时刻提交绑定指令，并收集抛出的异常。"""
         message = _p2p_message(event_id, "/绑定 123456")
         message["from_user_id"] = external_id
         message["session_id"] = f"{external_id}#bot_1@im.bot"
@@ -433,6 +451,7 @@ def test_bind_code_is_claimed_once_under_concurrency(tmp_path) -> None:
 
 
 def test_stale_submitted_code_cannot_claim_rotated_row(tmp_path) -> None:
+    """验证提交旧码无法认领已被轮换的绑定码行。"""
     from app.channels.service_intake import _claim_bind_code
 
     db_path = tmp_path / "rotated-code.db"
@@ -471,6 +490,7 @@ def test_stale_submitted_code_cannot_claim_rotated_row(tmp_path) -> None:
 
 
 def test_bind_code_migration_removes_ambiguous_legacy_rows(monkeypatch, tmp_path) -> None:
+    """验证迁移清理同租户过期或重复的历史绑定码，并建立唯一约束。"""
     from app.db import database
 
     db_path = tmp_path / "bind-code-legacy.db"
@@ -524,6 +544,7 @@ def test_bind_code_migration_removes_ambiguous_legacy_rows(monkeypatch, tmp_path
 
 
 def _issue_code(engine, user_id: str = "user_web", code: str = "123456", *, expired: bool = False) -> None:
+    """为指定账号写入绑定码，可选择立即过期。"""
     with Session(engine) as db:
         db.add(
             ChannelBindCode(
@@ -537,6 +558,7 @@ def _issue_code(engine, user_id: str = "user_web", code: str = "123456", *, expi
 
 
 def _notice_texts(engine) -> list[str]:
+    """按写入顺序返回所有通知类投递的文本。"""
     with Session(engine) as db:
         rows = db.exec(
             select(ChannelDelivery).where(ChannelDelivery.kind == "notice")
@@ -545,6 +567,7 @@ def _notice_texts(engine) -> list[str]:
 
 
 def test_bind_success_migrates_history_and_marks_code_used() -> None:
+    """验证绑定成功后历史会话与记忆迁移到码主账号，绑定码标记已用。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_web_user(engine)
@@ -587,6 +610,7 @@ def test_bind_success_migrates_history_and_marks_code_used() -> None:
 
 
 def test_bind_with_wrong_or_expired_code() -> None:
+    """验证错误码与过期码都被拒绝，且不产生身份绑定。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_web_user(engine)
@@ -604,6 +628,7 @@ def test_bind_with_wrong_or_expired_code() -> None:
 
 
 def test_bind_rejected_when_identity_bound_to_other_web_account() -> None:
+    """验证微信身份已归属其他账号时拒绝绑定，并提示先解绑。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_web_user(engine, user_id="user_web", username="zhangsan")
@@ -635,6 +660,7 @@ def test_bind_rejected_when_identity_bound_to_other_web_account() -> None:
 
 
 def test_bind_command_not_supported_in_group() -> None:
+    """验证群聊中发送绑定指令被拒绝，并提示改到私聊。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -648,6 +674,7 @@ def test_bind_command_not_supported_in_group() -> None:
 
 
 def test_unbind_moves_history_back_to_lazy_account() -> None:
+    """验证解绑后身份、会话与记忆回到懒建账号。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_web_user(engine)
@@ -679,6 +706,7 @@ def test_unbind_moves_history_back_to_lazy_account() -> None:
 
 
 def test_unbind_creates_lazy_account_when_missing() -> None:
+    """验证缺少懒建账号时解绑会自动补建并迁移身份。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_web_user(engine)
@@ -710,6 +738,7 @@ def test_unbind_creates_lazy_account_when_missing() -> None:
 
 
 def test_unbind_without_binding_is_noop() -> None:
+    """验证未绑定状态下解绑只提示“未绑定”，不产生副作用。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     lazy = _make_lazy_account(engine)
@@ -725,6 +754,7 @@ def test_unbind_without_binding_is_noop() -> None:
 
 
 def _make_api_client(engine):
+    """搭建挂载渠道路由的测试客户端，并注入测试数据库会话。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -735,6 +765,7 @@ def _make_api_client(engine):
     app.include_router(channels_api.router)
 
     def override_get_session():
+        """为每个请求提供独立的测试数据库会话。"""
         with Session(engine) as session:
             yield session
 
@@ -743,12 +774,14 @@ def _make_api_client(engine):
 
 
 def _auth(user: User) -> dict[str, str]:
+    """为指定用户生成 Bearer 认证请求头。"""
     from app.security.auth import create_access_token
 
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
 def _seed_web_users(engine) -> dict[str, User]:
+    """写入码主与另一名网页用户，返回游离的用户对象。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         web = User(id="user_web", tenant_id="tenant_demo", username="zhangsan", display_name="张三", password_hash="x")
@@ -808,6 +841,7 @@ def _seed_bound_state(engine) -> None:
 
 
 def test_my_identity_bindings_query() -> None:
+    """验证身份查询只返回当前用户的渠道绑定，他人不可见。"""
     engine = _test_engine()
     users = _seed_web_users(engine)
     _seed_bound_state(engine)
@@ -835,6 +869,7 @@ def test_my_identity_bindings_query() -> None:
 
 
 def test_my_identity_bindings_empty_when_unbound() -> None:
+    """验证未绑定时身份查询返回空列表。"""
     engine = _test_engine()
     users = _seed_web_users(engine)
     client = _make_api_client(engine)
@@ -848,6 +883,7 @@ def test_my_identity_bindings_empty_when_unbound() -> None:
 
 
 def test_delete_my_identity_binding_unbinds_like_command() -> None:
+    """验证接口解绑与指令解绑行为一致，重复删除返回 404。"""
     engine = _test_engine()
     users = _seed_web_users(engine)
     _seed_bound_state(engine)
@@ -876,6 +912,7 @@ def test_delete_my_identity_binding_unbinds_like_command() -> None:
 
 
 def test_delete_my_identity_binding_404_and_tenant_mismatch() -> None:
+    """验证不存在绑定时返回 404，租户不匹配时返回 403。"""
     engine = _test_engine()
     users = _seed_web_users(engine)
     client = _make_api_client(engine)
@@ -898,6 +935,7 @@ def test_delete_my_identity_binding_404_and_tenant_mismatch() -> None:
 
 
 def _wecom_p2p_message(event_id: str, text: str) -> dict:
+    """构造企业微信私聊回调帧，供适配器归一化使用。"""
     return {
         "cmd": "aibot_msg_callback",
         "headers": {"req_id": f"req_{event_id}"},
@@ -913,6 +951,7 @@ def _wecom_p2p_message(event_id: str, text: str) -> dict:
 
 
 def _wecom_group_message(event_id: str, text: str) -> dict:
+    """在企微私聊帧上补充群聊字段，构造群消息回调。"""
     msg = _wecom_p2p_message(event_id, text)
     msg["body"]["chatid"] = "wr_room1"
     msg["body"]["chattype"] = "group"
@@ -920,6 +959,7 @@ def _wecom_group_message(event_id: str, text: str) -> dict:
 
 
 def _wecom_inbound(event_id: str, text: str, *, group: bool = False):
+    """将企微原始回调归一化为入站事件，可选群聊模式。"""
     from app.channels.adapters.wecom import normalize_wecom_frame
 
     frame = _wecom_group_message(event_id, text) if group else _wecom_p2p_message(event_id, text)
@@ -927,6 +967,7 @@ def _wecom_inbound(event_id: str, text: str, *, group: bool = False):
 
 
 def _seed_wecom_binding(engine) -> str:
+    """写入 active 的企微渠道绑定，必要时补建租户，返回绑定 ID。"""
     with Session(engine) as db:
         if not db.get(Tenant, "tenant_demo"):
             db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -943,6 +984,7 @@ def _seed_wecom_binding(engine) -> str:
 
 
 def _make_wecom_lazy_account(engine) -> User:
+    """预置企微渠道的懒建成员账号及身份行。"""
     with Session(engine) as db:
         lazy = User(
             id="user_wecom_lazy",
@@ -971,6 +1013,7 @@ def _make_wecom_lazy_account(engine) -> User:
 
 
 def _seed_wecom_lazy_history(engine, lazy: User) -> None:
+    """写入企微私聊与群聊会话及一条记忆，模拟绑定前历史。"""
     with Session(engine) as db:
         db.add(
             ChatSession(
@@ -1006,6 +1049,7 @@ def _seed_wecom_lazy_history(engine, lazy: User) -> None:
 
 
 def test_wecom_bind_success_full_chain() -> None:
+    """验证企微侧绑定成功后的提示、历史迁移与后续消息归属。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     _seed_web_user(engine)
@@ -1044,6 +1088,7 @@ def test_wecom_bind_success_full_chain() -> None:
 
 
 def test_wecom_unbind_moves_history_back() -> None:
+    """验证企微侧解绑后身份、会话与记忆回到懒建账号。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     _seed_web_user(engine)
@@ -1073,6 +1118,7 @@ def test_wecom_unbind_moves_history_back() -> None:
 
 
 def test_wecom_bind_command_not_supported_in_group() -> None:
+    """验证企微群聊中绑定指令被拒绝并提示私聊。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -1086,6 +1132,7 @@ def test_wecom_bind_command_not_supported_in_group() -> None:
 
 
 def test_wecom_delete_my_identity_binding_moves_data_back() -> None:
+    """验证页面侧按渠道解绑企微身份时带上 scope 并迁移数据。"""
     engine = _test_engine()
     users = _seed_web_users(engine)
     # 企微身份(scope=corpA)已绑定到 web 账号,会话与记忆在 web 名下
@@ -1151,6 +1198,7 @@ def test_wecom_delete_my_identity_binding_moves_data_back() -> None:
 
 
 def test_bind_failure_throttle_cooldown_and_recovery() -> None:
+    """验证连续错码触发冷却，冷却结束后正确码可再次绑定。"""
     import time as time_mod
 
     engine = _test_engine()
@@ -1185,6 +1233,7 @@ def test_bind_failure_throttle_cooldown_and_recovery() -> None:
 
 
 def test_bind_success_resets_failure_count() -> None:
+    """验证绑定成功会清零失败计数，避免旧失败累积触发冷却。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     _seed_web_user(engine)
@@ -1258,6 +1307,7 @@ def test_bind_failures_cap_evicts_oldest(monkeypatch) -> None:
 
 
 def test_bind_code_generation_rate_limit_and_window_recovery() -> None:
+    """验证绑定码生成限速，窗口滑动后恢复且按用户隔离。"""
     import app.api.channels as channels_api
 
     engine = _test_engine()
@@ -1286,6 +1336,7 @@ def test_bind_code_generation_rate_limit_and_window_recovery() -> None:
 
 
 def test_my_identity_bindings_returns_external_account_scope() -> None:
+    """验证身份查询返回各自的 external_account_scope 字段。"""
     engine = _test_engine()
     users = _seed_web_users(engine)
     with Session(engine) as db:
@@ -1355,6 +1406,7 @@ def test_my_identity_bindings_heals_stale_display_name() -> None:
 
 
 def _seed_wecom_bound_identity(engine, user, external_id: str, scope: str) -> None:
+    """为指定用户写入一条企微身份绑定，可指定外部账号 scope。"""
     with Session(engine) as db:
         db.add(
             ChannelIdentity(
@@ -1370,6 +1422,7 @@ def _seed_wecom_bound_identity(engine, user, external_id: str, scope: str) -> No
 
 
 def test_delete_my_identity_binding_by_external_user_id() -> None:
+    """验证按 external_user_id 解绑只影响目标行，其他身份保持不变。"""
     engine = _test_engine()
     users = _seed_web_users(engine)
     web = users["web"]
@@ -1419,6 +1472,7 @@ def test_delete_my_identity_binding_by_external_user_id() -> None:
 
 
 def test_delete_my_identity_binding_by_external_user_id_404() -> None:
+    """验证解绑不存在的外部身份返回 404，且不改动现有绑定。"""
     engine = _test_engine()
     users = _seed_web_users(engine)
     _seed_wecom_bound_identity(engine, users["web"], "zhangsan", "corpA")

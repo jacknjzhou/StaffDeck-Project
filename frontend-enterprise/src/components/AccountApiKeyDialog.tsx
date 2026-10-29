@@ -45,6 +45,12 @@ type AccountApiCredential = {
 
 type AccountApiCredentialCreated = AccountApiCredential & { api_key: string };
 
+/**
+ * 账号 API 密钥弹窗：管理当前登录账号的全量访问密钥。
+ *
+ * 打开且存在账号时加载密钥列表；创建或轮换成功后仅在弹窗内一次性展示明文，
+ * 创建/操作进行中会忽略关闭请求。
+ */
 export default function AccountApiKeyDialog({
   account,
   open,
@@ -66,6 +72,7 @@ export default function AccountApiKeyDialog({
     [account],
   );
 
+  /** 拉取当前账号的密钥列表；账号为空时直接跳过。 */
   async function load() {
     if (!account) return;
     setLoading(true);
@@ -88,6 +95,7 @@ export default function AccountApiKeyDialog({
     void load();
   }, [account, open]);
 
+  /** 创建账号全量密钥，展示一次性明文后刷新列表。 */
   async function createCredential() {
     if (!account) return;
     setCreating(true);
@@ -109,6 +117,7 @@ export default function AccountApiKeyDialog({
     }
   }
 
+  /** 轮换账号密钥：旧密钥立即失效，返回的新明文一次性展示。 */
   async function rotateCredential(row: AccountApiCredential) {
     if (!account) return;
     setActingId(row.id);
@@ -128,6 +137,7 @@ export default function AccountApiKeyDialog({
     }
   }
 
+  /** 二次确认后禁用账号密钥，并清除该密钥已展示的明文。 */
   async function revokeCredential(row: AccountApiCredential) {
     if (!account || !window.confirm(`确认禁用「${row.name}」？禁用后调用会立即失败。`)) return;
     setActingId(row.id);
@@ -146,6 +156,11 @@ export default function AccountApiKeyDialog({
     }
   }
 
+  /**
+   * 复制当前明文密钥到剪贴板。
+   *
+   * 复制失败时退化为选中只读输入框内容，并提示用户手动复制。
+   */
   async function copyKey() {
     if (!revealed?.api_key) return;
     try {
@@ -287,6 +302,7 @@ export default function AccountApiKeyDialog({
   );
 }
 
+/** 将时间字符串格式化为 zh-CN 日期时间；空值返回 '-'，非法值原样返回。 */
 function formatDate(value?: string | null): string {
   if (!value) return '-';
   const date = new Date(value);

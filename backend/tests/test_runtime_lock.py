@@ -15,6 +15,7 @@ def test_runtime_lock_rejects_second_process_for_same_sqlite_database(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """验证首次加锁会生成数据库旁的锁文件并写入 PID，同进程重入复用同一把锁。"""
     database_path = tmp_path / "staffdeck.db"
     monkeypatch.setattr(
         "app.runtime_lock.get_settings",
@@ -35,6 +36,7 @@ def test_runtime_lock_reports_existing_owner(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """验证锁被其他进程占用时获取失败，抛出的错误信息包含持有者 PID。"""
     import fcntl
 
     database_path = tmp_path / "staffdeck.db"

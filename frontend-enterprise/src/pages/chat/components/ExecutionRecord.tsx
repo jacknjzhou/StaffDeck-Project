@@ -45,6 +45,7 @@ const COT_ICON_MAP: Record<CotTraceIconName, ComponentType<SVGProps<SVGSVGElemen
   tool: IconCotTool,
 };
 
+/** 按图标名渲染思维链（CoT）图标，装饰性内容对辅助技术隐藏。 */
 function CotTraceIcon({ name }: { name: CotTraceIconName }) {
   const Icon = COT_ICON_MAP[name];
   return (
@@ -62,6 +63,12 @@ type ExecutionRecordProps = {
   onToggle: (turnId: string, isExpanded: boolean) => void;
 };
 
+/**
+ * 执行记录组件：渲染可折叠的一轮思维链摘要与明细行。
+ *
+ * 点击摘要按钮时以当前展开状态回调 `onToggle`，由父组件决定实际展开态；
+ * 明细仅在 `expanded` 为真且存在记录时渲染，代码/输出以折叠块展示。
+ */
 export default function ExecutionRecord({
   traceTurnId,
   summary,

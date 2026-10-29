@@ -14,15 +14,20 @@ from app.observability.spans import bind_span_sink, llm_operation
 
 
 class _ForbiddenResponses:
+    """断言型替身：一旦被调用即失败，用于确保走 chat.completions。"""
     def create(self, **_kwargs):  # noqa: ANN003
+        """直接断言失败，证明 OpenAI 兼容模型不会使用 responses 接口。"""
         raise AssertionError("responses.create must not be called for OpenAI-compatible models")
 
 
 class _FakeChatCompletions:
+    """记录 chat.completions 调用并返回固定文本的假实现。"""
     def __init__(self) -> None:
+        """初始化调用记录列表。"""
         self.calls = []
 
     def create(self, **kwargs):  # noqa: ANN003
+        """记录请求参数并返回内容为 ok 的假补全对象。"""
         self.calls.append(kwargs)
         message = type("Message", (), {"content": "ok"})()
         choice = type("Choice", (), {"message": message})()
@@ -30,23 +35,30 @@ class _FakeChatCompletions:
 
 
 class _FakeChat:
+    """持有一个假 completions 客户端的容器。"""
     def __init__(self) -> None:
+        """挂载 _FakeChatCompletions 实例。"""
         self.completions = _FakeChatCompletions()
 
 
 class _FakeOpenAIClient:
+    """假 OpenAI 客户端：responses 禁止调用，chat.completions 可记录。"""
     def __init__(self) -> None:
+        """同时挂载禁用的 responses 与可用的 chat 客户端。"""
         self.responses = _ForbiddenResponses()
         self.chat = _FakeChat()
 
 
 def test_llm_client_uses_600_second_timeout(monkeypatch):
+    """验证客户端读取 600 秒超时，并合并 extra_body 与 thinking 配置。"""
     captured = {}
 
     def fake_decrypt_secret(_value):  # noqa: ANN001
+        """跳过解密，直接返回固定的 api-key。"""
         return "api-key"
 
     def fake_openai(**kwargs):  # noqa: ANN003
+        """记录构造参数并返回假客户端，替换真实 OpenAI 实例。"""
         captured.update(kwargs)
         return _FakeOpenAIClient()
 
@@ -85,6 +97,7 @@ def test_llm_client_uses_600_second_timeout(monkeypatch):
 
 
 def test_llm_client_preserves_custom_openai_base_url(monkeypatch) -> None:
+    """验证自定义 base_url 原样传给底层客户端，不被改写。"""
     captured = {}
     monkeypatch.setattr("app.llm.client.decrypt_secret", lambda _value: "api-key")
     monkeypatch.setattr(
@@ -114,6 +127,7 @@ def test_llm_client_preserves_custom_openai_base_url(monkeypatch) -> None:
 
 
 def test_model_config_create_defaults_to_8192_output_tokens():
+    """验证模型配置创建请求默认输出上限为 8192，且 extra_body 为空。"""
     request = ModelConfigCreateRequest(
         tenant_id="tenant_demo",
         name="demo",
@@ -125,6 +139,7 @@ def test_model_config_create_defaults_to_8192_output_tokens():
 
 
 def _completion_with_content(content):  # noqa: ANN001
+    """构造指定 content 的假补全对象，用于驱动生成逻辑。"""
     return type(
         "Completion",
         (),
@@ -141,6 +156,7 @@ def _completion_with_content(content):  # noqa: ANN001
 
 
 def test_generate_text_uses_chat_completions_only():
+    """验证 generate_text 只走 chat.completions，并按约定组装消息与参数。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -160,10 +176,13 @@ def test_generate_text_uses_chat_completions_only():
 
 
 def test_generate_text_preserves_structured_protocol_diagnostics() -> None:
+    """验证驱动层异常被转换为 LLMError，并保留上游诊断字段。"""
     class FailingDriver:
+        """总是抛出带完整诊断信息的 ProtocolCallError 的假驱动。"""
         request_kind = "responses"
 
         def complete(self, _request):  # noqa: ANN001
+            """抛出带状态码、上游错误码与请求 id 的调用异常。"""
             raise ProtocolCallError(
                 "MODEL_UPSTREAM_ERROR",
                 status_code=422,
@@ -195,6 +214,7 @@ def test_generate_text_preserves_structured_protocol_diagnostics() -> None:
 
 
 def test_chat_completions_driver_preserves_non_stream_and_stream_requests():
+    """验证 ChatCompletionsDriver 的非流式与流式请求都原样透传。"""
     client = _FakeOpenAIClient()
     driver = ChatCompletionsDriver(client)
     request = {"model": "demo-model", "messages": [{"role": "user", "content": "hi"}]}
@@ -208,6 +228,7 @@ def test_chat_completions_driver_preserves_non_stream_and_stream_requests():
 
 
 def test_generate_text_can_disable_provider_thinking():
+    """验证 thinking_mode 为 disabled 时请求携带禁用思考的 extra_body。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -222,6 +243,7 @@ def test_generate_text_can_disable_provider_thinking():
 
 
 def test_generate_text_passes_model_extra_body_and_preserves_thinking_options():
+    """验证模型自带 extra_body 被透传，且不被 thinking 选项覆盖。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "glm-5.2"
@@ -243,11 +265,13 @@ def test_generate_text_passes_model_extra_body_and_preserves_thinking_options():
 
 
 def test_thinking_mode_can_be_scoped_to_specific_models():
+    """验证 thinking 模式可按模型名限定生效范围。"""
     assert _thinking_mode_for_model("disabled", "glm-5.2", "glm-5.2") == "disabled"
     assert _thinking_mode_for_model("disabled", "glm-5.2", "deepseek-v4-pro") == ""
 
 
 def test_generate_text_preserves_plain_user_content_without_json_encoding():
+    """验证纯文本用户输入不做 JSON 编码，原样作为 user 消息内容。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -264,6 +288,7 @@ def test_generate_text_preserves_plain_user_content_without_json_encoding():
 
 
 def test_generate_text_persists_provider_request_metrics():
+    """验证一次生成会记录 started 与 finished 事件及请求指标。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -312,6 +337,7 @@ def test_generate_text_persists_provider_request_metrics():
 
 
 def test_generate_text_preserves_reasoning_tool_arguments_and_raw_provider_output():
+    """验证推理内容、工具参数与原始上游输出被完整保留，密钥被脱敏。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -379,6 +405,7 @@ def test_generate_text_preserves_reasoning_tool_arguments_and_raw_provider_outpu
 
 
 def test_generate_text_observability_omits_embedded_image_data() -> None:
+    """验证可观测事件中内嵌的 base64 图片数据被替换为占位说明。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -414,6 +441,7 @@ def test_generate_text_observability_omits_embedded_image_data() -> None:
 
 
 def test_generate_text_persists_provider_cache_usage_metrics():
+    """验证上游缓存命中的 token 数被记录，并换算出未缓存输入。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -453,6 +481,7 @@ def test_generate_text_persists_provider_cache_usage_metrics():
 
 
 def test_generate_text_retries_empty_response():
+    """验证空回复会被重试，直到拿到非空内容才返回。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -461,6 +490,7 @@ def test_generate_text_retries_empty_response():
     contents = iter(["", None, "ok"])
 
     def fake_create(**kwargs):  # noqa: ANN003
+        """记录调用并按预置序列返回不同 content 的补全。"""
         client.client.chat.completions.calls.append(kwargs)
         return _completion_with_content(next(contents))
 
@@ -471,6 +501,7 @@ def test_generate_text_retries_empty_response():
 
 
 def test_knowledge_router_uses_lexical_fallback_after_first_empty_response():
+    """验证知识路由只尝试一次，首轮空回复即报错而不重试。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -491,6 +522,7 @@ def test_knowledge_router_uses_lexical_fallback_after_first_empty_response():
 
 
 def test_generate_text_records_each_empty_response_retry():
+    """验证每次空回复重试都单独记录 attempt、retry_count 与状态。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -513,6 +545,7 @@ def test_generate_text_records_each_empty_response_retry():
 
 
 def test_generate_text_empty_response_reports_provider_diagnostics():
+    """验证空回复耗尽重试后，错误信息包含 finish_reason、token 诊断且已脱敏。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -522,6 +555,7 @@ def test_generate_text_empty_response_reports_provider_diagnostics():
     client.max_output_tokens = 256
 
     def fake_create(**kwargs):  # noqa: ANN003
+        """记录调用并返回正文为空但带推理与 token 用量的补全。"""
         client.client.chat.completions.calls.append(kwargs)
         message = type(
             "Message",
@@ -555,6 +589,7 @@ def test_generate_text_empty_response_reports_provider_diagnostics():
 
 
 def test_generate_text_reads_text_from_structured_content_parts():
+    """验证结构化 content parts 中的文本会被提取为最终输出。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -568,6 +603,7 @@ def test_generate_text_reads_text_from_structured_content_parts():
 
 
 def test_generate_text_stream_reports_empty_stream_diagnostics():
+    """验证流式空输出会重试，并在错误信息中给出 chunk 与推理诊断。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -577,6 +613,7 @@ def test_generate_text_stream_reports_empty_stream_diagnostics():
     client.max_output_tokens = 256
 
     def fake_create(**kwargs):  # noqa: ANN003
+        """记录调用并返回只含推理、没有正文的单 chunk 流。"""
         client.client.chat.completions.calls.append(kwargs)
         delta = type("Delta", (), {"content": None, "reasoning_content": "reasoning only"})()
         choice = type("Choice", (), {"delta": delta, "finish_reason": "stop"})()
@@ -597,6 +634,7 @@ def test_generate_text_stream_reports_empty_stream_diagnostics():
 
 
 def test_generate_text_stream_records_ttft_and_output_volume():
+    """验证流式生成记录首 token 时延、输出字数与 chunk 结构。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -608,6 +646,7 @@ def test_generate_text_stream_records_ttft_and_output_volume():
     raw_arguments = '{"I_ENAME":"张三"}'
 
     def chunk(content, finish_reason=None, *, reasoning=None, tool_calls=None):  # noqa: ANN001
+        """构造带 delta 与 finish_reason 的单个流式 chunk。"""
         delta = type(
             "Delta",
             (),
@@ -678,6 +717,7 @@ def test_generate_text_stream_records_ttft_and_output_volume():
 
 
 def test_generate_text_projects_conversation_context_messages():
+    """验证对话历史被投影为角色消息，本轮输入只出现在最后一条 user 消息中。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -726,6 +766,7 @@ def test_generate_text_projects_conversation_context_messages():
 
 
 def test_stage_input_uses_stable_history_and_puts_memory_time_and_question_first():
+    """验证阶段输入保持稳定历史前缀，并把记忆、时间与用户问题放在当前消息前部。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -771,6 +812,7 @@ def test_stage_input_uses_stable_history_and_puts_memory_time_and_question_first
 
 
 def test_stage_requests_append_each_input_and_output_to_one_turn_context() -> None:
+    """验证同一轮内各阶段请求依次追加输入与输出，共享同一轮上下文。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -784,6 +826,7 @@ def test_stage_requests_append_each_input_and_output_to_one_turn_context() -> No
     )
 
     def fake_create(**kwargs):  # noqa: ANN003
+        """记录调用并按预置序列返回阶段输出。"""
         client.client.chat.completions.calls.append(kwargs)
         return _completion_with_content(next(outputs))
 
@@ -852,6 +895,7 @@ def test_stage_requests_append_each_input_and_output_to_one_turn_context() -> No
 
 
 def test_stage_json_repair_continues_in_the_same_turn_context() -> None:
+    """验证 JSON 修复请求续在同一轮上下文中，并回写完整消息序列。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -860,6 +904,7 @@ def test_stage_json_repair_continues_in_the_same_turn_context() -> None:
     outputs = iter(["not json", '{"decision":"answer_only"}'])
 
     def fake_create(**kwargs):  # noqa: ANN003
+        """记录调用并按预置序列返回非法与合法 JSON。"""
         client.client.chat.completions.calls.append(kwargs)
         return _completion_with_content(next(outputs))
 
@@ -898,6 +943,7 @@ def test_stage_json_repair_continues_in_the_same_turn_context() -> None:
 
 
 def test_generate_text_keeps_append_only_history_prefix_for_kv_cache() -> None:
+    """验证多次生成的请求保持只追加的稳定前缀，以便命中 KV 缓存。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -939,6 +985,7 @@ def test_generate_text_keeps_append_only_history_prefix_for_kv_cache() -> None:
 
 
 def test_generate_text_projects_conversation_context_images_for_vision_model():
+    """验证视觉模型会收到投影后的图片消息，且当前输入不重复序列化消息。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "gpt-4o-mini"
@@ -982,6 +1029,7 @@ def test_generate_text_projects_conversation_context_images_for_vision_model():
 
 
 def test_generate_text_keeps_memory_capture_history_as_role_messages() -> None:
+    """验证记忆采集保留历史为角色消息，仅把记忆数据放进最后一条 user 消息。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1015,6 +1063,7 @@ def test_generate_text_keeps_memory_capture_history_as_role_messages() -> None:
 
 
 def test_generate_text_does_not_guess_image_support_from_model_name():
+    """验证不会根据模型名猜测图片能力，图片消息照常投影。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "qwen3-6-27b"
@@ -1044,8 +1093,11 @@ def test_generate_text_does_not_guess_image_support_from_model_name():
 
 
 def test_generate_text_retries_without_images_only_after_provider_rejects_them():
+    """验证仅当上游拒绝图片时才降级为纯文本重试，并保留文件路径提示。"""
     class RejectingImageCompletions(_FakeChatCompletions):
+        """遇到图片内容就抛错的补全替身，用于触发降级重试。"""
         def create(self, **kwargs):  # noqa: ANN003
+            """记录请求；含图片时抛 ValueError，否则返回固定文本。"""
             self.calls.append(kwargs)
             content = kwargs["messages"][1]["content"]
             if isinstance(content, list) and any(
@@ -1096,9 +1148,11 @@ def test_generate_text_retries_without_images_only_after_provider_rejects_them()
 
 
 def test_generate_json_extracts_fenced_json(monkeypatch):
+    """验证能从 Markdown 代码块中提取并解析 JSON。"""
     client = object.__new__(LLMClient)
 
     def fake_generate_text(_system_prompt, _payload):
+        """返回包裹在 json 代码块中的固定文本。"""
         return '```json\n{"decision": "continue_active"}\n```'
 
     monkeypatch.setattr(client, "generate_text", fake_generate_text)
@@ -1107,6 +1161,7 @@ def test_generate_json_extracts_fenced_json(monkeypatch):
 
 
 def test_generate_json_requests_json_object_mode():
+    """验证 generate_json 请求 json_object 响应格式并在提示中要求 JSON。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1135,6 +1190,7 @@ def test_generate_json_requests_json_object_mode():
 
 
 def test_internal_json_operation_uses_configured_output_budget():
+    """验证内部 JSON 操作使用模型配置的输出上限。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1154,15 +1210,18 @@ def test_internal_json_operation_uses_configured_output_budget():
 
 
 def test_internal_output_budget_never_increases_smaller_model_config():
+    """验证内部操作的输出预算不会抬高较小的模型配置。"""
     assert operation_output_tokens("router.scene", 256) == 256
 
 
 def test_knowledge_router_does_not_retry_empty_control_plane_responses():
+    """验证控制面操作不重试空回复，而用户可见回复按配置重试。"""
     assert operation_empty_response_retries("knowledge.bucket_route", 2) == 0
     assert operation_empty_response_retries("response.generate", 2) == 2
 
 
 def test_user_visible_response_uses_configured_output_budget():
+    """验证用户可见回复使用模型配置的输出上限。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1194,15 +1253,18 @@ def test_user_visible_response_uses_configured_output_budget():
     ],
 )
 def test_control_plane_operation_uses_model_config_budget(operation):  # noqa: ANN001
+    """验证各控制面操作都直接使用模型配置的输出上限。"""
     assert operation_output_tokens(operation, 8192) == 8192
 
 
 def test_step_agent_uses_model_config_budget() -> None:
+    """验证 step_agent 的运行与修复都使用模型配置的输出上限。"""
     assert operation_output_tokens("step_agent.run", 8192) == 8192
     assert operation_output_tokens("step_agent.repair", 8192) == 8192
 
 
 def test_generate_json_falls_back_when_json_object_mode_is_unsupported():
+    """验证响应格式不被支持时退回普通模式重试。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1210,6 +1272,7 @@ def test_generate_json_falls_back_when_json_object_mode_is_unsupported():
     client.max_output_tokens = 256
 
     def fake_create(**kwargs):  # noqa: ANN003
+        """按是否带 response_format 分别抛错或返回 JSON 文本。"""
         client.client.chat.completions.calls.append(kwargs)
         if "response_format" in kwargs:
             raise ValueError("Unsupported parameter: response_format")
@@ -1235,6 +1298,7 @@ def test_generate_json_falls_back_when_json_object_mode_is_unsupported():
 
 
 def test_generate_json_falls_back_when_json_object_mode_returns_empty():
+    """验证 json_object 模式返回空内容时退回普通模式重试。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1242,6 +1306,7 @@ def test_generate_json_falls_back_when_json_object_mode_returns_empty():
     client.max_output_tokens = 256
 
     def fake_create(**kwargs):  # noqa: ANN003
+        """带 response_format 时返回空内容，否则返回合法 JSON。"""
         client.client.chat.completions.calls.append(kwargs)
         if "response_format" in kwargs:
             return _completion_with_content("")
@@ -1255,10 +1320,12 @@ def test_generate_json_falls_back_when_json_object_mode_returns_empty():
 
 
 def test_generate_json_retries_invalid_json(monkeypatch):
+    """验证非法 JSON 会触发修复重试并最终解析成功。"""
     client = object.__new__(LLMClient)
     calls = iter(["not json", '{"ok": true}'])
 
     def fake_generate_text(_system_prompt, _payload):
+        """依次返回非法与合法 JSON 文本。"""
         return next(calls)
 
     monkeypatch.setattr(client, "generate_text", fake_generate_text)
@@ -1267,11 +1334,13 @@ def test_generate_json_retries_invalid_json(monkeypatch):
 
 
 def test_generate_json_retry_keeps_original_payload(monkeypatch):
+    """验证修复重试保留原始 payload，并附带上一轮输出与修复标记。"""
     client = object.__new__(LLMClient)
     payloads = []
     calls = iter(["not json", '{"ok": true}'])
 
     def fake_generate_text(_system_prompt, payload):
+        """记录每次 payload 并依次返回非法与合法 JSON。"""
         payloads.append(payload)
         return next(calls)
 
@@ -1284,10 +1353,12 @@ def test_generate_json_retry_keeps_original_payload(monkeypatch):
 
 
 def test_generate_json_repairs_unescaped_string_quotes_without_retry(monkeypatch):
+    """验证字符串内未转义的引号可本地修复，无需额外请求。"""
     client = object.__new__(LLMClient)
     payloads = []
 
     def fake_generate_text(_system_prompt, payload, response_format=None):  # noqa: ANN001, ARG001
+        """返回含未转义引号的 JSON 文本。"""
         payloads.append(payload)
         return (
             '{"decision": "start_new_task", "target_skill_id": "purchase", '
@@ -1310,9 +1381,11 @@ def test_generate_json_repairs_unescaped_string_quotes_without_retry(monkeypatch
 
 
 def test_generate_json_repairs_trailing_commas_and_string_newlines(monkeypatch):
+    """验证尾随逗号与字符串内裸换行可被本地修复。"""
     client = object.__new__(LLMClient)
 
     def fake_generate_text(_system_prompt, _payload, response_format=None):  # noqa: ANN001, ARG001
+        """返回带尾随逗号与裸换行的 JSON 文本。"""
         return '{"ok": true, "reason": "第一行\n第二行",}'
 
     monkeypatch.setattr(client, "generate_text", fake_generate_text)
@@ -1321,11 +1394,13 @@ def test_generate_json_repairs_trailing_commas_and_string_newlines(monkeypatch):
 
 
 def test_generate_json_allows_multiple_repair_attempts(monkeypatch):
+    """验证修复可多轮进行，每轮记录递增的 attempt 与解析错误。"""
     client = object.__new__(LLMClient)
     payloads = []
     calls = iter(["not json", '{"reason": "用户称呼为"', '{"ok": true}'])
 
     def fake_generate_text(_system_prompt, payload):
+        """记录 payload 并依次返回逐步可修复的 JSON。"""
         payloads.append(payload)
         return next(calls)
 
@@ -1338,10 +1413,12 @@ def test_generate_json_allows_multiple_repair_attempts(monkeypatch):
 
 
 def test_generate_json_sequence_accepts_consecutive_objects_without_retry(monkeypatch):
+    """验证连续 JSON 对象序列可一次解析，不触发修复重试。"""
     client = object.__new__(LLMClient)
     payloads = []
 
     def fake_generate_text(_system_prompt, payload, response_format=None):  # noqa: ANN001, ARG001
+        """返回两个换行分隔的 JSON 对象。"""
         payloads.append(payload)
         return (
             '{"action":"tool","tool_name":"skill.first","arguments":{}}\n'
@@ -1359,6 +1436,7 @@ def test_generate_json_sequence_accepts_consecutive_objects_without_retry(monkey
 
 
 def test_generate_json_keeps_consecutive_object_recovery_opt_in(monkeypatch):
+    """验证连续对象恢复需显式开启，默认仍按单对象解析并重试。"""
     client = object.__new__(LLMClient)
     payloads = []
     calls = iter(
@@ -1369,6 +1447,7 @@ def test_generate_json_keeps_consecutive_object_recovery_opt_in(monkeypatch):
     )
 
     def fake_generate_text(_system_prompt, payload, response_format=None):  # noqa: ANN001, ARG001
+        """依次返回粘连的两个对象与单个合法对象。"""
         payloads.append(payload)
         return next(calls)
 
@@ -1383,8 +1462,7 @@ def test_generate_json_keeps_consecutive_object_recovery_opt_in(monkeypatch):
 
 
 def _length_truncated_completion():
-    """A completion whose reasoning phase exhausted the budget (finish_reason=length,
-    empty content, non-empty reasoning_content)."""
+    """构造推理阶段耗尽预算而被截断的补全（finish_reason=length、正文为空）。"""
     message = type(
         "Message",
         (),
@@ -1400,20 +1478,23 @@ def _length_truncated_completion():
 
 
 def _successful_completion(content="ok"):
+    """构造带正文且 finish_reason 为 stop 的正常补全。"""
     message = type("Message", (), {"content": content, "reasoning_content": None})()
     choice = type("Choice", (), {"message": message, "finish_reason": "stop"})()
     return type("Completion", (), {"choices": [choice], "id": "resp_demo"})()
 
 
 def _recording_create(client, factory):
-    """Replace the fake client's create with one that records calls and delegates."""
+    """把假客户端的 create 替换为记录调用后再委托工厂的实现。"""
     def _create(**kwargs):
+        """记录本次请求参数并调用工厂生成返回对象。"""
         client.client.chat.completions.calls.append(kwargs)
         return factory()
     return _create
 
 
 def test_generate_text_preserves_token_budget_on_reasoning_length_retry():
+    """验证推理被截断后的重试保持配置的输出预算，不被放大或缩小。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1436,6 +1517,7 @@ def test_generate_text_preserves_token_budget_on_reasoning_length_retry():
 
 
 def test_generate_text_preserves_budget_above_escalation_ceiling():
+    """验证配置预算高于升级上限时，重试仍保留原值而不被压到上限。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1457,6 +1539,7 @@ def test_generate_text_preserves_budget_above_escalation_ceiling():
 
 
 def test_generate_text_stream_preserves_token_budget_on_reasoning_length_retry():
+    """验证流式重试同样保持配置的输出预算。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1466,11 +1549,13 @@ def test_generate_text_stream_preserves_token_budget_on_reasoning_length_retry()
     client.max_output_tokens = 4096
 
     def length_chunk():
+        """构造只含推理且 finish_reason 为 length 的流式 chunk。"""
         delta = type("Delta", (), {"content": None, "reasoning_content": "thinking"})()
         choice = type("Choice", (), {"delta": delta, "finish_reason": "length"})()
         return type("Chunk", (), {"id": "chunk_demo", "choices": [choice]})()
 
     def success_chunks():
+        """构造返回正文并正常结束的流式 chunk 列表。"""
         delta = type("Delta", (), {"content": "ok", "reasoning_content": None})()
         choice = type("Choice", (), {"delta": delta, "finish_reason": "stop"})()
         return [type("Chunk", (), {"id": "chunk_demo", "choices": [choice]})()]
@@ -1488,6 +1573,7 @@ def test_generate_text_stream_preserves_token_budget_on_reasoning_length_retry()
 
 
 def test_generate_text_stream_preserves_budget_above_escalation_ceiling():
+    """验证流式场景下高于上限的预算在重试时也不被压缩。"""
     client = object.__new__(LLMClient)
     client.client = _FakeOpenAIClient()
     client.model = "demo-model"
@@ -1497,11 +1583,13 @@ def test_generate_text_stream_preserves_budget_above_escalation_ceiling():
     client.max_output_tokens = 65536
 
     def length_chunk():
+        """构造只含推理且 finish_reason 为 length 的流式 chunk。"""
         delta = type("Delta", (), {"content": None, "reasoning_content": "thinking"})()
         choice = type("Choice", (), {"delta": delta, "finish_reason": "length"})()
         return type("Chunk", (), {"id": "chunk_demo", "choices": [choice]})()
 
     def success_chunks():
+        """构造返回正文并正常结束的流式 chunk 列表。"""
         delta = type("Delta", (), {"content": "ok", "reasoning_content": None})()
         choice = type("Choice", (), {"delta": delta, "finish_reason": "stop"})()
         return [type("Chunk", (), {"id": "chunk_demo", "choices": [choice]})()]

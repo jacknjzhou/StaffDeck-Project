@@ -11,6 +11,7 @@ const cytoscapeMock = vi.hoisted(() => vi.fn());
 
 vi.mock('cytoscape', () => ({ default: cytoscapeMock }));
 
+/** 构造 cytoscape 集合的空 mock，链式方法均返回集合自身。 */
 function emptyCollection() {
   const collection = {
     length: 0,
@@ -29,6 +30,7 @@ function emptyCollection() {
   return collection;
 }
 
+/** 构造 cytoscape 核心实例 mock，所有查询均返回同一个空集合。 */
 function createCore() {
   const collection = emptyCollection();
   return {
@@ -45,6 +47,7 @@ function createCore() {
   };
 }
 
+/** 构造带默认字段的知识概念测试数据，可用 overrides 覆盖任意字段。 */
 function concept(
   conceptId: string,
   overrides: Partial<KnowledgeConceptRead> = {},
@@ -85,6 +88,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('KnowledgeGraphVisualization', () => {
+  /** 验证默认只显示活跃概念，点击「显示已归档」后统计数随之增加。 */
   it('shows active concepts by default and reveals archived concepts on request', async () => {
     render(
       <KnowledgeGraphVisualization
@@ -104,6 +108,7 @@ describe('KnowledgeGraphVisualization', () => {
     await waitFor(() => expect(screen.getByLabelText('知识图谱统计').textContent).toContain('2'));
   });
 
+  /** 验证可从选中节点的详情打开已有的完整内容查看器。 */
   it('opens the existing full concept viewer from the selected node detail', async () => {
     const onViewConcept = vi.fn();
     const selected = concept('topics/hub', { title: 'Knowledge Hub' });
@@ -120,6 +125,7 @@ describe('KnowledgeGraphVisualization', () => {
     expect(onViewConcept).toHaveBeenCalledWith(selected);
   });
 
+  /** 验证安全渲染 Markdown 摘要，并可在图谱内跳转可解析的链接。 */
   it('renders a safe Markdown summary and navigates resolvable graph links', async () => {
     render(
       <KnowledgeGraphVisualization
@@ -156,6 +162,7 @@ describe('KnowledgeGraphVisualization', () => {
     expect(screen.getByText('Term details')).toBeTruthy();
   });
 
+  /** 验证节点超过 500 时需先显式筛选范围，才会真正绘制图谱。 */
   it('requires an explicit filtered scope before drawing more than 500 nodes', async () => {
     const concepts = Array.from({ length: 501 }, (_, index) => concept(`topics/node-${index}`, {
       title: index === 317 ? 'only-match' : `Topic ${index}`,

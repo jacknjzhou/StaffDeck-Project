@@ -50,6 +50,8 @@ GENERAL_SKILL_TOOL_PREFIX = "general_skill."
 
 
 class StepAgent:
+    """单步执行器：把会话上下文投影成阶段载荷，调用 LLM 产出下一步动作。"""
+
     def run(
         self,
         message: str,
@@ -64,6 +66,11 @@ class StepAgent:
         conversation_context: dict[str, object] | None = None,
         current_knowledge: list[dict[str, object]] | None = None,
     ) -> StepAgentResult:
+        """执行一次 Step Agent 调用，并把模型输出解析为 StepAgentResult。
+
+        action 缺失时按 tool_call、knowledge_query、handoff、reply 等线索推断；
+        LLMError 原样抛出，其它异常（如输出不符合 schema）统一包装成 LLMError。
+        """
         compact_knowledge = compact_knowledge_context(current_knowledge)
         compact_repair = _compact_repair_context(repair_context)
         active_skill = (
@@ -130,6 +137,7 @@ class StepAgent:
 
 
 def _step_agent_slots(slots: dict[str, object] | None) -> dict[str, object]:
+    """过滤内部调度器槽位（如 _graph_pending_steps），只下发给模型业务槽位。"""
     if not isinstance(slots, dict):
         return {}
     return {
@@ -142,6 +150,7 @@ def _step_agent_slots(slots: dict[str, object] | None) -> dict[str, object]:
 def _compact_repair_context(
     repair_context: dict[str, object] | None,
 ) -> dict[str, object] | None:
+    """精简修复上下文：知识续跑时不重复下发结果，改为指向 retrieved_knowledge。"""
     if not isinstance(repair_context, dict):
         return None
     projected = dict(repair_context)
@@ -158,6 +167,7 @@ def _step_instructions(
     awaiting_input: dict[str, object] | None,
     available_tools: list[dict[str, object]],
 ) -> str:
+    """按修复原因、检索知识、等待输入与可用工具拼装本次调用要附带的指令文本。"""
     sections = [PROMPT_PATH.read_text(encoding="utf-8").strip()]
     repair_reason = str((repair_context or {}).get("reason") or "")
     if repair_context and repair_reason not in {"tool_continuation", "knowledge_continuation"}:
@@ -185,6 +195,11 @@ def _available_tools_for_step(
     slots: dict[str, object] | None,
     tools: list[Tool],
 ) -> list[dict[str, object]]:
+    """挑出当前步骤允许调用的工具，投影为 name/description/input_schema。
+
+    无 active skill 或当前步骤时返回空列表；当前步骤的 expected_user_info 未
+    集齐时只看当前步骤，否则一并考虑 next_steps 的 allowed_actions。
+    """
     if not isinstance(active_skill, dict):
         return []
     current_step = active_skill.get("current_step")
@@ -241,6 +256,7 @@ def _available_tools_for_step(
 
 
 def _slot_has_value(slots: dict[str, object], field: str) -> bool:
+    """判断槽位是否已填：None、空串、空列表与空字典都视为未填。"""
     value = slots.get(field)
     return value is not None and value != "" and value != [] and value != {}
 
@@ -249,6 +265,7 @@ def _infer_action(
     result: StepAgentResult,
     router_decision: RouterDecision | None,
 ) -> str:
+    """模型未给出 action 时，按结果里已有的字段推断动作类型。"""
     if result.tool_call:
         return "call_tool"
     if result.knowledge_query:

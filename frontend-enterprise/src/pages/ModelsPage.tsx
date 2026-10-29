@@ -90,6 +90,7 @@ const BLANK_MODEL_FORM: ModelForm = {
   enabled: true,
 };
 
+/** 将模型上游错误详情拼装为可读的中文提示；没有详情时返回兜底文案。 */
 export function modelProviderErrorMessage(
   error: ModelProviderErrorDetail | null | undefined,
   fallback: string,
@@ -104,6 +105,7 @@ export function modelProviderErrorMessage(
   return parts.join('；');
 }
 
+/** 从 ApiError 的响应体中解析上游模型错误详情；结构不符或解析失败时返回 null。 */
 function providerErrorFromApiError(error: ApiError): ModelProviderErrorDetail | null {
   try {
     const payload = JSON.parse(error.body) as { detail?: unknown };
@@ -116,6 +118,7 @@ function providerErrorFromApiError(error: ApiError): ModelProviderErrorDetail | 
   }
 }
 
+/** 统一转换模型操作异常：优先还原上游错误详情，否则回退到通用错误文案。 */
 export function modelActionError(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
     const providerError = providerErrorFromApiError(error);
@@ -125,6 +128,12 @@ export function modelActionError(error: unknown, fallback: string): string {
 }
 const MODEL_CONFIGS_UPDATED_EVENT = 'ultrarag-enterprise-model-configs-updated';
 
+/**
+ * 企业版模型配置页。
+ *
+ * 负责模型列表的加载、搜索与分页，并通过弹窗完成新建、编辑、删除和连通性测试。
+ * 启用状态下保存前会先请求后端验证模型可用性，失败时保留弹窗并提示原因。
+ */
 export default function ModelsPage({
   currentUser,
   onLogout,
@@ -146,9 +155,16 @@ export default function ModelsPage({
   const [form, setForm] = useState<ModelForm>(BLANK_MODEL_FORM);
   const [availableProtocols, setAvailableProtocols] = useState<ModelForm['api_protocol'][]>(['openai_chat_completions']);
 
+  /** 以键值方式局部更新模型表单，其余字段保持不变。 */
   const updateForm = <K extends keyof ModelForm>(key: K, value: ModelForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
+  /**
+   * 拉取当前租户的模型配置列表，并广播配置更新事件。
+   *
+   * @param showLoading 是否展示表格加载态，默认 true；后台静默刷新时传 false。
+   * @returns 请求结束（成功或失败）后 resolve 的 Promise。
+   */
   const load = (showLoading = true) => {
     if (showLoading) setLoading(true);
     return api
@@ -171,6 +187,7 @@ export default function ModelsPage({
   }, []);
 
   useEffect(() => {
+    /** 响应全局「新建模型」事件，直接打开空白的新建弹窗。 */
     const openCreate = () => createBlank();
     window.addEventListener(OPEN_MODEL_CREATE_EVENT, openCreate);
     return () => window.removeEventListener(OPEN_MODEL_CREATE_EVENT, openCreate);
@@ -192,6 +209,7 @@ export default function ModelsPage({
   const defaultRow = rows.find((item) => item.is_default);
   const providerCount = new Set(rows.map((item) => item.api_protocol).filter(Boolean)).size;
 
+  /** 用行数据填充编辑表单并打开弹窗；API Key 留空表示不修改。 */
   function edit(row: ModelConfigRead) {
     setSelected(row);
     setForm({
@@ -209,18 +227,26 @@ export default function ModelsPage({
     setEditorOpen(true);
   }
 
+  /** 清空选中项并以空白表单打开新建模型弹窗。 */
   function createBlank() {
     setSelected(null);
     setForm(BLANK_MODEL_FORM);
     setEditorOpen(true);
   }
 
+  /** 关闭编辑弹窗并重置选中项；保存进行中时忽略该操作。 */
   function closeEditor() {
     if (saving) return;
     setEditorOpen(false);
     setSelected(null);
   }
 
+  /**
+   * 校验表单并提交模型配置的新建或更新请求。
+   *
+   * 启用状态下请求会附带 verify_before_save 参数先做连通性验证；
+   * 校验不通过或请求失败时提示错误且不关闭弹窗。
+   */
   async function save() {
     const name = form.name.trim();
     const model = form.model.trim();
@@ -287,6 +313,7 @@ export default function ModelsPage({
     }
   }
 
+  /** 删除确认弹窗的提交处理：调用删除接口后刷新列表并关闭弹窗。 */
   async function confirmDelete() {
     const row = deleteTarget;
     if (!row || deleting) return;
@@ -303,6 +330,7 @@ export default function ModelsPage({
     }
   }
 
+  /** 将指定模型设为默认模型，成功后刷新列表。 */
   async function setDefault(row: ModelConfigRead) {
     try {
       await api.post(`/api/enterprise/model-configs/${row.id}/set-default?tenant_id=${TENANT_ID}`);
@@ -313,6 +341,12 @@ export default function ModelsPage({
     }
   }
 
+  /**
+   * 手动触发单个模型的连通性测试。
+   *
+   * 同一模型测试进行中时直接返回 false；超时会中止请求并提示重试。
+   * @returns 测试是否通过。
+   */
   async function test(row: ModelConfigRead): Promise<boolean> {
     if (testingModelIdsRef.current.has(row.id)) return false;
     testingModelIdsRef.current.add(row.id);
@@ -349,6 +383,7 @@ export default function ModelsPage({
     }
   }
 
+  /** 渲染行内操作菜单：编辑、设为默认、测试与删除。 */
   function renderActions(row: ModelConfigRead) {
     const isTesting = testingModelIds.has(row.id);
     return (
@@ -430,6 +465,7 @@ export default function ModelsPage({
     },
   ];
 
+  /** 渲染移动端列表中的模型卡片。 */
   const renderMobileCard = (row: ModelConfigRead) => (
     <article
       className="min-w-0 rounded-[8px] border border-[#eceef1] bg-white p-[14px]"
@@ -687,6 +723,7 @@ export default function ModelsPage({
   );
 }
 
+/** 表单字段容器：在控件上方展示统一风格的标签。 */
 function LabeledField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-[6px]">

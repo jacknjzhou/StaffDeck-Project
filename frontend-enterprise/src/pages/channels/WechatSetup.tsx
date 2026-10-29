@@ -30,6 +30,12 @@ const PRIMARY_BUTTON_CLASS =
 const OUTLINE_BUTTON_CLASS =
   'h-8 gap-1 rounded-[10px] border-[#e3e7f1] px-5 text-[12px] font-normal text-[#464c5e] hover:bg-[#f6f6f6] hover:text-[#18181a]';
 
+/**
+ * 微信渠道扫码接入面板：获取二维码、轮询接入状态并处理手机端数字验证码。
+ *
+ * - 通过递增 qrSessionRef 作废旧请求，避免切换绑定后旧轮询覆盖新状态。
+ * - 卸载或切换绑定时清理定时器并重置扫码流程。
+ */
 export default function WechatSetup({
   binding,
   onChanged,
@@ -56,6 +62,7 @@ export default function WechatSetup({
     resetQrFlow();
   }, [binding.id]);
 
+  /** 清除待执行的状态轮询定时器，并把引用置空。 */
   function clearPollTimer() {
     if (pollTimerRef.current != null) {
       window.clearTimeout(pollTimerRef.current);
@@ -63,6 +70,7 @@ export default function WechatSetup({
     }
   }
 
+  /** 重置扫码流程：作废当前会话、清理定时器与验证码并收起二维码。 */
   function resetQrFlow() {
     qrSessionRef.current += 1;
     clearPollTimer();
@@ -72,6 +80,7 @@ export default function WechatSetup({
     setQrStatus('');
   }
 
+  /** 请求微信二维码并渲染为图片，成功后开始轮询接入状态。 */
   async function startQr(bindingId: string) {
     const session = ++qrSessionRef.current;
     clearPollTimer();
@@ -100,6 +109,7 @@ export default function WechatSetup({
     }
   }
 
+  /** 安排 2 秒后再次轮询接入状态，重复调用会先清掉旧定时器。 */
   function scheduleStatusPoll(bindingId: string, code: string, session: number) {
     clearPollTimer();
     pollTimerRef.current = window.setTimeout(() => {
@@ -107,6 +117,7 @@ export default function WechatSetup({
     }, 2000);
   }
 
+  /** 轮询一次接入状态：成功或过期时终止轮询，其余状态继续下一轮。 */
   async function pollQrStatus(bindingId: string, code: string, session: number) {
     try {
       const submittedCode = verifyCodeRef.current.trim();
@@ -143,6 +154,7 @@ export default function WechatSetup({
     }
   }
 
+  /** 提交手机端显示的数字验证码，供后续轮询请求携带。 */
   function submitVerifyCode() {
     const code = verifyCode.trim();
     if (!code) return;

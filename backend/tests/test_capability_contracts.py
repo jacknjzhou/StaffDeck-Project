@@ -6,6 +6,7 @@ from app.capabilities import GeneralSkillFile, GeneralSkillPackage
 
 
 def test_general_skill_package_is_an_immutable_content_snapshot() -> None:
+    """验证通用技能包是不可变内容快照：文件内容与 SKILL.md 一致，改写版本号会被拒绝。"""
     package = GeneralSkillPackage(
         package_id="weather",
         slug="weather",

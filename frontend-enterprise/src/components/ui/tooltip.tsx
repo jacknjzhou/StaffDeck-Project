@@ -3,6 +3,7 @@ import { Tooltip as TooltipPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/** Tooltip 上下文 Provider：为子树提供统一的悬停延迟配置。 */
 function TooltipProvider({
   delayDuration = 0,
   ...props
@@ -16,18 +17,21 @@ function TooltipProvider({
   )
 }
 
+/** Tooltip 根组件：包裹触发器与内容，管理显示状态。 */
 function Tooltip({
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
   return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
 }
 
+/** Tooltip 触发器：悬停或聚焦时显示对应提示内容。 */
 function TooltipTrigger({
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
   return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
 }
 
+/** Tooltip 内容浮层：经 Portal 渲染，带箭头与出入场动画。 */
 function TooltipContent({
   className,
   sideOffset = 0,

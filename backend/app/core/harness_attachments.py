@@ -32,7 +32,7 @@ from app.session.session_schema import ChatAttachmentRead
 
 @dataclass(frozen=True)
 class ValidatedTaskImagePayload:
-    """Ephemeral vision payload; never serialize it into TaskRequirement."""
+    """仅在内存中使用的视觉载荷，绝不序列化进 TaskRequirement。"""
 
     attachment_id: str
     filename: str
@@ -50,6 +50,11 @@ def materialize_task_attachments(
     user_id: str = "",
     db: Session | None = None,
 ) -> list[dict[str, Any]]:
+    """把聊天附件落到当前 TaskFrame 的 workspace，并返回可序列化的描述列表。
+
+    有原始暂存文件时写入二进制并计算 sha256；否则退化为写入提取文本（如 PDF）。
+    写入失败或无法落盘时只把描述标记为 materialized=False 并附原因，不抛异常。
+    """
     if not attachments:
         return []
     workspace = harness_task_workspace_path(
@@ -191,7 +196,10 @@ def materialize_task_attachments(
 def validated_task_image_payloads(
     attachments: list[ChatAttachmentRead],
 ) -> list[ValidatedTaskImagePayload]:
-    """Build in-memory-only image payloads using the upload round-trip validator."""
+    """用上传往返校验器构造仅存在于内存的图片载荷。
+
+    只处理 kind 为 image 且带 data_url 的附件，校验不通过的图片直接跳过。
+    """
 
     payloads: list[ValidatedTaskImagePayload] = []
     for attachment in attachments:
@@ -216,12 +224,11 @@ def isolated_attachment_context(
     attachments: list[dict[str, Any]],
     image_payloads: list[ValidatedTaskImagePayload] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """Split attachment metadata from this TaskFrame's validated vision input.
+    """把本 TaskFrame 的附件元数据与已校验的视觉输入拆开。
 
-    The returned descriptors are safe to serialize in ``task_requirement``.
-    Image data URLs are projected through a one-message conversation context,
-    which lets ``LLMClient`` use its existing multimodal protocol without
-    importing any outer conversation history.
+    返回的描述列表可直接序列化进 task_requirement；图片 data_url 经单条消息的对话上下文
+    交给 LLMClient 走既有 multimodal 协议，不引入外层对话历史。未随本轮交付的图片会被
+    标记为 vision_available=False 并附上原因。
     """
 
     descriptors: list[dict[str, Any]] = []
@@ -305,6 +312,10 @@ def isolated_attachment_context(
 def _validated_image_data_url(
     attachment: ChatAttachmentRead,
 ) -> tuple[str | None, str | None]:
+    """用上传往返校验器校验图片附件，返回 (data_url, 错误信息)。
+
+    校验不通过时 data_url 为 None，错误信息取自 ValueError。
+    """
     try:
         normalized = validate_chat_turn_attachments(
             [attachment],
@@ -320,6 +331,7 @@ def _descriptor_image_attachment(
     descriptor: dict[str, Any],
     data_url: str,
 ) -> ChatAttachmentRead | None:
+    """把附件描述还原成 ChatAttachmentRead，非图片或字段非法时返回 None。"""
     if descriptor.get("kind") != "image":
         return None
     try:
@@ -337,6 +349,10 @@ def _descriptor_image_attachment(
 
 
 def _write_workspace_bytes(workspace: Path, relative_path: str, data: bytes) -> None:
+    """把字节原子写入 workspace 下的相对路径。
+
+    先写同目录临时文件再 os.replace；父目录解析后必须仍在 workspace 内，否则抛 ValueError。
+    """
     destination = workspace.joinpath(*relative_path.split("/"))
     destination.parent.mkdir(parents=True, exist_ok=True)
     resolved_parent = destination.parent.resolve(strict=True)

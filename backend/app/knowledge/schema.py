@@ -8,6 +8,8 @@ from app.capability_scope import CapabilityScope
 
 
 class KnowledgeBaseCreateRequest(BaseModel):
+    """创建知识库的请求体：租户、名称、描述与能力作用域。"""
+
     tenant_id: str
     name: str
     description: Optional[str] = None
@@ -16,6 +18,8 @@ class KnowledgeBaseCreateRequest(BaseModel):
 
 
 class KnowledgeBaseUpdateRequest(BaseModel):
+    """更新知识库的请求体；字段为 None 表示本次不改动该项。"""
+
     tenant_id: str
     name: Optional[str] = None
     description: Optional[str] = None
@@ -25,12 +29,16 @@ class KnowledgeBaseUpdateRequest(BaseModel):
 
 
 class KnowledgeBaseRollbackRequest(BaseModel):
+    """把知识库回滚到指定版本的请求体，按 agent 与版本号定位快照。"""
+
     tenant_id: str
     agent_id: str
     version: str
 
 
 class KnowledgeBaseRead(BaseModel):
+    """知识库读取视图：基础信息、分支同步状态与文档/桶/分片统计。"""
+
     id: str
     tenant_id: str
     name: str
@@ -52,6 +60,8 @@ class KnowledgeBaseRead(BaseModel):
 
 
 class KnowledgeDocumentUploadRequest(BaseModel):
+    """上传知识文档的请求体，文件以 base64 传入并落到指定知识库。"""
+
     tenant_id: str
     knowledge_base_id: Optional[str] = None
     filename: str
@@ -62,6 +72,8 @@ class KnowledgeDocumentUploadRequest(BaseModel):
 
 
 class KnowledgeIngestJobRead(BaseModel):
+    """入库任务读取视图：阶段、进度、错误与起止时间，供前端轮询展示。"""
+
     id: str
     tenant_id: str
     knowledge_base_id: str
@@ -81,6 +93,8 @@ class KnowledgeIngestJobRead(BaseModel):
 
 
 class KnowledgeDocumentRead(BaseModel):
+    """知识文档读取视图：文件元信息、所属知识库版本与桶/分片数量。"""
+
     id: str
     tenant_id: str
     knowledge_base_id: str
@@ -100,6 +114,8 @@ class KnowledgeDocumentRead(BaseModel):
 
 
 class KnowledgeDocumentUpdateRequest(BaseModel):
+    """更新知识文档的请求体；expected_updated_at 用于可选的乐观并发校验。"""
+
     tenant_id: str
     title: Optional[str] = None
     status: Optional[Literal["ready", "processing", "failed", "archived"]] = None
@@ -109,6 +125,8 @@ class KnowledgeDocumentUpdateRequest(BaseModel):
 
 
 class KnowledgeBucketRead(BaseModel):
+    """知识桶读取视图：桶键、摘要、token 估算与分片数量。"""
+
     id: str
     tenant_id: str
     knowledge_base_id: str
@@ -127,6 +145,8 @@ class KnowledgeBucketRead(BaseModel):
 
 
 class KnowledgeBucketUpdateRequest(BaseModel):
+    """更新知识桶标题、摘要与 metadata 的请求体。"""
+
     tenant_id: str
     title: Optional[str] = None
     summary: Optional[str] = None
@@ -134,6 +154,8 @@ class KnowledgeBucketUpdateRequest(BaseModel):
 
 
 class KnowledgeChunkRead(BaseModel):
+    """知识分片读取视图：分片序号、正文、摘要与来源引用。"""
+
     id: str
     tenant_id: str
     knowledge_base_id: str
@@ -151,6 +173,8 @@ class KnowledgeChunkRead(BaseModel):
 
 
 class KnowledgeChunkUpdateRequest(BaseModel):
+    """修改单个知识分片正文、摘要或 metadata 的请求体。"""
+
     tenant_id: str
     content: Optional[str] = None
     summary: Optional[str] = None
@@ -158,6 +182,8 @@ class KnowledgeChunkUpdateRequest(BaseModel):
 
 
 class KnowledgeConceptRead(BaseModel):
+    """OKF 概念读取视图：概念类型、正文、frontmatter、链接、引用与来源。"""
+
     id: str
     tenant_id: str
     knowledge_base_id: str
@@ -180,6 +206,8 @@ class KnowledgeConceptRead(BaseModel):
 
 
 class KnowledgeConceptUpdateRequest(BaseModel):
+    """更新概念正文与状态的请求体，可重新挂靠到另一篇文档。"""
+
     tenant_id: str
     content_md: str
     document_id: Optional[str] = None
@@ -187,6 +215,8 @@ class KnowledgeConceptUpdateRequest(BaseModel):
 
 
 class KnowledgeOkfImportRequest(BaseModel):
+    """导入 OKF 压缩包的请求体，文件以 base64 传入并可指定归属 agent。"""
+
     tenant_id: str
     knowledge_base_id: Optional[str] = None
     filename: str
@@ -195,6 +225,8 @@ class KnowledgeOkfImportRequest(BaseModel):
 
 
 class KnowledgeSearchRequest(BaseModel):
+    """知识检索请求：查询文本、作用范围、轮次/条数/token 预算与检索模式。"""
+
     tenant_id: str
     agent_id: Optional[str] = None
     query: str
@@ -215,6 +247,8 @@ class KnowledgeSearchRequest(BaseModel):
 
 
 class KnowledgeSearchResponse(BaseModel):
+    """知识检索响应：命中的桶、分片、概念、引用与证据包，附带路由轨迹。"""
+
     selected_buckets: list[KnowledgeBucketRead] = Field(default_factory=list)
     chunks: list[KnowledgeChunkRead] = Field(default_factory=list)
     trace: list[dict[str, Any]] = Field(default_factory=list)
@@ -227,6 +261,8 @@ class KnowledgeSearchResponse(BaseModel):
 
 
 class KnowledgeDiscoveryRead(BaseModel):
+    """知识发现项读取视图：建议类型（skill/tool/warning）、依据与来源引用。"""
+
     id: str
     tenant_id: str
     knowledge_base_id: str

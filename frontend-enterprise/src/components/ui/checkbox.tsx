@@ -4,6 +4,9 @@ import { Checkbox as CheckboxPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { CheckIcon } from "lucide-react"
 
+/**
+ * 基于 Radix 的复选框,选中时展示对勾图标,并沿用统一的边框、焦点与校验态样式。
+ */
 function Checkbox({
   className,
   ...props

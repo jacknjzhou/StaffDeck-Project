@@ -5,6 +5,11 @@ import { Separator as SeparatorPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * 分隔线组件：横向时高 1px 并占满宽度，纵向时宽 1px 并撑满父容器高度。
+ *
+ * `decorative` 默认为 true，此时仅作视觉修饰、对辅助技术隐藏。
+ */
 function Separator({
   className,
   orientation = "horizontal",

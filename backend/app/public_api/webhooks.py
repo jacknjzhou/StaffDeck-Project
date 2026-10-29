@@ -31,6 +31,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
 def _read(row: WebhookEndpoint) -> WebhookRead:
+    """把端点行转成对外视图;签名密钥只回传固定掩码。"""
     return WebhookRead(
         id=row.id,
         name=row.name,
@@ -44,6 +45,7 @@ def _read(row: WebhookEndpoint) -> WebhookRead:
 
 
 def _validate_webhook_url(raw: str) -> str:
+    """校验回调地址:仅允许 http(s),且不得带用户信息或片段,否则报 422 WEBHOOK_URL_INVALID。"""
     parsed = urlsplit(raw.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise PublicAPIError(422, "WEBHOOK_URL_INVALID", "Webhook URL must be HTTP or HTTPS.")
@@ -57,6 +59,7 @@ def list_webhooks(
     principal: PublicPrincipal = Depends(require_scopes("webhooks:read")),
     db: Session = Depends(get_session),
 ) -> list[WebhookRead]:
+    """列出当前 API 客户端创建的 webhook 端点,按创建时间倒序。"""
     if not principal.client_id:
         return []
     rows = db.exec(
@@ -76,6 +79,7 @@ def create_webhook(
     principal: PublicPrincipal = Depends(require_scopes("webhooks:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """创建 webhook 端点并生成仅本次响应返回的签名密钥;仅租户级密钥可用。"""
     if not principal.client_id or principal.agent_id:
         raise PublicAPIError(403, "TENANT_KEY_REQUIRED", "A tenant key is required.")
     secret = f"whsec_{secrets.token_urlsafe(32)}"
@@ -99,6 +103,7 @@ def pause_webhook(
     principal: PublicPrincipal = Depends(require_scopes("webhooks:write")),
     db: Session = Depends(get_session),
 ) -> WebhookRead:
+    """把端点置为 paused,此后不再为其暂存新的投递。"""
     row = _owned_endpoint(db, principal, endpoint_id)
     row.status = "paused"
     row.updated_at = utc_now()
@@ -115,6 +120,7 @@ def update_webhook(
     principal: PublicPrincipal = Depends(require_scopes("webhooks:write")),
     db: Session = Depends(get_session),
 ) -> WebhookRead:
+    """更新端点的名称、回调地址与订阅事件集合,状态保持不变。"""
     row = _owned_endpoint(db, principal, endpoint_id)
     row.name = request.name.strip()
     row.url = _validate_webhook_url(str(request.url))
@@ -132,6 +138,7 @@ def resume_webhook(
     principal: PublicPrincipal = Depends(require_scopes("webhooks:write")),
     db: Session = Depends(get_session),
 ) -> WebhookRead:
+    """把端点恢复为 active,重新接收事件投递。"""
     row = _owned_endpoint(db, principal, endpoint_id)
     row.status = "active"
     row.updated_at = utc_now()
@@ -147,6 +154,7 @@ def test_webhook(
     principal: PublicPrincipal = Depends(require_scopes("webhooks:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """创建一个 webhook.test 事件并立即入队投递,用于验证回调地址是否可用。"""
     row = _owned_endpoint(db, principal, endpoint_id)
     event_id = f"evt_test_{secrets.token_hex(12)}"
     delivery = WebhookDelivery(
@@ -175,6 +183,7 @@ def delete_webhook(
     principal: PublicPrincipal = Depends(require_scopes("webhooks:write")),
     db: Session = Depends(get_session),
 ) -> None:
+    """删除端点记录;端点不存在或不属于当前客户端时统一报 404。"""
     row = _owned_endpoint(db, principal, endpoint_id)
     db.delete(row)
     db.commit()
@@ -186,6 +195,7 @@ def list_webhook_deliveries(
     principal: PublicPrincipal = Depends(require_scopes("webhooks:read")),
     db: Session = Depends(get_session),
 ) -> list[dict]:
+    """列出该端点最近 100 条投递记录,含状态码、重试次数与最近错误。"""
     _owned_endpoint(db, principal, endpoint_id)
     rows = db.exec(
         select(WebhookDelivery)
@@ -212,6 +222,7 @@ def list_webhook_deliveries(
 def _owned_endpoint(
     db: Session, principal: PublicPrincipal, endpoint_id: str
 ) -> WebhookEndpoint:
+    """取端点并校验租户与客户端归属,不存在或越权统一抛 404 WEBHOOK_NOT_FOUND。"""
     row = db.get(WebhookEndpoint, endpoint_id)
     if (
         not row
@@ -223,6 +234,7 @@ def _owned_endpoint(
 
 
 def event_matches(patterns: list[str], event_type: str) -> bool:
+    """按订阅模式匹配事件类型:支持 "*"、精确匹配与 "xxx.*" 前缀通配。"""
     for pattern in patterns:
         if pattern == "*" or pattern == event_type:
             return True
@@ -240,6 +252,11 @@ def stage_webhook_deliveries(
     event_type: str,
     payload: dict,
 ) -> list[str]:
+    """为订阅了该事件的活跃端点暂存投递记录,返回新建的投递 ID 列表。
+
+    只在该凭证所属客户端范围内匹配端点;不提交事务,由调用方同一事务内提交;
+    凭证不存在时返回空列表。
+    """
     credential = db.get(APICredential, credential_id)
     if not credential:
         return []
@@ -269,11 +286,17 @@ def stage_webhook_deliveries(
 
 
 def enqueue_webhook_deliveries(delivery_ids: list[str]) -> None:
+    """把投递记录逐个交给异步任务队列,由 deliver_webhook 实际发送。"""
     for delivery_id in delivery_ids:
         enqueue_async_job("public_api.webhook", deliver_webhook, delivery_id)
 
 
 def deliver_webhook(delivery_id: str) -> None:
+    """投递单条 webhook:抢占租约后签名 POST,失败按退避安排重试。
+
+    用条件更新抢占投递权,抢不到(已投递或租约未过期)直接返回;端点停用则标记
+    abandoned;结果统一经 _finish_webhook_delivery 带围栏写回并释放租约。
+    """
     with Session(engine) as db:
         owner = f"whlease_{secrets.token_hex(12)}"
         now = utc_now()
@@ -370,7 +393,10 @@ def _finish_webhook_delivery(
     owner: str,
     values: dict[str, object],
 ) -> bool:
-    """Fence completion so an expired/duplicate worker cannot overwrite it."""
+    """带围栏写回投递结果:仅当本次 owner 仍持有 sending 租约时才生效。
+
+    返回是否写入成功;租约已被接管或过期时回滚并返回 False。
+    """
 
     result = db.exec(
         update(WebhookDelivery)
@@ -395,6 +421,7 @@ def _finish_webhook_delivery(
 
 
 def _schedule_retry(delivery: WebhookDelivery, error: str) -> None:
+    """按指数退避安排下次重试;达到最大尝试次数则标记 abandoned 并停止重试。"""
     delivery.last_error = error[:1000]
     if delivery.attempt_count >= get_settings().public_api_webhook_max_attempts:
         delivery.status = "abandoned"
@@ -406,10 +433,12 @@ def _schedule_retry(delivery: WebhookDelivery, error: str) -> None:
 
 
 def datetime_now_timestamp() -> int:
+    """取当前 UTC 的秒级时间戳,用于 webhook 签名头。"""
     return int(datetime.now(UTC).timestamp())
 
 
 def enqueue_due_webhook_deliveries() -> None:
+    """扫描已到期的待发投递并批量入队,供定时任务周期调用。"""
     with Session(engine) as db:
         rows = db.exec(
             select(WebhookDelivery).where(

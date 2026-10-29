@@ -83,6 +83,7 @@ MCP_APP_RESOURCE_MAX_BYTES = 10 * 1024 * 1024
 
 
 class A2ATaskEventRead(BaseModel):
+    """A2A 任务事件的对外视图：序号、事件类型与载荷快照。"""
     sequence: int
     event_type: str
     data: dict[str, Any] = Field(default_factory=dict)
@@ -90,6 +91,7 @@ class A2ATaskEventRead(BaseModel):
 
 
 class A2ATaskRunRead(BaseModel):
+    """A2A 任务运行记录的对外视图，内联该次运行的事件时间线。"""
     id: str
     direction: str
     remote_task_id: str | None = None
@@ -110,6 +112,7 @@ class A2ATaskRunRead(BaseModel):
 
 
 class CodexA2AAdapterRead(BaseModel):
+    """Codex A2A 适配器的只读配置视图，凭证仅以布尔值表示是否已配置。"""
     enabled: bool
     endpoint_url: str
     agent_card_url: str
@@ -120,6 +123,10 @@ class CodexA2AAdapterRead(BaseModel):
 
 
 def tool_read(row: Tool, metadata: dict[str, Any] | None = None) -> ToolRead:
+    """把 Tool 数据行拼装成 API 响应模型。
+    config_json 中除 execution 外的键原样作为 mcp_config 返回，execution 段单独
+    解析为 execution_policy；metadata 由调用方传入绑定元数据，缺省为空字典。
+    """
     config = dict(row.config_json or {})
     return ToolRead(
         id=row.id,
@@ -154,6 +161,10 @@ def list_tools(
     agent_id: str | None = Query(default=None),
     db: Session = Depends(get_session),
 ) -> list[ToolRead]:
+    """列出当前 agent 范围内可见的工具，可按 bucket 过滤。
+    可见性由 agent_id 决定：员工范围只看自身绑定，缺省看工具广场；
+    每个工具附带该范围内的资源绑定元数据。
+    """
     ensure_tenant(db, tenant_id)
     rows = _visible_tool_rows(db, tenant_id, bucket, agent_id)
     metadata_by_id = resource_binding_metadata(db, tenant_id, agent_id, "tool")
@@ -170,6 +181,9 @@ def list_tool_buckets(
     agent_id: str | None = Query(default=None),
     db: Session = Depends(get_session),
 ) -> list[ToolBucketRead]:
+    """汇总可见工具的 bucket 分布，含总数、启用数、停用数与工具 id 列表。
+    结果按总数降序、桶名升序排列；未分桶的工具统一归入“未分桶”。
+    """
     ensure_tenant(db, tenant_id)
     rows = _visible_tool_rows(db, tenant_id, None, agent_id)
     grouped: dict[str, ToolBucketRead] = {}
@@ -194,6 +208,10 @@ def create_tool(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> ToolRead:
+    """创建工具并落库对应的可见性绑定，返回新建工具的响应视图。
+    同一租户内 name 唯一，重复时返回 409；员工范围创建为私有绑定，
+    广场范围创建需管理员权限。
+    """
     ensure_tenant(db, request.tenant_id)
     existing = db.exec(
         select(Tool).where(Tool.tenant_id == request.tenant_id, Tool.name == request.name)
@@ -254,6 +272,10 @@ def probe_tool(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> ToolProbeResponse:
+    """在不落库的前提下试跑一次工具配置，返回预览数据与推断的输出 schema。
+    按 tool_type 分派：mcp 直连执行、a2a 走执行器、其余按 HTTP 请求探测；
+    失败以 success=False 携带 ToolError 返回，不抛 HTTP 异常。
+    """
     ensure_current_user_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
     if request.tool_type == "mcp":
@@ -363,6 +385,7 @@ def probe_tool(
     dependencies=[Depends(require_agent_scope_viewer)],
 )
 def get_codex_a2a_adapter() -> CodexA2AAdapterRead:
+    """返回 Codex A2A 适配器的端点、命令与超时等只读配置。"""
     settings = get_settings()
     return CodexA2AAdapterRead(
         enabled=bool(settings.codex_a2a_enabled),
@@ -387,6 +410,9 @@ def list_a2a_task_runs(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_session),
 ) -> list[A2ATaskRunRead]:
+    """列出某个 A2A 工具的持久化任务运行记录，并内联各自的事件时间线。
+    按 created_at 倒序取最近 limit 条；对非 A2A 工具返回 400。
+    """
     row = _get_tool(db, tenant_id, tool_id)
     _ensure_tool_visible(db, tenant_id, row, agent_id)
     if row.tool_type != "a2a":
@@ -433,6 +459,9 @@ def cancel_a2a_task_run(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> A2ATaskRunRead:
+    """请求取消一个 A2A 任务，只置位 cancel_requested 由执行侧收尾。
+    已处于终态（completed/failed/canceled/rejected）的运行保持原状。
+    """
     row = _get_tool(db, tenant_id, tool_id)
     ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     _ensure_tool_visible(db, tenant_id, row, agent_id)
@@ -457,6 +486,7 @@ def get_tool(
     agent_id: str | None = Query(default=None),
     db: Session = Depends(get_session),
 ) -> ToolRead:
+    """按 id 读取工具详情，并校验其在当前 agent 范围内的可见性。"""
     row = _get_tool(db, tenant_id, tool_id)
     _ensure_tool_visible(db, tenant_id, row, agent_id)
     metadata_by_id = resource_binding_metadata(db, tenant_id, agent_id, "tool")
@@ -471,6 +501,10 @@ def update_tool(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> ToolRead:
+    """更新工具配置并维护可见性绑定，必要时为员工克隆私有副本。
+    员工范围内编辑广场工具会先克隆出私有 Tool 行，并把原绑定置为 deleted；
+    名称不可修改，违反时返回 400。
+    """
     row = _get_tool(db, request.tenant_id, tool_id)
     agent = ensure_agent_scope_manager(db, request.tenant_id, agent_id, current_user)
     _ensure_tool_visible(db, request.tenant_id, row, agent_id)
@@ -550,6 +584,10 @@ def delete_tool(
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """按调用范围删除或隐藏工具。
+    员工范围只解绑该员工的绑定并返回 hidden；
+    广场范围或租户管理员才真正删除 Tool 行并返回 deleted。
+    """
     row = _get_tool(db, tenant_id, tool_id)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
@@ -583,6 +621,7 @@ def test_tool(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> ToolResult:
+    """以当前用户身份同步执行一次工具调用，用于控制台联调。"""
     ensure_current_user_tenant(request.tenant_id, current_user)
     row = _get_tool(db, request.tenant_id, tool_id)
     _ensure_tool_visible(db, request.tenant_id, row, agent_id)
@@ -597,6 +636,7 @@ def test_tool(
 
 
 def _get_tool(db: Session, tenant_id: str, tool_id: str) -> Tool:
+    """读取租户内的工具行，不存在或跨租户时返回 404。"""
     ensure_tenant(db, tenant_id)
     row = db.get(Tool, tool_id)
     if not row or row.tenant_id != tenant_id:
@@ -608,6 +648,7 @@ def _a2a_task_run_read(
     run: A2ATaskRun,
     events: list[A2ATaskEventRead],
 ) -> A2ATaskRunRead:
+    """把 A2ATaskRun 数据行转换成响应模型，并注入给定的事件列表。"""
     return A2ATaskRunRead(
         id=run.id,
         direction=run.direction,
@@ -635,6 +676,9 @@ def _visible_tool_rows(
     bucket: str | None = None,
     agent_id: str | None = None,
 ) -> list[Tool]:
+    """取当前 agent 范围内可见的工具行，支持按 bucket 过滤。
+    agent_id 存在但查不到员工时返回 404；bucket 为空或 __all__ 时不过滤。
+    """
     agent = get_agent(db, tenant_id, agent_id)
     if agent_id and not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -645,6 +689,9 @@ def _visible_tool_rows(
 
 
 def _ensure_tool_visible(db: Session, tenant_id: str, row: Tool, agent_id: str | None) -> None:
+    """校验工具对给定 agent 范围可见，否则返回 404。
+    员工范围要求存在有效绑定；广场范围要求资源仍留在广场中。
+    """
     agent = get_agent(db, tenant_id, agent_id)
     if agent_id and not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -661,6 +708,7 @@ def _ensure_tool_visible(db: Session, tenant_id: str, row: Tool, agent_id: str |
 def _tool_binding(
     db: Session, tenant_id: str, agent_id: str, tool_id: str
 ) -> AgentResourceBinding | None:
+    """查询某 agent 对某工具的有效资源绑定，已删除的墓碑记录不计入。"""
     return db.exec(
         select(AgentResourceBinding).where(
             AgentResourceBinding.tenant_id == tenant_id,
@@ -675,6 +723,9 @@ def _tool_binding(
 def _ensure_private_tool_for_agent(
     db: Session, tenant_id: str, agent: AgentProfile, row: Tool
 ) -> Tool:
+    """为员工克隆一份私有工具副本；非广场工具原样返回。
+    克隆会生成员工专属的唯一 name，并复制连接配置、schema 与能力范围。
+    """
     if not is_open_gallery_resource(db, tenant_id, "tool", row):
         return row
     now = utc_now()
@@ -706,6 +757,7 @@ def _ensure_private_tool_for_agent(
 
 
 def _tool_name_taken(db: Session, tenant_id: str, name: str, exclude_id: str | None = None) -> bool:
+    """判断租户内该工具名是否已被占用，可排除指定 id 以便更新自身。"""
     stmt = select(Tool).where(Tool.tenant_id == tenant_id, Tool.name == name)
     if exclude_id:
         stmt = stmt.where(Tool.id != exclude_id)
@@ -719,6 +771,7 @@ def _unique_tool_name(
     agent_id: str,
     exclude_id: str | None = None,
 ) -> str:
+    """为员工私有工具生成不冲突的名称：base-agentId 前缀，冲突时追加序号。"""
     base = (base_name or "tool").strip() or "tool"
     suffix_base = f"{base}-{agent_id[:8]}"
     candidate = suffix_base
@@ -730,11 +783,13 @@ def _unique_tool_name(
 
 
 def _normalize_bucket(value: str | None) -> str:
+    """规范化 bucket 名称，空白值归入“未分桶”。"""
     normalized = (value or "").strip()
     return normalized or "未分桶"
 
 
 def _normalize_probe_url(url: str) -> str:
+    """把探测用的相对路径补全为工具基础地址，绝对 URL 原样返回。"""
     stripped = url.strip()
     if stripped.startswith("/"):
         return f"{get_settings().normalized_tool_base_url}{stripped}"
@@ -747,6 +802,9 @@ def _tool_config(
     *,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """组装写入 config_json 的配置，并保留已有执行策略。
+    传入 execution_policy 时以新策略覆盖；否则沿用 existing 中的 execution 段。
+    """
     config = {
         key: value for key, value in (mcp_config or {}).items() if key != "execution"
     }
@@ -758,6 +816,7 @@ def _tool_config(
 
 
 def _read_execution_policy(config: dict[str, Any]) -> ToolExecutionPolicy | None:
+    """从 config 中解析执行策略，缺失或校验失败时返回 None。"""
     execution = config.get("execution")
     if not isinstance(execution, dict):
         return None
@@ -768,12 +827,14 @@ def _read_execution_policy(config: dict[str, Any]) -> ToolExecutionPolicy | None
 
 
 def _probe_timeout_seconds(request: ToolProbeRequest) -> float:
+    """探测超时：优先取请求携带的执行策略，否则回落到全局工具超时。"""
     if request.execution_policy is not None:
         return request.execution_policy.timeout_seconds
     return get_settings().tool_timeout_seconds
 
 
 def _response_preview(response: httpx.Response) -> Any:
+    """把响应体转成预览数据：JSON 直接返回，文本截断到 2000 字符。"""
     try:
         return response.json()
     except Exception:
@@ -782,6 +843,9 @@ def _response_preview(response: httpx.Response) -> Any:
 
 
 def _infer_json_schema(value: Any) -> dict[str, Any]:
+    """由样本值递归推断 JSON Schema，用于给工具输出留出初始结构。
+    对象的所有键都记为 required；空数组的 items 为空 schema。
+    """
     if isinstance(value, dict):
         properties = {str(key): _infer_json_schema(item) for key, item in value.items()}
         return {"type": "object", "properties": properties, "required": list(properties.keys())}
@@ -805,6 +869,7 @@ def _infer_json_schema(value: Any) -> dict[str, Any]:
 
 
 def _server_connection(row: MCPServer) -> MCPServerConnection:
+    """把 MCPServer 行还原成结构化的连接配置。"""
     return MCPServerConnection(
         transport=row.transport,  # type: ignore[arg-type]
         url=row.url,
@@ -836,12 +901,14 @@ def _connection_to_client_config(connection: MCPServerConnection) -> dict[str, A
 
 
 def _server_client_config(row: MCPServer) -> dict[str, Any]:
+    """在连接配置基础上补上 MCP Apps 模式，供 mcp_client 消费。"""
     config = _connection_to_client_config(_server_connection(row))
     config["apps_mode"] = row.apps_mode or "disabled"
     return config
 
 
 def mcp_server_read(row: MCPServer, db: Session) -> MCPServerRead:
+    """把 MCPServer 行拼装成响应模型，并统计其已导入的工具数量。"""
     tool_count = len(db.exec(select(Tool.id).where(Tool.mcp_server_id == row.id)).all())
     return MCPServerRead(
         id=row.id,
@@ -864,8 +931,9 @@ def mcp_server_read(row: MCPServer, db: Session) -> MCPServerRead:
 
 
 def _update_inherited_mcp_tool_scopes(db: Session, server: MCPServer) -> None:
-    """Cascade a server default without overwriting explicit child-tool choices."""
-
+    """把工具集的能力范围级联到继承该默认值的子工具。
+    capability_scope_inherited 为 False 的子工具已显式选过范围，保持原值不动。
+    """
     for tool in db.exec(select(Tool).where(Tool.mcp_server_id == server.id)).all():
         if tool.capability_scope_inherited is False:
             continue
@@ -881,6 +949,7 @@ def _update_inherited_mcp_tool_scopes(db: Session, server: MCPServer) -> None:
 def list_mcp_servers(
     tenant_id: str = Query(...), db: Session = Depends(get_session)
 ) -> list[MCPServerRead]:
+    """列出租户内全部 MCP 工具集，按名称升序。"""
     ensure_tenant(db, tenant_id)
     rows = db.exec(
         select(MCPServer).where(MCPServer.tenant_id == tenant_id).order_by(MCPServer.name)
@@ -894,6 +963,7 @@ def create_mcp_server(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> MCPServerRead:
+    """创建 MCP 工具集；同一租户内 name 重复时返回 409。"""
     ensure_tenant(db, request.tenant_id)
     ensure_open_gallery_admin(request.tenant_id, current_user)
     existing = db.exec(
@@ -936,6 +1006,7 @@ def create_mcp_server(
 def get_mcp_server(
     server_id: str, tenant_id: str = Query(...), db: Session = Depends(get_session)
 ) -> MCPServerRead:
+    """按 id 读取租户内的 MCP 工具集，不存在或跨租户时返回 404。"""
     row = _get_mcp_server(db, tenant_id, server_id)
     return mcp_server_read(row, db)
 
@@ -949,6 +1020,10 @@ def get_mcp_app_resource(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> MCPAppResourceRead:
+    """读取 MCP App 的 UI 资源内容，并校验可见性与 MIME。
+    仅 apps_mode=auto 的工具集可用；资源必须由某个工具声明，
+    返回的 meta 只保留白名单内的 CSP 域与权限。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     server = _get_mcp_server(db, tenant_id, server_id)
     if server.apps_mode != "auto":
@@ -982,6 +1057,10 @@ def call_mcp_app_tool(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> MCPAppToolCallResponse:
+    """在 MCP App 内代理一次工具调用，并按需落库调用事件。
+    工具需在 mcp_apps.visibility 中包含 app；非只读工具须 confirm_side_effect；
+    SOP 专用工具还要求 active_skill_id 在允许列表内。
+    """
     ensure_current_user_tenant(request.tenant_id, current_user)
     server = _get_mcp_server(db, request.tenant_id, server_id)
     if server.apps_mode != "auto":
@@ -1048,6 +1127,7 @@ def update_mcp_server(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> MCPServerRead:
+    """更新 MCP 工具集配置；能力范围变更会级联到继承该默认值的子工具。"""
     row = _get_mcp_server(db, request.tenant_id, server_id)
     ensure_open_gallery_admin(request.tenant_id, current_user)
     conn = request.connection
@@ -1085,6 +1165,9 @@ def delete_mcp_server(
     remove_tools: bool = Query(default=True),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """删除 MCP 工具集，或在员工范围内解绑其同步工具。
+    remove_tools 为真时连同其 Tool 行一起删除；员工范围只隐藏该员工可见的绑定。
+    """
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
         # 工具集是租户级资源:员工范围内只解绑该员工可见的同步工具,不动 server 本身
@@ -1288,6 +1371,7 @@ def _discover_response(
     *,
     apps_mode: str = "disabled",
 ) -> MCPDiscoverResponse:
+    """执行 tools/list 探测并把结果包装成响应模型，异常转成 ToolError。"""
     config = _connection_to_client_config(connection)
     config["apps_mode"] = apps_mode
     try:
@@ -1327,6 +1411,7 @@ def _discover_response(
 
 
 def _synced_mcp_tool_config(tool: MCPDiscoveredTool) -> dict[str, Any]:
+    """生成同步工具时写入 config 的最小片段：叶子名、注解与 App 声明。"""
     config: dict[str, Any] = {"tool": tool.name}
     if tool.annotations:
         config["mcp_annotations"] = dict(tool.annotations)
@@ -1336,11 +1421,13 @@ def _synced_mcp_tool_config(tool: MCPDiscoveredTool) -> dict[str, Any]:
 
 
 def _apps_negotiated(capabilities: dict[str, Any]) -> bool:
+    """判断服务端 capabilities 是否协商了 MCP Apps 扩展。"""
     extensions = capabilities.get("extensions")
     return isinstance(extensions, dict) and MCP_APPS_EXTENSION_ID in extensions
 
 
 def _app_tool_for_uri(db: Session, server: MCPServer, uri: str) -> Tool | None:
+    """找出声明了该 App 资源 URI 且对 App 可见的工具。"""
     for tool in db.exec(select(Tool).where(Tool.mcp_server_id == server.id)).all():
         app = (tool.config_json or {}).get("mcp_apps")
         if isinstance(app, dict) and str(app.get("resource_uri") or "") == uri:
@@ -1351,6 +1438,7 @@ def _app_tool_for_uri(db: Session, server: MCPServer, uri: str) -> Tool | None:
 
 
 def _app_tool_by_name(db: Session, server: MCPServer, name: str) -> Tool | None:
+    """按完整名或叶子名在工具集内查找工具。"""
     normalized = str(name or "").strip()
     for tool in db.exec(select(Tool).where(Tool.mcp_server_id == server.id)).all():
         leaf = str((tool.config_json or {}).get("tool") or "").strip()
@@ -1360,6 +1448,9 @@ def _app_tool_by_name(db: Session, server: MCPServer, name: str) -> Tool | None:
 
 
 def _extract_app_resource(result: dict[str, Any], uri: str) -> tuple[str, dict[str, Any]]:
+    """从 resources/read 结果中取出 App 资源文本与安全元数据。
+    仅接受 MCP App MIME，文本须为 UTF-8 且不超过 10 MiB。
+    """
     contents = result.get("contents")
     if not isinstance(contents, list):
         raise MCPClientError("MCP resources/read 未返回 contents。")
@@ -1382,6 +1473,7 @@ def _extract_app_resource(result: dict[str, Any], uri: str) -> tuple[str, dict[s
 
 
 def _safe_app_resource_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    """裁剪 App 资源 UI 元数据，仅保留 https CSP 域与 clipboard-write 权限。"""
     ui = meta.get("ui") if isinstance(meta.get("ui"), dict) else {}
     csp = ui.get("csp") if isinstance(ui.get("csp"), dict) else {}
     raw_permissions = ui.get("permissions")
@@ -1408,6 +1500,7 @@ def _safe_app_resource_meta(meta: dict[str, Any]) -> dict[str, Any]:
 
 
 def _server_tools_by_leaf_name(db: Session, server_id: str) -> dict[str, Tool]:
+    """按 MCP 叶子工具名索引某工具集下已导入的 Tool 行。"""
     rows = db.exec(select(Tool).where(Tool.mcp_server_id == server_id)).all()
     result: dict[str, Tool] = {}
     for row in rows:
@@ -1418,12 +1511,14 @@ def _server_tools_by_leaf_name(db: Session, server_id: str) -> dict[str, Tool]:
 
 
 def _scoped_tool_name(server_name: str, tool_name: str) -> str:
+    """拼接工具集的全局工具名：server.tool。"""
     return f"{server_name}.{tool_name}"
 
 
 def _remove_mcp_server_from_agent(
     db: Session, tenant_id: str, agent: AgentProfile, server_id: str
 ) -> dict[str, str]:
+    """在员工范围内解绑该工具集的全部同步工具；无任何绑定则返回 404。"""
     _get_mcp_server(db, tenant_id, server_id)
     tool_ids = db.exec(
         select(Tool.id).where(Tool.tenant_id == tenant_id, Tool.mcp_server_id == server_id)
@@ -1444,6 +1539,7 @@ def _remove_mcp_server_from_agent(
 
 
 def _get_mcp_server(db: Session, tenant_id: str, server_id: str) -> MCPServer:
+    """读取租户内的 MCP 工具集行，不存在或跨租户时返回 404。"""
     ensure_tenant(db, tenant_id)
     row = db.get(MCPServer, server_id)
     if not row or row.tenant_id != tenant_id:

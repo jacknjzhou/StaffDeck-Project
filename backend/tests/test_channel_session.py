@@ -8,6 +8,7 @@ from app.db.models import ChannelBinding, ChatSession, Tenant, User
 
 
 def _test_engine(with_unique_index: bool = False):
+    """创建内存 SQLite 引擎，可选建立会话唯一索引以模拟生产约束。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -26,6 +27,7 @@ def _test_engine(with_unique_index: bool = False):
 
 
 def _seed(db: Session) -> tuple[ChannelBinding, User]:
+    """写入测试租户、用户与渠道绑定，返回用例所需的绑定与用户对象。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     user = User(tenant_id="tenant_demo", username="wechat_wxid_1", password_hash="x")
     binding = ChannelBinding(
@@ -41,6 +43,7 @@ def _seed(db: Session) -> tuple[ChannelBinding, User]:
 
 
 def test_create_then_reuse_channel_session() -> None:
+    """验证首次消息创建会话并写入标题，同一外部会话复用时沿用原会话且不覆盖标题。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding, user = _seed(db)
@@ -62,6 +65,7 @@ def test_create_then_reuse_channel_session() -> None:
 
 
 def test_user_mismatch_archives_legacy_session_and_starts_clean() -> None:
+    """验证同一外部会话换了用户后归档旧会话（清空投递目标）并为新身份新建会话。"""
     engine = _test_engine(with_unique_index=True)
     with Session(engine) as db:
         binding, old_user = _seed(db)
@@ -104,6 +108,7 @@ def test_user_mismatch_archives_legacy_session_and_starts_clean() -> None:
 
 
 def test_title_truncated_to_20_chars() -> None:
+    """验证超长首条消息作为标题时被截断为 20 个字符。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding, user = _seed(db)
@@ -113,6 +118,7 @@ def test_title_truncated_to_20_chars() -> None:
 
 
 def test_different_conversations_get_different_sessions() -> None:
+    """验证不同 external_conv_id 会创建互不相同的会话。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding, user = _seed(db)
@@ -123,6 +129,7 @@ def test_different_conversations_get_different_sessions() -> None:
 
 
 def test_channel_target_json_roundtrip() -> None:
+    """验证 channel_target_json 写入后重新读取仍原样还原。"""
     engine = _test_engine()
     with Session(engine) as db:
         binding, user = _seed(db)
@@ -136,6 +143,7 @@ def test_channel_target_json_roundtrip() -> None:
 
 
 def test_unique_index_rejects_duplicate_anchor() -> None:
+    """验证唯一索引拒绝重复占用同一会话锚点，且已存在会话不受影响。"""
     engine = _test_engine(with_unique_index=True)
     with Session(engine) as db:
         binding, user = _seed(db)
@@ -160,6 +168,7 @@ def test_unique_index_rejects_duplicate_anchor() -> None:
 
 
 def test_web_sessions_coexist_under_unique_index() -> None:
+    """验证 channel 为空的多个 web 会话在唯一索引下可共存。"""
     engine = _test_engine(with_unique_index=True)
     with Session(engine) as db:
         _seed(db)

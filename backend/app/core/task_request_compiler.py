@@ -19,6 +19,7 @@ CapabilityKind = Literal[
 
 
 class CapabilityDescriptor(BaseModel):
+    """单个能力的描述：标识、类型、入参模式与当前可用性。"""
     capability_id: str
     name: str
     kind: CapabilityKind
@@ -31,6 +32,7 @@ class CapabilityDescriptor(BaseModel):
 
 
 class CapabilityCatalogEntry(BaseModel):
+    """能力目录的轻量条目，只保留列举所需字段以控制提示词体积。"""
     capability_id: str
     name: str
     kind: CapabilityKind
@@ -39,6 +41,7 @@ class CapabilityCatalogEntry(BaseModel):
 
 
 class CapabilityManifest(BaseModel):
+    """当前 agent 的能力清单：可用能力、目录摘要与失效引用。"""
     available: list[CapabilityDescriptor] = Field(default_factory=list)
     catalog: list[CapabilityCatalogEntry] = Field(default_factory=list)
     catalog_total: int = 0
@@ -48,12 +51,14 @@ class CapabilityManifest(BaseModel):
     snapshot_revision: str = ""
 
     def allowed_names(self) -> set[str]:
+        """返回可用且名称非空的能力名称集合，供白名单校验使用。"""
         return {
             item.name for item in self.available if item.available and str(item.name or "").strip()
         }
 
 
 class TaskRequirement(BaseModel):
+    """交给执行器的单次任务需求，聚合帧信息、SOP 上下文与能力清单。"""
     task_frame_id: str
     kind: Literal["sop", "conversation"]
     goal: str
@@ -80,6 +85,7 @@ class TaskRequirement(BaseModel):
 
 
 class TaskExecutionResult(BaseModel):
+    """执行器返回的单次任务结果，包含状态、槽位更新、产物与错误。"""
     task_frame_id: str
     status: Literal[
         "completed",
@@ -105,7 +111,7 @@ class TaskExecutionResult(BaseModel):
 
 
 class TaskRequestCompiler:
-    """Compiles one persisted frame and the current SOP node into one task."""
+    """把已持久化的任务帧与当前 SOP 节点编译成一份可执行的任务需求。"""
 
     def compile(
         self,
@@ -121,6 +127,11 @@ class TaskRequestCompiler:
         out_of_scope_task_intents: list[str] | None = None,
         client_timezone: str | None = None,
     ) -> TaskRequirement:
+        """按帧、会话与技能上下文组装 TaskRequirement。
+
+        仅 sop 帧会带入会话中已填的槽位；当前节点的 expected_user_info 用于推导
+        required_slots，强制能力与知识库要求会追加进 completion_criteria。
+        """
         current_node = _current_node(skill, frame.target_step_id or session.active_step_id)
         expected_fields = _text_list((current_node or {}).get("expected_user_info"))
         known_slots = (
@@ -218,6 +229,11 @@ def _current_time_text(client_timezone: str | None = None) -> str:
 
 
 def current_step_capability_refs(skill: Skill | None, step_id: str | None) -> dict[str, list[str]]:
+    """汇总当前节点引用的能力：通用技能、工具与知识库。
+
+    capability_refs 是主来源，同时兼容旧 SOP 的 call_tool: 动作与 knowledge_scope，
+    合并去重后按三类返回。
+    """
     node = _current_node(skill, step_id)
     refs = (node or {}).get("capability_refs")
     result = {
@@ -247,13 +263,11 @@ def current_step_authorization_skill_ids(
     skill: Skill | None,
     step_id: str | None,
 ) -> set[str]:
-    """Return every SOP identity that authorizes the current expanded node.
+    """返回当前展开节点涉及的每个 SOP 身份，用于能力授权判定。
 
-    Nested SOP nodes execute inside the parent's persisted task frame, so the
-    runtime ``Skill`` keeps the parent ``skill_id``.  The expansion metadata is
-    the authoritative source for the child call path.  Keeping both identities
-    preserves parent-level tool grants while allowing a child-only grant to
-    remain valid after expansion.
+    嵌套 SOP 节点在父级任务帧内执行，运行时 Skill 仍保留父级 skill_id，
+    展开元数据里的 nested_sop_path 与 source_sop_id 才是子调用链的权威来源。
+    同时保留父子两级身份，既保留父级工具授权，也允许子级独有授权在展开后继续生效。
     """
     if skill is None:
         return set()
@@ -271,6 +285,7 @@ def current_step_authorization_skill_ids(
 
 
 def _current_node(skill: Skill | None, step_id: str | None) -> dict[str, Any] | None:
+    """按 step_id 取技能中的节点，缺省时回退到 start_node_id。"""
     if skill is None:
         return None
     content = skill.content_json or {}
@@ -288,6 +303,11 @@ def _required_step_capabilities(
     current_node: dict[str, Any] | None,
     manifest: CapabilityManifest,
 ) -> tuple[list[str], list[str]]:
+    """把当前节点声明的能力引用解析为强制能力名称与知识库 id。
+
+    仅采纳 manifest 中可用的能力；引用了知识库时统一追加 knowledge_search，
+    保证完成闸能校验检索动作。
+    """
     if not current_node:
         return [], []
     refs = current_node.get("capability_refs")
@@ -321,6 +341,7 @@ def _required_step_capabilities(
 
 
 def _transitions(skill: Skill | None, current_node: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """列出当前节点出边的转移信息，供模型判断合法的下一步。"""
     if skill is None or current_node is None:
         return []
     node_id = str(current_node.get("node_id") or current_node.get("step_id") or "").strip()
@@ -346,6 +367,7 @@ def _goal(
     current_node: dict[str, Any] | None,
     requirements: list[str],
 ) -> str:
+    """生成任务目标：SOP 任务用「技能名 + 节点名」，否则取首条需求或用户意图。"""
     node_name = str((current_node or {}).get("name") or "").strip()
     skill_name = str(getattr(skill, "name", "") or "").strip()
     if frame.kind == "sop" and (node_name or skill_name):
@@ -356,6 +378,7 @@ def _goal(
 
 
 def _sop_context(skill: Skill | None, current_node: dict[str, Any] | None) -> dict[str, Any]:
+    """打包 SOP 上下文（技能标识、名称与当前节点），非 SOP 任务返回空字典。"""
     if skill is None:
         return {}
     return {
@@ -368,6 +391,7 @@ def _sop_context(skill: Skill | None, current_node: dict[str, Any] | None) -> di
 def _memory_projection(
     memory_context: list[dict[str, object]] | None,
 ) -> list[dict[str, str]]:
+    """把记忆上下文投影为去重、压缩空白后的短文本，单条截断到 1000 字。"""
     projected: list[dict[str, str]] = []
     seen: set[str] = set()
     for item in memory_context or []:
@@ -387,12 +411,14 @@ def _memory_projection(
 
 
 def _text_list(value: object) -> list[str]:
+    """把任意值规整为去重后的字符串列表，非列表输入返回空列表。"""
     if not isinstance(value, list):
         return []
     return _unique([str(item or "").strip() for item in value])
 
 
 def _unique(values: list[str]) -> list[str]:
+    """按压缩空白后的文本去重并保持首次出现顺序，丢弃空串。"""
     result: list[str] = []
     for value in values:
         text = " ".join(str(value or "").split()).strip()
@@ -402,4 +428,5 @@ def _unique(values: list[str]) -> list[str]:
 
 
 def _slot_satisfied(value: object) -> bool:
+    """判断槽位取值是否已填充：None、空串、空列表与空字典都视为未填。"""
     return value not in (None, "", [], {})

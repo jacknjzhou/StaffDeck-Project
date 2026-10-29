@@ -81,10 +81,11 @@ GENERAL_SKILL_REPLY_OUTPUT = {"reply": "string"}
 
 
 class GeneralSkillExecutionCancelled(RuntimeError):
-    pass
+    """通用技能运行被取消时抛出的信号异常;调用方据此终止流程而不是重试。"""
 
 
 class GeneralSkillSelector:
+    """判断一次请求是否需要交给通用技能,并从已发布技能中选定 slug。"""
     def decide(
         self,
         query: str,
@@ -93,6 +94,10 @@ class GeneralSkillSelector:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> GeneralSkillSelection:
+        """让模型在已发布技能中做路由决策,返回校验后的选择结果。
+
+        模型选中的 slug 不在已发布集合内时,降级为不使用通用技能。
+        """
         payload = stage_payload(
             phase="Router / General Skill Selector",
             user_message=query,
@@ -126,7 +131,7 @@ class GeneralSkillSelector:
 
 
 class GeneralSkillReader:
-    """Explain a skill package without generating or executing runner code."""
+    """只读解释技能包,不生成也不执行 runner 代码。"""
 
     def read(
         self,
@@ -136,6 +141,10 @@ class GeneralSkillReader:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> GeneralSkillRunResponse:
+        """让模型基于 SKILL.md 和包内文件说明技能用途,返回只读运行响应。
+
+        模型调用失败时返回 success=False 的结构化结果与兜底回复。
+        """
         trace: list[dict[str, Any]] = [
             {"phase": "skill_loaded", "message": f"已加载通用技能 {skill.name}", "slug": skill.slug},
             {"phase": "read_started", "message": "正在阅读 Skill 内容"},
@@ -210,6 +219,7 @@ class GeneralSkillReader:
 
 
 class GeneralSkillRunner:
+    """把技能包物化为独立运行目录,生成并执行 runner,失败时反思修复。"""
     def run(
         self,
         skill: GeneralSkill,
@@ -226,6 +236,11 @@ class GeneralSkillRunner:
         sandbox_allowed_domains: tuple[str, ...] = (),
         sandbox_enabled: bool = True,
     ) -> GeneralSkillRunResponse:
+        """端到端执行一个通用技能:规划代码、沙箱运行、反思校验、按需修复并生成回复。
+
+        max_attempts 会钳制在 1..GENERAL_SKILL_MAX_ATTEMPTS;模型判定不可重试或
+        重试耗尽即停止修复。无论成功失败都返回带完整 trace 与结构化结果的响应。
+        """
         trace: list[dict[str, Any]] = []
         max_attempts = max(1, min(max_attempts, GENERAL_SKILL_MAX_ATTEMPTS))
         _raise_if_cancelled(is_cancelled)
@@ -421,6 +436,10 @@ class GeneralSkillRunner:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> GeneralSkillExecutionPlan:
+        """根据技能包和运行契约让模型产出首版 runner 计划。
+
+        解析失败或代码为空时抛 LLMError,由上层反思循环换一次机会重试。
+        """
         _emit(trace, {"phase": "planning", "message": "正在根据 SKILL.md 生成 runner"}, event_sink)
         stage_data = {
             "skill": {
@@ -488,6 +507,10 @@ class GeneralSkillRunner:
         conversation_context: dict[str, object] | None,
         memory_context: list[dict[str, object]] | None,
     ) -> tuple[GeneralSkillExecutionPlan, list[dict[str, Any]]]:
+        """生成首版计划,失败则改用修复提示反复重试,直至成功或用尽 max_attempts。
+
+        返回计划与累计的规划失败记录;全部失败时抛出最后一次 LLMError。
+        """
         planning_failures: list[dict[str, Any]] = []
         last_error: LLMError | None = None
         for plan_attempt in range(1, max_attempts + 1):
@@ -578,6 +601,10 @@ class GeneralSkillRunner:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> GeneralSkillExecutionPlan:
+        """带着最近几次尝试的诊断让模型重写 runner 代码。
+
+        previous_attempts 只带最后 3 条,避免提示词随重试次数无限膨胀。
+        """
         _emit(
             trace,
             {"phase": "repair_planning", "message": f"正在生成第 {next_attempt} 次运行代码", "attempt": next_attempt},
@@ -655,6 +682,11 @@ class GeneralSkillRunner:
         sandbox_allowed_domains: tuple[str, ...] | None = None,
         sandbox_enabled: bool = True,
     ) -> tuple[str, str, dict[str, Any]]:
+        """把计划落成 runner.sh 或 runner.py,在沙箱中执行并解析产物声明。
+
+        返回 (stdout, stderr, structured_result);超时、运行环境不可用、bash 不受支持
+        和非零退出都写进 structured_result,取消则抛 GeneralSkillExecutionCancelled。
+        """
         sandbox_network_mode = sandbox_network_mode or "all"
         sandbox_allowed_domains = sandbox_allowed_domains or ()
         _raise_if_cancelled(is_cancelled)
@@ -843,6 +875,10 @@ class GeneralSkillRunner:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> str:
+        """把运行 trace、输出和结构化结果交给模型,生成面向用户的最终回复。
+
+        模型返回非法 JSON 或空回复时统一转成 LLMError,由调用方走兜底文案。
+        """
         _emit(trace, {"phase": "replying", "message": "正在根据运行结果生成回复"}, event_sink)
         stage_data = {
             "skill": {
@@ -894,6 +930,11 @@ class GeneralSkillRunner:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> dict[str, Any]:
+        """让模型校验本次运行结果是否足够,并决定是否需要继续自动修复。
+
+        校验调用失败时按 stdout/stderr 等运行信号兜底判断;review 中 terminal 为真
+        则强制关闭 needs_retry。
+        """
         _emit(
             trace,
             {
@@ -962,12 +1003,14 @@ class GeneralSkillRunner:
 
 
 def _truncate(value: str, limit: int = MAX_OUTPUT_CHARS) -> str:
+    """按字符上限裁剪长文本,超限时追加截断标记,防止 trace 和提示词体积失控。"""
     if len(value) <= limit:
         return value
     return value[:limit] + "\n...<truncated>"
 
 
 def _plan_runtime(plan: GeneralSkillExecutionPlan) -> str:
+    """归一化计划里的 runtime 字段,只保留 bash 与 python 两种取值。"""
     runtime = str(getattr(plan, "runtime", "") or "python").strip().lower()
     if runtime in {"bash", "shell", "sh"}:
         return "bash"
@@ -975,10 +1018,15 @@ def _plan_runtime(plan: GeneralSkillExecutionPlan) -> str:
 
 
 def _runtime_label(runtime: str) -> str:
+    """把内部 runtime 标识转成 trace 文案里可读的运行时名称。"""
     return "Bash" if runtime == "bash" else "Python"
 
 
 def _skill_files(skill: GeneralSkill) -> list[dict[str, Any]]:
+    """取出技能包内的规范化文件列表,非 Mapping 条目与越界路径被直接丢弃。
+
+    没有可用文件时退化为仅含 SKILL.md 的单项列表,保证后续流程始终有输入。
+    """
     raw_files = getattr(skill, "skill_files_json", None)
     files = (
         raw_files
@@ -1008,6 +1056,10 @@ def _skill_files(skill: GeneralSkill) -> list[dict[str, Any]]:
 
 
 def _skill_package_payload(skill: GeneralSkill, preview_limit: int = 12000) -> dict[str, Any]:
+    """构造给模型看的技能包摘要:文件元信息加共享额度内的内容预览。
+
+    preview_limit 是整包预览的总字符预算,单个文件被截断时标记 truncated。
+    """
     files = _skill_files(skill)
     previews: list[dict[str, Any]] = []
     remaining = preview_limit
@@ -1032,6 +1084,10 @@ def _skill_package_payload(skill: GeneralSkill, preview_limit: int = 12000) -> d
 
 
 def _materialize_skill_package(skill: GeneralSkill, target_dir: Path) -> None:
+    """把技能包内容写进目标目录,并补建 metadata 中声明的空目录。
+
+    所有相对路径都经 _safe_package_path 过滤,防止越出运行目录写文件。
+    """
     target_dir.mkdir(parents=True, exist_ok=True)
     metadata = getattr(skill, "metadata_json", None)
     directory_values = metadata.get("skill_directories", []) if isinstance(metadata, Mapping) else []
@@ -1048,6 +1104,10 @@ def _materialize_skill_package(skill: GeneralSkill, target_dir: Path) -> None:
 
 
 def _safe_package_path(path: str) -> str:
+    """把技能包内的相对路径规范化为 POSIX 形式,用于落盘前的安全校验。
+
+    含 .. 段或清洗后为空时返回空字符串,调用方据此跳过该条目。
+    """
     cleaned = path.replace("\\", "/").strip().strip("/")
     parts = [part for part in cleaned.split("/") if part and part != "."]
     if not parts or any(part == ".." for part in parts):
@@ -1056,6 +1116,7 @@ def _safe_package_path(path: str) -> str:
 
 
 def _safe_artifact_text(value: Any, max_length: int) -> str | None:
+    """清洗产物展示文本:去掉控制字符并按长度截断,清洗后为空返回 None。"""
     if value is None:
         return None
     cleaned = "".join(
@@ -1067,6 +1128,11 @@ def _safe_artifact_text(value: Any, max_length: int) -> str | None:
 
 
 def _parse_stdout_json(stdout: str) -> dict[str, Any]:
+    """尽力把 runner 的 stdout 解析成结构化结果,始终返回 dict。
+
+    空输出、JSON 对象、JSON 非对象和非法 JSON 分别产出不同形状的结果,
+    供后续反思校验判断运行是否成功。
+    """
     stripped = stdout.strip()
     if not stripped:
         return {"success": False, "message": "runner produced no stdout"}
@@ -1085,6 +1151,11 @@ def _normalize_declared_artifacts(
     artifact_root: Path,
     workspace_root: Path | None,
 ) -> None:
+    """就地校验并规范化 runner 自报的 artifacts 列表。
+
+    只接受当前运行目录内的相对路径;非法声明与超出 MAX_DECLARED_ARTIFACTS 的部分
+    写入 artifact_errors,不会向上抛异常。
+    """
     declarations = structured.get("artifacts")
     if declarations is None:
         return
@@ -1136,6 +1207,7 @@ def _normalize_declared_artifacts(
 
 
 def _run_timeout_seconds(skill: GeneralSkill) -> float:
+    """读取技能配置的 timeout_seconds,非法值回退默认值并钳制在 1-120 秒。"""
     runtime_config = getattr(skill, "runtime_config_json", None)
     config = runtime_config if isinstance(runtime_config, Mapping) else {}
     try:
@@ -1150,6 +1222,7 @@ def _raise_if_cancelled(
     *,
     process: subprocess.Popen[bytes] | None = None,
 ) -> None:
+    """检查取消回调,命中时先杀掉仍在运行的子进程再抛出取消异常。"""
     if not callable(is_cancelled) or not is_cancelled():
         return
     if process is not None and process.poll() is None:
@@ -1165,6 +1238,10 @@ def _stream_process_output_selectors(
     timeout_seconds: float = RUN_TIMEOUT_SECONDS,
     is_cancelled: CancellationCheck | None = None,
 ) -> tuple[str, str, bool]:
+    """用 selectors 非阻塞读取子进程的 stdout/stderr,按块实时写入 trace。
+
+    返回 (stdout, stderr, timed_out);超时会 kill 子进程并置 timed_out。
+    """
     selector = selectors.DefaultSelector()
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
@@ -1221,6 +1298,7 @@ def _stream_process_output_selectors(
 
 
 def _use_thread_reader() -> bool:
+    """Windows 上 selectors 无法监听管道,需要退化为线程读取输出。"""
     return sys.platform == "win32"
 
 
@@ -1232,6 +1310,7 @@ def _stream_process_output(
     timeout_seconds=RUN_TIMEOUT_SECONDS,
     is_cancelled=None,
 ):
+    """按平台选择输出读取实现,签名与 selectors、线程两种实现保持一致。"""
     if _use_thread_reader():
         return _stream_process_output_threaded(
             process,
@@ -1259,11 +1338,16 @@ def _stream_process_output_threaded(
     timeout_seconds=RUN_TIMEOUT_SECONDS,
     is_cancelled=None,
 ):
+    """为每个输出流起一个线程逐块读取,经队列汇总后写入 trace。
+
+    返回 (stdout, stderr, timed_out);超时会 kill 子进程并置 timed_out。
+    """
     q: queue.Queue[tuple[str, bytes]] = queue.Queue()
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
 
     def _reader(stream, name: str) -> None:
+        """把单个流读到的分块塞进队列,结束后补一个空字节作为 EOF 标记。"""
         try:
             for chunk in iter(lambda: stream.read(4096), b""):
                 q.put((name, chunk))
@@ -1311,6 +1395,7 @@ def _stream_process_output_threaded(
 
 
 def _bash_supported() -> bool:
+    """判断当前环境能否运行 bash 技能:非 Windows、非打包版且存在 /bin/bash。"""
     if sys.platform == "win32":
         return False
     if paths.is_frozen():
@@ -1319,12 +1404,14 @@ def _bash_supported() -> bool:
 
 
 def _emit(trace: list[dict[str, Any]], item: dict[str, Any], event_sink: TraceSink | None = None) -> None:
+    """记录一条 trace 条目,并在配置了 event_sink 时同步推送给实时订阅方。"""
     trace.append(item)
     if event_sink:
         event_sink(item)
 
 
 def _execution_needs_retry(stdout: str, stderr: str, structured_result: dict[str, Any]) -> bool:
+    """在模型校验不可用时,按运行信号粗略判断本次执行是否需要重试。"""
     if structured_result.get("success") is False:
         if structured_result.get("retryable") is False or structured_result.get("terminal") is True:
             return False
@@ -1339,6 +1426,10 @@ def _execution_needs_retry(stdout: str, stderr: str, structured_result: dict[str
 
 
 def _normalize_failure_diagnostics(structured_result: dict[str, Any]) -> None:
+    """为失败却缺少诊断字段的结果补上诊断要求,帮助下一轮修复定位问题。
+
+    已经带有任一诊断字段时不做任何改动,避免覆盖 runner 自己输出的信息。
+    """
     if structured_result.get("success") is not False:
         return
     diagnostic_keys = {
@@ -1368,6 +1459,7 @@ def _normalize_failure_diagnostics(structured_result: dict[str, Any]) -> None:
 
 
 def _fallback_reply(structured_result: dict[str, Any]) -> str:
+    """模型回复生成失败时的兜底文案,失败时尽量带上结构化结果里的原因。"""
     if structured_result.get("success") is False:
         message = str(structured_result.get("message") or structured_result.get("error") or "").strip()
         return f"抱歉，通用技能运行失败。{message}" if message else "抱歉，通用技能运行失败。"

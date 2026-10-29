@@ -63,9 +63,11 @@ AGENT_KEY_ALLOWED_SCOPES = AGENT_RUNTIME_SCOPES
 
 
 def scopes_for_agent_access(access: AgentCredentialAccess) -> list[str]:
+    """按访问级别返回应授予的 scope 列表，排序后输出便于比对与展示。"""
     scopes = AGENT_FULL_ACCESS_SCOPES if access == "full_access" else AGENT_RUNTIME_SCOPES
     return sorted(scopes)
 
 
 def agent_access_for_scopes(scopes: list[str]) -> AgentCredentialAccess:
+    """由已持有的 scope 反推访问级别，只有覆盖 full_access 全集才算 full_access。"""
     return "full_access" if AGENT_FULL_ACCESS_SCOPES.issubset(scopes) else "runtime"

@@ -95,6 +95,10 @@ _sweeper_thread: threading.Thread | None = None
 
 
 def _sweep_loop(interval_seconds: float) -> None:
+    """守护循环：每轮恢复孤儿唤醒事件、派发待处理事件并清扫超时任务。
+
+    单轮异常只记日志、不终止线程；置位 _stop_event 后立即退出。
+    """
     while not _stop_event.is_set():
         try:
             with Session(engine) as db:
@@ -119,6 +123,7 @@ def _sweep_loop(interval_seconds: float) -> None:
 
 
 def start_timeout_sweeper(*, interval_seconds: float = SWEEP_INTERVAL_SECONDS) -> None:
+    """启动超时清扫守护线程；已有存活线程时直接复用，不重复启动。"""
     global _sweeper_thread
     if _sweeper_thread and _sweeper_thread.is_alive():
         return
@@ -133,4 +138,5 @@ def start_timeout_sweeper(*, interval_seconds: float = SWEEP_INTERVAL_SECONDS) -
 
 
 def stop_timeout_sweeper() -> None:
+    """置位停止事件，让清扫循环在当前轮结束后退出。"""
     _stop_event.set()

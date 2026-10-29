@@ -7,12 +7,14 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
+/** 对话框根组件：透传 Radix Dialog Root 的属性，并统一承载开关状态。 */
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
 }
 
+/** 对话框触发器：通常包裹一个按钮，点击后打开弹层。 */
 const DialogTrigger = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Trigger>
@@ -20,12 +22,14 @@ const DialogTrigger = React.forwardRef<
   return <DialogPrimitive.Trigger ref={ref} data-slot="dialog-trigger" {...props} />
 })
 
+/** 对话框传送门：把弹层内容渲染到 body 等外层节点，避免被父级层级裁剪。 */
 function DialogPortal({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
   return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />
 }
 
+/** 对话框关闭基元：包裹任意子元素，点击后关闭当前对话框。 */
 const DialogClose = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Close>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Close>
@@ -33,6 +37,7 @@ const DialogClose = React.forwardRef<
   return <DialogPrimitive.Close ref={ref} data-slot="dialog-close" {...props} />
 })
 
+/** 弹层遮罩：铺满视口并叠加半透明背景，带淡入淡出动画。 */
 const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
@@ -50,6 +55,12 @@ const DialogOverlay = React.forwardRef<
   )
 })
 
+/**
+ * 对话框内容容器：内置传送门、遮罩与右上角关闭按钮，默认居中并带缩放淡入动画。
+ *
+ * - showCloseButton 默认为 true，传 false 可隐藏右上角关闭按钮。
+ * - Escape 键按默认行为被拦截，不会关闭弹层，需通过 onEscapeKeyDown 显式处理。
+ */
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
@@ -94,6 +105,7 @@ const DialogContent = React.forwardRef<
   )
 })
 
+/** 对话框头部容器：纵向排列标题与描述。 */
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -104,6 +116,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** 对话框底部操作区：移动端纵向倒序、桌面端右对齐，showCloseButton 为 true 时追加关闭按钮。 */
 function DialogFooter({
   className,
   showCloseButton = false,
@@ -131,6 +144,7 @@ function DialogFooter({
   )
 }
 
+/** 对话框标题：带 Radix 无障碍语义，供读屏关联弹层。 */
 const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
@@ -148,6 +162,7 @@ const DialogTitle = React.forwardRef<
   )
 })
 
+/** 对话框描述文本：带 Radix 无障碍语义，默认呈弱化色。 */
 const DialogDescription = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>

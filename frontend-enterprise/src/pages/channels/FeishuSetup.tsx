@@ -39,6 +39,7 @@ const REMOVABLE_PERMISSIONS = [
   '妙记-妙记基本信息 数据权限范围',
 ];
 
+/** 飞书权限提示卡片：用问号气泡说明最小权限集，并分列必需与通常可删除的权限。 */
 function FeishuPermissionHint() {
   return (
     <div className="rounded-[10px] border border-[#e8edf5] bg-white p-[12px] text-[12px] text-[#464c5e]">
@@ -91,6 +92,11 @@ function FeishuPermissionHint() {
   );
 }
 
+/**
+ * 飞书渠道凭证配置区：已配置时摘要展示 App ID、机器人与连接状态，可进入轮换 Secret 流程。
+ *
+ * 未配置或处于编辑态时渲染 App ID / App Secret 表单；保存成功后清空 Secret 并回调 onChanged。
+ */
 export default function FeishuSetup({
   binding,
   onChanged,
@@ -104,6 +110,11 @@ export default function FeishuSetup({
   const [appSecret, setAppSecret] = useState('');
   const [saving, setSaving] = useState(false);
 
+  /**
+   * 校验并提交飞书应用凭证。
+   *
+   * 任一字段为空时直接提示并中止；成功时清空 Secret、退出编辑态并回传新的绑定信息。
+   */
   async function save() {
     if (!appId.trim() || !appSecret.trim()) {
       notify.error('请填写完整凭证');

@@ -14,6 +14,7 @@ OUTPUT = Path("docs/enterprise_service_knowledge_base_longform.docx")
 
 
 def set_east_asia_font(style, font_name: str) -> None:
+    """为样式补上东亚字体设置，保证中英文混排时字形正确。"""
     style.font.name = font_name
     rpr = style.element.get_or_add_rPr()
     fonts = rpr.rFonts
@@ -24,6 +25,7 @@ def set_east_asia_font(style, font_name: str) -> None:
 
 
 def add_paragraph(doc: Document, text: str, style: str = "Normal") -> None:
+    """新增正文段落，并统一西文与中文的中文字体。"""
     paragraph = doc.add_paragraph(style=style)
     run = paragraph.add_run(text)
     run.font.name = "Arial"
@@ -31,6 +33,7 @@ def add_paragraph(doc: Document, text: str, style: str = "Normal") -> None:
 
 
 def add_heading(doc: Document, text: str, level: int) -> None:
+    """新增指定层级标题并按层级设置字号与颜色。"""
     paragraph = doc.add_heading(level=level)
     paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
     run = paragraph.add_run(text)
@@ -48,6 +51,7 @@ def add_heading(doc: Document, text: str, level: int) -> None:
 
 
 def add_bullet(doc: Document, text: str) -> None:
+    """新增项目符号段落，并保持与其他段落一致的中文字体。"""
     paragraph = doc.add_paragraph(style="List Bullet")
     run = paragraph.add_run(text)
     run.font.name = "Arial"
@@ -55,6 +59,7 @@ def add_bullet(doc: Document, text: str) -> None:
 
 
 def configure_document(doc: Document) -> None:
+    """设置页边距与各内置样式的字体、字号和行距。"""
     section = doc.sections[0]
     section.top_margin = Inches(1)
     section.bottom_margin = Inches(1)
@@ -147,6 +152,7 @@ CHAPTERS = [
 
 
 def chapter_paragraphs(chapter: str, domain: str, concern: str, examples: list[str]) -> list[str]:
+    """生成一章共用的五段业务说明，供各小节复用并追加具体执行提示。"""
     example_text = "、".join(examples)
     return [
         (
@@ -177,6 +183,7 @@ def chapter_paragraphs(chapter: str, domain: str, concern: str, examples: list[s
 
 
 def build_document() -> Document:
+    """组装完整的长篇知识手册文档并返回内存中的 Document 对象。"""
     doc = Document()
     configure_document(doc)
 
@@ -281,6 +288,7 @@ def build_document() -> Document:
 
 
 def main() -> None:
+    """生成 docx 写入目标路径，并打印段落数、表格数与中文字符数。"""
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     doc = build_document()
     doc.save(OUTPUT)

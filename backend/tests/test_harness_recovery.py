@@ -20,6 +20,7 @@ from app.db.models import (
 
 
 def _engine():
+    """创建带全部表结构的内存 SQLite 引擎，供恢复用例复用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -35,6 +36,10 @@ def _add_active_execution(
     lease_expires_at,
     session_id: str = "session-orphan",
 ) -> None:
+    """写入一轮进行中的 Harness 执行记录。
+
+    涵盖会话、用户消息、轮次、Agent 循环、任务帧、运行记录与租约，覆盖恢复所需的全部状态。
+    """
     session = ChatSession(
         id=session_id,
         tenant_id="tenant-demo",
@@ -110,6 +115,10 @@ def _add_active_execution(
 
 
 def test_startup_recovery_terminalizes_attempt_and_preserves_checkpoint() -> None:
+    """验证启动恢复会终止残留执行、保留检查点并补发一条恢复提示。
+
+    同时确认重复执行恢复不会产生重复回复。
+    """
     engine = _engine()
     now = utc_now()
     with Session(engine) as db:
@@ -172,6 +181,7 @@ def test_startup_recovery_terminalizes_attempt_and_preserves_checkpoint() -> Non
 
 
 def test_runtime_sweeper_ignores_live_execution() -> None:
+    """验证运行时清扫不会触碰租约尚未过期的活跃执行。"""
     engine = _engine()
     now = utc_now()
     with Session(engine) as db:
@@ -186,6 +196,7 @@ def test_runtime_sweeper_ignores_live_execution() -> None:
 
 
 def test_runtime_sweeper_recovers_expired_execution() -> None:
+    """验证运行时清扫会回收租约已过期的执行并写入 HARNESS_EXECUTION_LOST。"""
     engine = _engine()
     now = utc_now()
     with Session(engine) as db:

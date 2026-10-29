@@ -14,13 +14,19 @@ from app.tools.tool_schema import ToolCall
 def test_four_agent_stages_use_identical_system_and_stage_local_user_content(
     monkeypatch,
 ) -> None:
+    """验证四个 Agent 阶段共用同一份系统提示词，用户内容按阶段局部注入。
+
+    预期记忆只注入 Router、内部 id 不外泄，各阶段都带上时间与输出契约。
+    """
     systems: dict[str, str] = {}
     payloads: dict[str, dict] = {}
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实的 LLM 客户端初始化，用例不需要网络配置。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """按阶段返回固定 JSON，并记录各阶段使用的系统提示词与载荷。"""
         phase = payload["_agent_stage"]["phase"]
         systems[phase] = system_prompt
         payloads[phase] = payload
@@ -33,6 +39,7 @@ def test_four_agent_stages_use_identical_system_and_stage_local_user_content(
         raise AssertionError(f"unexpected phase: {phase}")
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """记录最终回复阶段的提示词与载荷，并返回固定文本。"""
         phase = payload["_agent_stage"]["phase"]
         systems[phase] = system_prompt
         payloads[phase] = payload
@@ -106,12 +113,15 @@ def test_four_agent_stages_use_identical_system_and_stage_local_user_content(
 
 
 def test_general_skill_substages_use_the_same_unified_system_prompt(monkeypatch) -> None:
+    """验证通用技能各子阶段的系统提示词与主流程完全一致。"""
     systems: dict[str, str] = {}
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实的 LLM 客户端初始化，用例不需要网络配置。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """按通用技能子阶段返回固定 JSON，并记录该阶段的系统提示词。"""
         phase = payload["_agent_stage"]["phase"]
         systems[phase] = system_prompt
         if phase == "Router / General Skill Selector":
@@ -149,6 +159,7 @@ def test_general_skill_substages_use_the_same_unified_system_prompt(monkeypatch)
         event_sink=None,
         attempt=1,
     ):
+        """跳过真实的代码执行，直接返回成功的执行结果。"""
         return '{"success": true}', "", {"success": True}
 
     monkeypatch.setattr(LLMClient, "__init__", fake_init)

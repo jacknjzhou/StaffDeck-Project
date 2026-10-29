@@ -36,6 +36,12 @@ import {
 import type { UseChatSession } from '../useChatSession';
 import ModelSetupDialog from './ModelSetupDialog';
 
+/**
+ * 对话页弹层集合：集中渲染模型配置、待回答、引用详情、重命名与删除确认弹窗。
+ *
+ * - 状态与回调全部取自 useChatSession，本组件只负责展示并转发交互。
+ * - 引用详情弹窗仅在 activeCitation 存在时渲染内容，关闭时清空引用。
+ */
 export default function ChatDialogs({ chat }: { chat: UseChatSession }) {
   const {
     showHandoffInbox,
@@ -251,6 +257,7 @@ export default function ChatDialogs({ chat }: { chat: UseChatSession }) {
   );
 }
 
+/** 引用片段 Markdown 渲染：复用消息渲染器，正文不保留换行。 */
 function CitationMarkdown({ content }: { content: string }) {
   return (
     <div className={CHAT_CITATION_DETAIL_MARKDOWN_CLASS}>
@@ -259,10 +266,12 @@ function CitationMarkdown({ content }: { content: string }) {
   );
 }
 
+/** 取引用原文片段：依次回退 content、excerpt、summary，并去除首尾空白。 */
 function citationDetailExcerpt(citation: NonNullable<UseChatSession['activeCitation']>): string {
   return String(citation.content || citation.excerpt || citation.summary || '').trim();
 }
 
+/** 取引用摘要：为空或与原文片段相同时返回空串，避免重复展示。 */
 function citationDetailSummary(citation: NonNullable<UseChatSession['activeCitation']>): string {
   const summary = String(citation.summary || '').trim();
   const content = String(citation.content || citation.excerpt || '').trim();

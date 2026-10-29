@@ -17,6 +17,7 @@ SALES_AGENT = "agent_preset_sales_001"
 
 @pytest.fixture()
 def session():
+    """建内存 SQLite 库、写入演示种子数据，并为每个用例提供 Session。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -28,11 +29,12 @@ def session():
 
 
 def _tenant(db) -> str:
+    """返回 admin 用户所属的租户 id。"""
     return db.exec(select(User).where(User.username == "admin")).first().tenant_id
 
 
 def _enable_knowledge_sync(db, tenant_id: str, agent_id: str) -> None:
-    """Explicitly opt the resolved version in (harmless under opt-out)."""
+    """把某个可见版本显式标为 deepchat_sync_enabled=True；opt-out 语义下默认已同步，这里只是显式确认。"""
     from app.agents.branching import visible_knowledge_base_versions
 
     versions = visible_knowledge_base_versions(db, tenant_id, agent_id)
@@ -44,6 +46,7 @@ def _enable_knowledge_sync(db, tenant_id: str, agent_id: str) -> None:
 
 
 def test_extract_agent_id_prefers_meta_then_the_key_binding():
+    """验证 _meta.agentId 非空时优先使用，否则回退到凭据绑定的员工，空字符串不会覆盖绑定。"""
     assert extract_agent_id({"name": "x", "_meta": {"agentId": "a1"}}, "a2") == "a1"
     assert extract_agent_id({"name": "x"}, "a2") == "a2"
     assert extract_agent_id({"name": "x"}, None) is None
@@ -52,6 +55,7 @@ def test_extract_agent_id_prefers_meta_then_the_key_binding():
 
 
 def test_unknown_employee_is_refused_before_any_http_call(session):
+    """验证未知员工直接返回 isError 且提示 unknown，不发起任何工具调用。"""
     result = call_tool(
         session, _tenant(session), "agent_does_not_exist", "staffdeck:expense.submit", {}
     )
@@ -60,6 +64,7 @@ def test_unknown_employee_is_refused_before_any_http_call(session):
 
 
 def test_tool_outside_the_employee_scope_is_refused(session):
+    """验证销售员工调用未绑定的工具时返回 TOOL_NOT_FOUND 错误。"""
     result = call_tool(session, _tenant(session), SALES_AGENT, "staffdeck:expense.submit", {})
     assert result["isError"] is True
     payload = json.loads(result["content"][0]["text"])
@@ -67,6 +72,7 @@ def test_tool_outside_the_employee_scope_is_refused(session):
 
 
 def test_catalog_tool_that_is_not_namespaced_is_refused(session):
+    """验证不带 staffdeck_ 命名空间前缀的工具名会被拒绝并返回 TOOL_NOT_FOUND。"""
     result = call_tool(session, _tenant(session), FINANCE_AGENT, "expense.submit", {})
     assert result["isError"] is True
     payload = json.loads(result["content"][0]["text"])
@@ -74,6 +80,7 @@ def test_catalog_tool_that_is_not_namespaced_is_refused(session):
 
 
 def test_knowledge_search_returns_citations(session):
+    """验证知识检索工具返回带 citations 与 chunks 的结果结构。"""
     tenant_id = _tenant(session)
     _enable_knowledge_sync(session, tenant_id, FINANCE_AGENT)
     result = call_tool(
@@ -90,6 +97,7 @@ def test_knowledge_search_returns_citations(session):
 
 
 def test_knowledge_search_is_absent_when_every_base_is_opted_out(session):
+    """验证所有版本显式 opt-out 后知识检索工具不再暴露，调用返回 TOOL_NOT_FOUND。"""
     from app.agents.branching import visible_knowledge_base_versions
 
     tenant_id = _tenant(session)
@@ -112,7 +120,7 @@ def test_knowledge_search_is_absent_when_every_base_is_opted_out(session):
 
 
 def test_knowledge_search_cannot_widen_its_scope(session):
-    """A caller naming a foreign knowledge base must simply get nothing back."""
+    """验证调用方点名不存在的知识库时不会越权，检索结果为空且调用本身不报错。"""
     tenant_id = _tenant(session)
     _enable_knowledge_sync(session, tenant_id, FINANCE_AGENT)
     result = call_tool(
@@ -129,6 +137,7 @@ def test_knowledge_search_cannot_widen_its_scope(session):
 
 
 def test_tool_result_never_contains_credentials(session):
+    """验证工具调用结果中不出现 headers_json/auth_json/api key/bearer 等凭据信息。"""
     result = call_tool(
         session, _tenant(session), FINANCE_AGENT, "staffdeck:expense.quota_query", {}
     )

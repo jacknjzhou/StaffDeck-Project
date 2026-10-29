@@ -48,6 +48,7 @@ def reflect_skill_response(
     normalize_response: NormalizeResponse[ResponseT],
     status_callback: StatusCallback | None = None,
 ) -> ResponseT:
+    """同步跑完技能反思流程，把流式状态事件转交 status_callback，并返回归一化后的响应。"""
     events = reflect_skill_response_stream(
         client=client,
         source_kind=source_kind,
@@ -79,6 +80,10 @@ def reflect_skill_response_stream(
     tool_suggestions: list[ToolSuggestion],
     normalize_response: NormalizeResponse[ResponseT],
 ):
+    """以生成器执行至多 MAX_REFLECTION_ROUNDS 轮模型校验，逐轮产出 status 事件。
+
+    最终响应通过生成器的 return 值传出（StopIteration.value）；校验调用失败或耗尽轮次时保留最后一版技能草稿并追加警告。
+    """
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
     reviewed = response
     reviewed_skill = candidate_skill
@@ -187,6 +192,7 @@ def reflect_skill_response_stream(
 
 
 def _model_review(client: LLMClient, prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """调用反思模型并把输出解析成 JSON object；输出不是 object 时抛 ValueError。"""
     text = client.generate_text(prompt, payload)
     raw = json.loads(_extract_json(text))
     if not isinstance(raw, dict):
@@ -195,6 +201,7 @@ def _model_review(client: LLMClient, prompt: str, payload: dict[str, Any]) -> di
 
 
 def _warnings_from_review(review: dict[str, Any], source_kind: str) -> list[str]:
+    """汇总来源侧告警、模型告警与归因为 source_input 的失败 Rubric，去重后返回。"""
     warnings: list[str] = []
     for item in _string_list(review.get("source_warnings")):
         warnings.append(f"{_source_label(source_kind)}本身可能存在问题：{item}")
@@ -211,6 +218,7 @@ def _warnings_from_review(review: dict[str, Any], source_kind: str) -> list[str]
 
 
 def _failed_rubrics(review: dict[str, Any]) -> list[dict[str, Any]]:
+    """取出 rubric_results 中 passed 为假的条目；字段缺失或类型不符时返回空列表。"""
     results = review.get("rubric_results")
     if not isinstance(results, list):
         return []
@@ -218,6 +226,7 @@ def _failed_rubrics(review: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _reflection_history_item(review: dict[str, Any]) -> dict[str, Any]:
+    """把单轮校验结果压缩成精简历史条目，供下一轮反思模型参考。"""
     return {
         "passed": bool(review.get("passed")),
         "summary": str(review.get("summary") or ""),
@@ -233,33 +242,39 @@ def _reflection_history_item(review: dict[str, Any]) -> dict[str, Any]:
 
 
 def _source_label(source_kind: str) -> str:
+    """按 source_kind 返回来源称谓：rewrite 视为原始技能，其余视为原始文档。"""
     if source_kind == "rewrite":
         return "原始技能"
     return "原始文档"
 
 
 def _rubric_label(item: dict[str, Any]) -> str:
+    """取 Rubric 的中文标签；未登记的名称回退为原名，仍缺失时用占位文案。"""
     name = str(item.get("name") or "")
     return RUBRIC_LABELS.get(name, name or "未知 Rubric")
 
 
 def _finding_text(item: dict[str, Any]) -> str:
+    """取 Rubric 条目的 finding，缺失时回退 issue，并去掉首尾空白。"""
     return str(item.get("finding") or item.get("issue") or "").strip()
 
 
 def _string_list(value: Any) -> list[str]:
+    """把任意输入收窄为去掉空白后的非空字符串列表；非列表输入返回空列表。"""
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    """从任意输入中筛出 dict 元素；非列表输入返回空列表。"""
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
 
 
 def _dedupe(values: list[str]) -> list[str]:
+    """按首次出现顺序去重，并丢弃空白项。"""
     deduped: list[str] = []
     for value in values:
         text = value.strip()
@@ -269,15 +284,18 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _emit(status_callback: StatusCallback | None, text: str) -> None:
+    """存在状态回调时把文本交给它，否则静默跳过。"""
     if status_callback is not None:
         status_callback(text)
 
 
 def _status_event(text: str) -> dict[str, object]:
+    """构造一个携带文本的 status 流事件字典。"""
     return {"event": "status", "data": {"text": text}}
 
 
 def _extract_json(text: str) -> str:
+    """去掉可能的 Markdown 代码围栏，截取首个 { 到末个 } 之间的 JSON 文本。"""
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.strip("`").strip()

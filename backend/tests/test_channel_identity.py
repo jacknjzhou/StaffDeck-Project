@@ -12,6 +12,7 @@ from app.db.models import ChannelIdentity, Tenant, User
 
 
 def _test_engine():
+    """创建已完成建表的内存 SQLite 引擎，隔离各用例数据。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -22,17 +23,20 @@ def _test_engine():
 
 
 def _seed_tenant(db: Session) -> None:
+    """插入演示租户，满足渠道身份的外键约束。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     db.commit()
 
 
 def test_channel_labels_use_canonical_names() -> None:
+    """验证渠道标签使用统一的中文名称。"""
     assert channel_label("wechat") == "微信"
     assert channel_label("wecom") == "企业微信"
     assert channel_label("feishu") == "飞书"
 
 
 def test_external_identity_for_p2p_and_group() -> None:
+    """验证单聊与群聊分别生成外部身份键和展示名。"""
     external_id, display = external_identity_for_message(
         "wechat", is_group=False, conv_key="", from_user_id="o9cq800kum_ab12cd34@im.wechat"
     )
@@ -47,6 +51,7 @@ def test_external_identity_for_p2p_and_group() -> None:
 
 
 def test_wecom_account_key_is_unambiguous_for_delimiter_like_ids() -> None:
+    """验证企业微信账号键对含分隔符的 ID 仍可无歧义区分。"""
     first = external_account_key("wecom", {"corp_id": "x:bot:y", "bot_id": "z"})
     second = external_account_key("wecom", {"corp_id": "x", "bot_id": "y:bot:z"})
 
@@ -56,6 +61,7 @@ def test_wecom_account_key_is_unambiguous_for_delimiter_like_ids() -> None:
 
 
 def test_provision_creates_member_user_and_identity() -> None:
+    """验证首次触达时创建 member 用户并写入渠道身份映射。"""
     engine = _test_engine()
     with Session(engine) as db:
         _seed_tenant(db)
@@ -77,6 +83,7 @@ def test_provision_creates_member_user_and_identity() -> None:
 
 
 def test_second_call_hits_existing_mapping() -> None:
+    """验证同一外部用户再次触达时复用已有用户，不新增身份行。"""
     engine = _test_engine()
     with Session(engine) as db:
         _seed_tenant(db)
@@ -93,6 +100,7 @@ def test_second_call_hits_existing_mapping() -> None:
 
 
 def test_corrupt_cross_tenant_identity_is_replaced_in_current_tenant() -> None:
+    """验证跨租户的脏身份映射会被当前租户的新用户替换。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_a", name="A"))
@@ -138,6 +146,7 @@ def test_corrupt_cross_tenant_identity_is_replaced_in_current_tenant() -> None:
 
 
 def test_group_account_provision() -> None:
+    """验证群聊账号按群 ID 生成用户名与展示名。"""
     engine = _test_engine()
     with Session(engine) as db:
         _seed_tenant(db)
@@ -149,6 +158,7 @@ def test_group_account_provision() -> None:
 
 
 def test_username_conflict_falls_back_to_existing_user() -> None:
+    """验证用户名冲突时回落到已有用户而不是新建。"""
     engine = _test_engine()
     with Session(engine) as db:
         _seed_tenant(db)
@@ -176,6 +186,7 @@ def test_username_conflict_falls_back_to_existing_user() -> None:
 
 
 def test_username_sanitizes_and_truncates() -> None:
+    """验证用户名会清除空格与斜杠等非法字符并限制在 64 字符内。"""
     engine = _test_engine()
     with Session(engine) as db:
         _seed_tenant(db)
@@ -189,6 +200,7 @@ def test_username_sanitizes_and_truncates() -> None:
 
 
 def test_long_external_id_username_uses_stable_hash_suffix() -> None:
+    """验证超长且前缀相同的外部 ID 靠稳定哈希后缀区分，且同输入同输出。"""
     engine = _test_engine()
     with Session(engine) as db:
         _seed_tenant(db)
@@ -214,6 +226,7 @@ def test_long_external_id_username_uses_stable_hash_suffix() -> None:
 
 
 def test_username_always_carries_stable_hash() -> None:
+    """验证清洗后同形、跨租户与超长的外部 ID 都靠稳定哈希后缀区分。"""
     engine = _test_engine()
     with Session(engine) as db:
         _seed_tenant(db)

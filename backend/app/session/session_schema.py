@@ -36,6 +36,8 @@ MessageFeedbackValue = Literal["up", "down"]
 
 
 class TaskFrame(BaseModel):
+    """会话内任务帧的快照：绑定的 SOP 技能、当前步骤、槽位与恢复策略。"""
+
     task_id: Optional[str] = None
     status: str = "pending"
     skill_id: Optional[str] = None
@@ -51,6 +53,8 @@ class TaskFrame(BaseModel):
 
 
 class PlannedTaskFrame(BaseModel):
+    """规划器为本轮产出的任务帧计划，随 TurnPlan 落库后才编译成 Harness 任务。"""
+
     task_id: Optional[str] = None
     kind: TaskFrameKind = "conversation"
     status: TaskFrameRunStatus = "queued"
@@ -69,20 +73,25 @@ class PlannedTaskFrame(BaseModel):
     @field_validator("slot_hints", mode="before")
     @classmethod
     def _default_null_slot_hints(cls, value: Any) -> Any:
+        """把 None 的 slot_hints 归一为空字典，兼容模型返回的 null。"""
         return {} if value is None else value
 
     @field_validator("activation_condition", mode="before")
     @classmethod
     def _default_null_activation_condition(cls, value: Any) -> Any:
+        """把 None 的 activation_condition 归一为空字典，避免下游解包报错。"""
         return {} if value is None else value
 
     @field_validator("requirements", "depends_on_task_ids", mode="before")
     @classmethod
     def _default_null_lists(cls, value: Any) -> Any:
+        """把 requirements 与 depends_on_task_ids 的 None 归一为空列表。"""
         return [] if value is None else value
 
 
 class PendingTask(BaseModel):
+    """路由阶段识别出的待办任务，用于前端展示并作为后续轮次的上下文。"""
+
     task_id: Optional[str] = None
     status: str = "pending"
     decision: RouterDecisionValue = "start_new_task"
@@ -96,6 +105,8 @@ class PendingTask(BaseModel):
 
 
 class TaskUpdate(BaseModel):
+    """对既有任务的部分更新；remove 为 True 表示删除该任务。"""
+
     task_id: str
     status: Optional[str] = None
     target_skill_id: Optional[str] = None
@@ -109,14 +120,14 @@ class TaskUpdate(BaseModel):
     @field_validator("slot_hints", mode="before")
     @classmethod
     def _default_null_slot_hints(cls, value: Any) -> Any:
+        """把 None 的 slot_hints 归一为空字典，兼容模型返回的 null。"""
         return {} if value is None else value
 
 
 class TurnPlan(BaseModel):
-    """The only scene/SOP intent decision produced for a user turn.
+    """用户单轮对话唯一产出的场景/SOP 意图决策。
 
-    Capability selection deliberately does not belong in this contract. Each
-    planned frame is compiled into a Harness task after the plan is persisted.
+    能力选择刻意不写进这个契约：每个计划帧在计划落库之后才编译成 Harness 任务。
     """
 
     decision: RouterDecisionValue = "answer_only"
@@ -131,10 +142,13 @@ class TurnPlan(BaseModel):
     @field_validator("task_frames", "task_updates", mode="before")
     @classmethod
     def _default_null_lists(cls, value: Any) -> Any:
+        """把 task_frames 与 task_updates 的 None 归一为空列表。"""
         return [] if value is None else value
 
 
 class AwaitingInput(BaseModel):
+    """记录当前任务在等用户补充哪些字段，用于生成追问话术。"""
+
     task_id: Optional[str] = None
     skill_id: Optional[str] = None
     step_id: Optional[str] = None
@@ -144,6 +158,8 @@ class AwaitingInput(BaseModel):
 
 
 class RouterDecision(BaseModel):
+    """路由决策结果：任务选择与创建、槽位提示、澄清问题及待办任务列表。"""
+
     decision: RouterDecisionValue
     selected_task_id: Optional[str] = None
     target_skill_id: Optional[str] = None
@@ -163,6 +179,8 @@ class RouterDecision(BaseModel):
 
 
 class KnowledgeQuery(BaseModel):
+    """发给知识库的检索请求：查询文本、检索范围、条数上限与检索类型。"""
+
     query: str
     reason: Optional[str] = None
     scope: dict[str, Any] = Field(default_factory=dict)
@@ -173,6 +191,8 @@ class KnowledgeQuery(BaseModel):
 
 
 class StepAgentResult(BaseModel):
+    """单步智能体的执行结果：动作、回复、槽位更新、工具调用与交接标记。"""
+
     action: Optional[
         Literal[
             "ask_user",
@@ -196,6 +216,8 @@ class StepAgentResult(BaseModel):
 
 
 class SessionPublic(BaseModel):
+    """对外暴露的会话状态快照：活动技能与步骤、槽位、待办任务与摘要。"""
+
     session_id: str
     tenant_id: str
     user_id: Optional[str] = None
@@ -213,6 +235,8 @@ class SessionPublic(BaseModel):
 
 
 class ChatTurnRequest(BaseModel):
+    """一次对话轮次的入参：消息、渠道、会话标识以及服务端专用的注入字段。"""
+
     tenant_id: str
     session_id: Optional[str] = None
     agent_id: Optional[str] = None
@@ -243,6 +267,8 @@ class ChatTurnRequest(BaseModel):
 
 
 class TeamPlannerMember(BaseModel):
+    """团队规划上下文中的成员信息：agent_id、名称、角色与能力清单。"""
+
     agent_id: str
     name: str
     role: Optional[str] = None
@@ -250,12 +276,16 @@ class TeamPlannerMember(BaseModel):
 
 
 class TeamPlannerContext(BaseModel):
+    """团队任务规划所需的团队上下文：团队 id、队长 agent 与成员清单。"""
+
     team_id: str
     leader_agent_id: str
     members: list[TeamPlannerMember] = Field(default_factory=list)
 
 
 class ChatAttachmentRead(BaseModel):
+    """对话附件的元数据与预解析结果：文本、预览、数据地址与解析错误。"""
+
     id: str
     filename: str
     content_type: str
@@ -271,6 +301,8 @@ class ChatAttachmentRead(BaseModel):
 
 
 class ChatTurnResponse(BaseModel):
+    """一次对话轮次的响应体：回复文本、路由/步骤/工具结果与会话状态。"""
+
     reply: str
     session_id: str
     runtime_error_code: Optional[str] = None
@@ -281,6 +313,8 @@ class ChatTurnResponse(BaseModel):
 
 
 class ChatSessionCreateRequest(BaseModel):
+    """创建会话的请求体：租户、所属用户、绑定智能体与标题。"""
+
     tenant_id: str
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
@@ -288,12 +322,16 @@ class ChatSessionCreateRequest(BaseModel):
 
 
 class ChatSessionUpdateRequest(BaseModel):
+    """更新会话的请求体，目前只允许修改标题。"""
+
     tenant_id: str
     user_id: Optional[str] = None
     title: str
 
 
 class ChatSessionRead(BaseModel):
+    """会话列表与详情接口返回的会话信息，可直接由 ORM 对象转换。"""
+
     id: str
     tenant_id: str
     user_id: Optional[str]
@@ -314,6 +352,8 @@ class ChatSessionRead(BaseModel):
 
 
 class MessageRead(BaseModel):
+    """消息接口返回的消息正文、元数据与用户反馈评分。"""
+
     id: str
     tenant_id: str
     session_id: str
@@ -328,5 +368,7 @@ class MessageRead(BaseModel):
 
 
 class MessageFeedbackRequest(BaseModel):
+    """提交消息反馈的请求体：租户与点赞/点踩取值。"""
+
     tenant_id: str
     rating: MessageFeedbackValue

@@ -130,7 +130,11 @@ TL_BID_JUDGE_REPAIR_MESSAGE = (
 
 
 def build_team_planner_context(db: Session, team: Team) -> TeamPlannerContext:
-    """Project the trusted roster boundary used by the TL TurnPlanner."""
+    """构建 TL TurnPlanner 使用的可信花名册边界。
+
+    仅收录同租户且 active 的成员;能力标签合并元数据中的
+    capabilities/specialties/skills/expertise_tags 并去重,最多保留 12 条。
+    """
 
     leader = get_team_leader(db, team.id)
     members: list[TeamPlannerMember] = []
@@ -169,7 +173,10 @@ def build_team_planner_context(db: Session, team: Team) -> TeamPlannerContext:
 
 
 def build_tl_chat_context(db: Session, team: Team, user_message: str) -> str:
-    """Build server-only TL context without embedding the visible user message."""
+    """构建仅供服务端 TL 使用的上下文,不把用户可见消息混入其中。
+
+    依次拼入团队简介、花名册、未闭环任务、黑板相关工作记忆与派工指令。
+    """
 
     roster = team_roster_lines(db, team)
     open_tasks = open_tasks_summary(db, team)
@@ -190,13 +197,16 @@ def build_tl_chat_context(db: Session, team: Team, user_message: str) -> str:
 
 
 def build_tl_chat_message(db: Session, team: Team, user_message: str) -> str:
-    """Compatibility helper returning the complete model input for a TL turn."""
+    """兼容旧调用方:返回 TL 单轮的完整模型输入(服务端上下文 + 人的需求)。"""
 
     return f"{build_tl_chat_context(db, team, user_message)}\n{user_message}"
 
 
 def build_member_task_message(db: Session, team: Team, task: TeamTask, *, rework: bool) -> str:
-    """Build the member's user turn from task context without changing its normal prompt."""
+    """按任务上下文拼装成员的 user turn,不改动其常规 prompt 语义。
+
+    含任务标题与描述、前置任务报告(引用/交付物)、退回或补充信息说明、团队黑板。
+    """
     lines = ["请完成以下任务。"]
     lines.append(f"任务标题:{task.title}")
     if task.description:
@@ -364,6 +374,7 @@ def enqueue_wake_event(
     trigger_type: str,
     payload: dict | None = None,
 ) -> TeamWakeEvent:
+    """落库一条 pending 唤醒事件并 flush 拿到 id,由调用方决定何时异步启动。"""
     event = TeamWakeEvent(
         team_id=team.id,
         tenant_id=team.tenant_id,
@@ -389,6 +400,7 @@ def claim_wake_event(db: Session, wake_event_id: str) -> bool:
 
 
 def start_wakeup_async(wake_event_id: str) -> bool:
+    """起一个后台线程执行该唤醒事件;线程创建失败时记日志并返回 False。"""
     try:
         threading.Thread(
             target=_execute_wakeup_in_background,
@@ -403,6 +415,7 @@ def start_wakeup_async(wake_event_id: str) -> bool:
 
 
 def _wake_task_id(event: TeamWakeEvent) -> str:
+    """取唤醒事件 payload 中的 task_id,缺失时返回空串。"""
     payload = event.payload_json if isinstance(event.payload_json, dict) else {}
     return str(payload.get("task_id") or "")
 
@@ -413,6 +426,10 @@ def _record_wake_lifecycle(
     event_type: str,
     payload: dict | None = None,
 ) -> None:
+    """为唤醒事件关联的任务写一条系统审计事件,任务不存在时静默跳过。
+
+    payload 自动带上 wake_event_id,便于按事件回溯生命周期。
+    """
     task_id = _wake_task_id(event)
     if not task_id or db.get(TeamTask, task_id) is None:
         return
@@ -428,6 +445,10 @@ def _record_wake_lifecycle(
 
 
 def _wake_heartbeat(wake_event_id: str, stop_event: threading.Event) -> None:
+    """唤醒执行期间周期续期 claimed 事件,避免租约超时被 sweeper 回收。
+
+    stop_event 置位后退出循环;单次续期失败只记日志,不影响主执行流程。
+    """
     while not stop_event.wait(WAKE_HEARTBEAT_SECONDS):
         try:
             with Session(engine) as heartbeat_db:
@@ -445,6 +466,10 @@ def _wake_heartbeat(wake_event_id: str, stop_event: threading.Event) -> None:
 
 
 def _execute_wakeup_in_background(wake_event_id: str) -> None:
+    """后台线程入口:先原子认领事件,再起心跳线程并执行唤醒。
+
+    认领失败说明事件已被其它线程或进程处理,直接返回;执行结束必定停止心跳。
+    """
     with Session(engine) as db:
         if not claim_wake_event(db, wake_event_id):
             return
@@ -537,6 +562,7 @@ def dispatch_pending_wake_events(
 
 
 def _ensure_wake_target_agent(db: Session, event: TeamWakeEvent) -> AgentProfile:
+    """校验唤醒目标成员可用(同租户且 active),否则抛 RuntimeError 拒绝执行。"""
     agent = db.get(AgentProfile, event.target_agent_id)
     if agent is None or agent.tenant_id != event.tenant_id or agent.status != "active":
         raise RuntimeError("唤醒目标员工已不可用;请检查团队配置。")
@@ -554,6 +580,7 @@ _member_slot_guard = threading.Lock()
 
 
 def _try_acquire_member_slot(team_id: str, agent_id: str, limit: int) -> bool:
+    """尝试占用该成员的一个进程内执行额度;已达上限时返回 False。"""
     with _member_slot_guard:
         running = _member_slot_counts.get((team_id, agent_id), 0)
         if running >= limit:
@@ -563,6 +590,7 @@ def _try_acquire_member_slot(team_id: str, agent_id: str, limit: int) -> bool:
 
 
 def _release_member_slot(team_id: str, agent_id: str) -> None:
+    """归还成员执行额度;计数归零时移除键,避免字典长期膨胀。"""
     with _member_slot_guard:
         running = _member_slot_counts.get((team_id, agent_id), 0)
         if running <= 1:
@@ -578,6 +606,7 @@ def _member_in_progress_count(
     *,
     exclude_task_id: str | None = None,
 ) -> int:
+    """统计该成员在本团队中处于 in_progress 的任务数,可排除指定任务。"""
     statement = select(TeamTask).where(
         TeamTask.team_id == team.id,
         TeamTask.assignee_agent_id == agent_id,
@@ -704,6 +733,7 @@ def collect_turn_reply_fragments(
 
 @dataclass(frozen=True)
 class TeamAgentTurnResult:
+    """一轮团队 agent turn 的规范化结果:回复正文及落库附带的消息信息。"""
     reply: str
     message_id: str | None
     metadata: dict
@@ -712,7 +742,7 @@ class TeamAgentTurnResult:
 
 
 def _coerce_team_turn_result(value: TeamAgentTurnResult | str) -> TeamAgentTurnResult:
-    """Keep test/custom executors compatible while the canonical result is structured."""
+    """把字符串或结构化返回值统一成 TeamAgentTurnResult,兼容测试与自定义执行器。"""
     if isinstance(value, TeamAgentTurnResult):
         return value
     return TeamAgentTurnResult(
@@ -891,6 +921,7 @@ def execute_wake_event(db: Session, event: TeamWakeEvent) -> TeamWakeEvent:
 
 
 def _escalate_task_on_failure(db: Session, event: TeamWakeEvent, exc: Exception) -> None:
+    """唤醒失败时把关联任务升级给人;任务缺失或已终态则不再改动。"""
     task_id = str(event.payload_json.get("task_id") or "")
     if not task_id:
         return
@@ -913,6 +944,10 @@ def _escalate_task_on_failure(db: Session, event: TeamWakeEvent, exc: Exception)
 
 
 def _execute_member_task(db: Session, event: TeamWakeEvent, team: Team, agent: AgentProfile) -> None:
+    """成员任务执行体:复用或新建专属会话跑一轮 turn,把报告落库并推进任务状态。
+
+    需要补充信息时把任务升级给人;报告写回 report_json 后交 TL 验收或直接完成。
+    """
     task_id = str(event.payload_json.get("task_id") or "")
     task = db.get(TeamTask, task_id)
     if task is None or task.team_id != team.id:
@@ -1071,7 +1106,11 @@ def _execute_member_task(db: Session, event: TeamWakeEvent, team: Team, agent: A
 def _team_synthesis_evidence(
     tasks: list[TeamTask],
 ) -> tuple[list[dict[str, object]], dict[str, str]]:
-    """Globalize member citation labels and relabel each report before TL synthesis."""
+    """汇总前统一各成员报告的引用编号,并改写报告正文中的 [n] 标记。
+
+    引用按 concept_id/chunk_id 或来源字段判定同一性,重复引用复用同一全局编号。
+    返回 (全局引用列表, {task_id: 重编号后的报告正文})。
+    """
 
     citations: list[dict[str, object]] = []
     labels_by_identity: dict[str, str] = {}
@@ -1121,6 +1160,7 @@ def _team_synthesis_evidence(
 
 
 def _compact_citation_for_synthesis(citation: dict[str, object]) -> dict[str, object]:
+    """裁剪单条引用供汇总 prompt 使用:保留关键字段,excerpt 截断到 600 字符。"""
     compact = {
         field: citation[field]
         for field in ("label", "title", "source_path", "section_path", "summary")
@@ -1138,6 +1178,10 @@ def build_team_synthesis_message(
     run: TeamRun,
     tasks: list[TeamTask],
 ) -> str:
+    """拼装最终汇总 turn 的 prompt:原始需求、各任务结果、全局引用与版式要求。
+
+    已升级任务会附未完成原因,便于 TL 在最终回答中如实说明缺失部分。
+    """
     source = db.get(Message, run.source_turn_id)
     citations, relabeled_results = _team_synthesis_evidence(tasks)
     lines = [
@@ -1189,6 +1233,7 @@ def build_team_synthesis_message(
 
 
 def _team_progress_message(db: Session, run: TeamRun) -> Message | None:
+    """查找本条 team run 的进度回复消息(排除最终汇总消息),没有则返回 None。"""
     messages = list(
         db.exec(
             select(Message)
@@ -1217,7 +1262,11 @@ def _update_team_run_progress_message(
     *,
     phase: Literal["collecting", "synthesizing", "completed", "failed"] | None = None,
 ) -> Message | None:
-    """Rewrite the original TL dispatch reply as the asynchronous team run advances."""
+    """随异步 team run 推进,改写 TL 原始派发回复的进度文案与元数据。
+
+    phase 缺省时按 run 状态与任务完成度推断;已到 completed 的进度不会被回退。
+    返回被改写的消息,找不到进度消息时返回 None。
+    """
 
     message = _team_progress_message(db, run)
     if message is None:
@@ -1279,7 +1328,11 @@ def _update_team_run_progress_message(
 
 
 def maybe_enqueue_team_synthesis(db: Session, team: Team, run_id: str) -> str | None:
-    """Start one final TL synthesis after the complete team DAG reaches a terminal state."""
+    """整个团队 DAG 到达终态后启动唯一一次最终汇总,返回唤醒 id。
+
+    有任务在等人工补充信息时把 run 置为 awaiting_input 且不入队;
+    已汇总/已完成的 run 直接返回 None,claim 的原子更新保证只启动一次。
+    """
 
     run = db.get(TeamRun, run_id)
     if run is None or run.team_id != team.id or run.status in {"synthesizing", "completed", "failed"}:
@@ -1357,6 +1410,10 @@ def _execute_team_synthesis(
     team: Team,
     agent: AgentProfile,
 ) -> None:
+    """团队汇总执行体:TL 在内部会话整合各任务报告,再把最终回答发布到原 TL 会话。
+
+    缺 TL 会话或任务未全部结束时抛异常;成功后 run 置为 completed 并回填最终消息 id。
+    """
     run_id = str(event.payload_json.get("team_run_id") or "")
     run = db.get(TeamRun, run_id)
     if run is None or run.team_id != team.id:
@@ -1441,6 +1498,11 @@ def _execute_team_synthesis(
 
 
 def _execute_tl_review(db: Session, event: TeamWakeEvent, team: Team, agent: AgentProfile) -> None:
+    """TL 验收执行体:跑验收 turn 解析 review 块,解析失败时补一次格式纠错 turn。
+
+    按 verdict 迁移任务状态并写入 TL 认可的黑板条目;rework 会再唤醒成员重做。
+    仍解析不到结论时只记审计、不改任务状态,等待人介入。
+    """
     task_id = str(event.payload_json.get("task_id") or "")
     task = db.get(TeamTask, task_id)
     if task is None or task.team_id != team.id:
@@ -2333,11 +2395,13 @@ def _execute_bid_award(
 
 @dataclass(frozen=True)
 class TeamPlanPublishResult:
+    """TL 规划落库结果:新建的 team run id 与该 run 下的任务 id 列表。"""
     run_id: str
     task_ids: list[str]
 
 
 def _normalized_team_activation_condition(frame: PlannedTaskFrame) -> dict:
+    """规整依赖激活条件:未知 type 回落到 all_succeeded,minimum 收敛到合法区间。"""
     if not frame.depends_on_task_ids:
         return {}
     condition = dict(frame.activation_condition or {})
@@ -2370,7 +2434,11 @@ def publish_team_planner_frames(
     created_by_user_id: str | None,
     frames: list[PlannedTaskFrame],
 ) -> TeamPlanPublishResult | None:
-    """Persist remote planner frames as a durable TeamTask DAG and dispatch ready nodes."""
+    """把规划器下发的 team_member TaskFrame 落库为持久 TeamTask DAG,并派发无依赖节点。
+
+    仅采纳 assignee_agent_id 属于团队成员(且非 TL)的 frame;同一 turn 重复发布时
+    直接复用已有 TeamRun 与任务。无可采纳 frame 时返回 None。
+    """
 
     remote_frames = [
         frame
@@ -2637,10 +2705,12 @@ def process_tl_reply(
         normalized.append((item, client_ref, task_id, dependencies, condition))
 
     def has_cycle() -> bool:
+        """检测任务依赖图是否存在环(DFS 三色标记),有环时整批任务拒绝落库。"""
         visiting: set[str] = set()
         visited: set[str] = set()
 
         def visit(task_id: str) -> bool:
+            """深度优先访问依赖节点:再次进入 visiting 集合即说明存在环。"""
             if task_id in visiting:
                 return True
             if task_id in visited:

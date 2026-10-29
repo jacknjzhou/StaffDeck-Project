@@ -12,6 +12,7 @@ from app.db.models import Skill, Tenant, Tool
 
 
 def _binding(channel: str = "feishu", config: dict | None = None) -> SimpleNamespace:
+    """构造飞书渠道绑定的轻量替身，供 streamer 读取渠道与配置字段。"""
     return SimpleNamespace(
         id="chan_feishu",
         tenant_id="tenant_a",
@@ -21,13 +22,16 @@ def _binding(channel: str = "feishu", config: dict | None = None) -> SimpleNames
 
 
 class FakeAdapter:
+    """记录建卡与更新调用的飞书假适配器，可注入创建/更新失败。"""
     def __init__(self, *, fail_create: bool = False, fail_update: bool = False) -> None:
+        """初始化调用记录，并按参数决定 create_card/update_card 是否抛错。"""
         self.create_calls: list[dict] = []
         self.update_calls: list[dict] = []
         self.fail_create = fail_create
         self.fail_update = fail_update
 
     def create_card(self, binding, target, card_json, *, idempotency_key) -> str:
+        """记录建卡入参并返回固定 message_id；失败开关打开时抛永久错误。"""
         self.create_calls.append(
             {"binding": binding, "target": target, "card": card_json, "key": idempotency_key}
         )
@@ -36,6 +40,7 @@ class FakeAdapter:
         return "om_card_123"
 
     def update_card(self, binding, message_id, card_json) -> None:
+        """记录卡片 PATCH 入参；失败开关打开时抛永久错误。"""
         self.update_calls.append(
             {"binding": binding, "message_id": message_id, "card": card_json}
         )
@@ -49,6 +54,7 @@ def _make_streamer(
     min_update_interval: float = 0.0,
     compact_sop: bool = False,
 ) -> FeishuTraceStreamer:
+    """按默认绑定与可调参数创建被测 streamer，减少各用例的重复装配。"""
     return FeishuTraceStreamer(
         _binding(),
         {"message_id": "om_source"},
@@ -99,6 +105,7 @@ def _wait_for_card_containing(adapter: FakeAdapter, *needles: str, timeout: floa
 
 
 def test_start_creates_card_and_saves_message_id() -> None:
+    """验证 start 只建一次卡片，并保存返回的 message_id 与幂等键。"""
     adapter = FakeAdapter()
     streamer = _make_streamer(adapter=adapter)
     streamer.start()
@@ -115,6 +122,7 @@ def test_start_creates_card_and_saves_message_id() -> None:
 
 
 def test_start_failure_does_not_raise_and_disables_updates() -> None:
+    """验证建卡失败时不抛错，且后续事件不再触发卡片更新。"""
     adapter = FakeAdapter(fail_create=True)
     streamer = _make_streamer(adapter=adapter)
     streamer.start()
@@ -126,6 +134,7 @@ def test_start_failure_does_not_raise_and_disables_updates() -> None:
 
 
 def test_on_event_renders_line_and_patches_card() -> None:
+    """验证路由事件被渲染为意图行，卡片头部切换为绿色完成态。"""
     adapter = FakeAdapter()
     streamer = _make_streamer(adapter=adapter)
     streamer.start()
@@ -147,6 +156,7 @@ def test_on_event_renders_line_and_patches_card() -> None:
 
 
 def test_throttle_merges_rapid_events() -> None:
+    """验证短时间内的多个事件被节流合并为少量 PATCH，结束后补发最终状态。"""
     adapter = FakeAdapter()
     streamer = _make_streamer(adapter=adapter, min_update_interval=10.0)
     streamer.start()
@@ -169,6 +179,7 @@ def test_throttle_merges_rapid_events() -> None:
 
 
 def test_update_failure_does_not_raise() -> None:
+    """验证卡片更新失败被吞掉，不影响会话主流程。"""
     adapter = FakeAdapter(fail_update=True)
     streamer = _make_streamer(adapter=adapter)
     streamer.start()
@@ -179,6 +190,7 @@ def test_update_failure_does_not_raise() -> None:
 
 
 def test_finish_marks_running_lines_completed() -> None:
+    """验证 finish 把仍在执行的步骤行收尾，并把卡片头部置为绿色。"""
     adapter = FakeAdapter()
     streamer = _make_streamer(adapter=adapter)
     streamer.start()
@@ -192,6 +204,7 @@ def test_finish_marks_running_lines_completed() -> None:
 
 
 def test_abort_marks_failed_state() -> None:
+    """验证 abort 后卡片头部变红，表示本轮失败。"""
     adapter = FakeAdapter()
     streamer = _make_streamer(adapter=adapter)
     streamer.start()
@@ -205,6 +218,7 @@ def test_abort_marks_failed_state() -> None:
 
 
 def test_on_event_after_finish_is_ignored() -> None:
+    """验证 finish 之后到达的事件被忽略，不再产生 PATCH。"""
     adapter = FakeAdapter()
     streamer = _make_streamer(adapter=adapter)
     streamer.start()
@@ -217,6 +231,7 @@ def test_on_event_after_finish_is_ignored() -> None:
 
 
 def test_sink_event_construction() -> None:
+    """验证 _SinkEvent 从 payload 提取 turn_id 作为事件 id。"""
     event = _SinkEvent("step_result", {"turn_id": "t1", "reply": "ok"})
     assert event.event_type == "step_result"
     assert event.payload_json["turn_id"] == "t1"
@@ -224,6 +239,7 @@ def test_sink_event_construction() -> None:
 
 
 def test_is_feishu_trace_enabled() -> None:
+    """验证仅飞书渠道且未显式关闭 trace 时才启用轨迹卡片。"""
     assert is_feishu_trace_enabled(_binding(channel="feishu")) is True
     assert is_feishu_trace_enabled(_binding(channel="wechat")) is False
     assert is_feishu_trace_enabled(_binding(channel="feishu", config={"trace_enabled": False})) is False
@@ -266,14 +282,17 @@ class _SlowAdapter(FakeAdapter):
     """模拟飞书网络慢：create_card/update_card 阻塞指定秒数。"""
 
     def __init__(self, *, delay: float, fail_create: bool = False, fail_update: bool = False) -> None:
+        """记录模拟网络延迟并透传失败开关给父类。"""
         super().__init__(fail_create=fail_create, fail_update=fail_update)
         self.delay = delay
 
     def create_card(self, binding, target, card_json, *, idempotency_key) -> str:
+        """延时后调用父类建卡，用于模拟慢网络下的调用耗时。"""
         time.sleep(self.delay)
         return super().create_card(binding, target, card_json, idempotency_key=idempotency_key)
 
     def update_card(self, binding, message_id, card_json) -> None:
+        """延时后调用父类更新卡片，用于模拟慢网络下的调用耗时。"""
         time.sleep(self.delay)
         super().update_card(binding, message_id, card_json)
 
@@ -326,6 +345,7 @@ def test_finish_then_worker_delivers_final_state() -> None:
 
 
 def _card_texts(adapter: FakeAdapter) -> str:
+    """把最近一次卡片更新中的文本元素拼成字符串，便于断言渲染内容。"""
     card = adapter.update_calls[-1]["card"]
     return "\n".join(el["text"]["content"] for el in card["elements"])
 
@@ -454,6 +474,7 @@ def test_card_renders_tool_display_names_and_readable_completion_reason() -> Non
 
 
 def test_streamer_loads_step_names_from_db() -> None:
+    """验证 streamer 从数据库加载技能步骤名与工具显示名，卡片不裸露内部 id。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -538,6 +559,7 @@ def _make_compact_streamer(
     binding=None,
     compact_sop: bool | None = True,
 ) -> FeishuTraceStreamer:
+    """创建紧凑 SOP 展示模式下的 streamer，预置技能与步骤中文名。"""
     return FeishuTraceStreamer(
         binding or _binding(),
         {"message_id": "om_source"},

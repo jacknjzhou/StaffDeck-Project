@@ -28,6 +28,7 @@ from app.db.models import (
 
 
 def _test_engine():
+    """建一个进程内共享连接的 SQLite 内存库,供各用例互不干扰地复用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -45,6 +46,7 @@ def _seed_wecom_binding(
     corp_id: str | None = None,
     bot_id: str = "aib_bot1",
 ) -> str:
+    """插入租户、员工与企微绑定行,返回绑定 ID 供用例引用。"""
     config = {"bot_id": bot_id}
     if corp_id:
         config["corp_id"] = corp_id
@@ -69,6 +71,7 @@ def _seed_wecom_binding(
 
 
 def _load_binding(engine, binding_id: str) -> ChannelBinding:
+    """重新读取绑定并脱离会话,避免离开会话后对象失效。"""
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         db.expunge(binding)
@@ -76,6 +79,7 @@ def _load_binding(engine, binding_id: str) -> ChannelBinding:
 
 
 def _wecom_inbound(event_id: str, text: str, *, userid: str = "zhangsan", group: bool = False):
+    """构造企微文本回调帧并归一化成入站事件,可切换单聊与群聊。"""
     body = {
         "msgid": event_id,
         "aibotid": "aib_bot1",
@@ -92,18 +96,22 @@ def _wecom_inbound(event_id: str, text: str, *, userid: str = "zhangsan", group:
 
 
 class RecordingAgentLoop:
+    """记录每轮 turn 请求的假 AgentLoop,替代真实模型调用。"""
     calls: list = []
 
     def __init__(self, db, *, event_sink=None):
+        """保存测试会话,供 handle_turn 提交事务时使用。"""
         self.db = db
 
     def handle_turn(self, request):
+        """记录本次 turn 请求并提交事务,模拟真实循环的最小行为。"""
         type(self).calls.append(request)
         self.db.commit()
 
 
 @pytest.fixture(autouse=True)
 def _fake_agent_loop(monkeypatch):
+    """用例级自动替换真实 AgentLoop 与企微打字调用,并清空调用记录。"""
     RecordingAgentLoop.calls = []
     monkeypatch.setattr(agent_loop_module, "AgentLoop", RecordingAgentLoop)
     monkeypatch.setattr(intake_module, "_send_wechat_typing", lambda *args, **kwargs: None)
@@ -111,6 +119,7 @@ def _fake_agent_loop(monkeypatch):
 
 
 def _users_of(engine, tenant_id: str, channel: str, external_id: str, scope: str) -> User:
+    """按通道身份直接解析或创建用户,便于断言身份归属。"""
     with Session(engine) as db:
         return resolve_or_provision_user(db, tenant_id, channel, external_id, None, scope)
 
@@ -119,6 +128,7 @@ def _users_of(engine, tenant_id: str, channel: str, external_id: str, scope: str
 
 
 def test_external_account_scope_resolution() -> None:
+    """验证 scope 解析优先级:企业 corp_id 优先,其次 bot_id,最后回退绑定 ID。"""
     engine = _test_engine()
     with Session(engine) as db:
         wechat = ChannelBinding(tenant_id="t", agent_id="a", channel="wechat", config_json={})
@@ -144,6 +154,7 @@ def test_external_account_scope_resolution() -> None:
 
 
 def test_same_userid_different_tenants_get_different_users() -> None:
+    """验证不同租户下相同 userid 被拆成两个独立账号。"""
     engine = _test_engine()
     binding_a = _seed_wecom_binding(engine, tenant_id="tenant_a", corp_id="corpA")
     binding_b = _seed_wecom_binding(
@@ -166,6 +177,7 @@ def test_same_userid_different_tenants_get_different_users() -> None:
 
 
 def test_same_tenant_different_corp_same_userid_get_different_users() -> None:
+    """验证同租户不同企业的同名 userid 得到不同用户,username 与身份行都不冲突。"""
     engine = _test_engine()
     binding_a = _seed_wecom_binding(engine, corp_id="corpA", bot_id="bot_a")
     binding_b = _seed_wecom_binding(engine, corp_id="corpB", bot_id="bot_b", agent_id="agent_2")
@@ -188,6 +200,7 @@ def test_same_tenant_different_corp_same_userid_get_different_users() -> None:
 
 
 def test_same_corp_different_bindings_share_identity() -> None:
+    """验证同企业不同绑定的同一 userid 复用同一用户与同一条身份记录。"""
     engine = _test_engine()
     binding_1 = _seed_wecom_binding(engine, corp_id="corpX", bot_id="bot_1")
     binding_2 = _seed_wecom_binding(engine, corp_id="corpX", bot_id="bot_2", agent_id="agent_2")
@@ -203,6 +216,7 @@ def test_same_corp_different_bindings_share_identity() -> None:
 
 
 def test_cross_corp_same_msgid_events_both_processed() -> None:
+    """验证两个企业的同一 msgid 各自入库并处理,幂等按绑定维度判定。"""
     engine = _test_engine()
     binding_a = _seed_wecom_binding(engine, corp_id="corpA", bot_id="bot_a")
     binding_b = _seed_wecom_binding(engine, corp_id="corpB", bot_id="bot_b", agent_id="agent_2")
@@ -221,6 +235,7 @@ def test_cross_corp_same_msgid_events_both_processed() -> None:
 
 
 def test_bind_unbind_never_migrates_other_corp_data() -> None:
+    """验证绑定与解绑只迁移当前企业 corpA 的会话与记忆,corpB 数据全程不动。"""
     engine = _test_engine()
     binding_a = _seed_wecom_binding(engine, corp_id="corpA", bot_id="bot_a")
     _seed_wecom_binding(engine, corp_id="corpB", bot_id="bot_b", agent_id="agent_2")
@@ -341,6 +356,7 @@ def test_bind_unbind_never_migrates_other_corp_data() -> None:
 
 
 def test_adopt_skips_other_scope_sessions() -> None:
+    """验证孤儿会话认领只按账号键匹配本绑定,不认领其它企业或历史键的会话。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, corp_id="corpA", bot_id="bot_a")
     with Session(engine) as db:
@@ -484,6 +500,7 @@ def _build_legacy_scope_schema(engine) -> None:
 
 
 def test_channel_scope_rebuild_migration(monkeypatch, tmp_path) -> None:
+    """验证 scope 重建迁移回填身份与 session 前缀、改用按绑定的幂等唯一约束,并可重复执行。"""
     db_path = tmp_path / "scope.db"
     engine = create_engine(f"sqlite:///{db_path}")
     _build_legacy_scope_schema(engine)
@@ -535,6 +552,7 @@ def test_channel_scope_rebuild_migration(monkeypatch, tmp_path) -> None:
 def test_scope_rebuild_uses_session_binding_in_multi_corp_tenant(
     monkeypatch, tmp_path
 ) -> None:
+    """验证多企业租户下按会话所在绑定回填 scope,歧义身份归 legacy 并隔离其会话。"""
     db_path = tmp_path / "scope-multi-corp.db"
     engine = create_engine(f"sqlite:///{db_path}")
     _build_legacy_scope_schema(engine)
@@ -649,6 +667,7 @@ def test_scope_rebuild_uses_session_binding_in_multi_corp_tenant(
 
 
 def _make_api_client(engine):
+    """搭一个只挂载渠道路由的 TestClient,并用内存库会话覆盖依赖。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -659,6 +678,7 @@ def _make_api_client(engine):
     app.include_router(channels_api.router)
 
     def override_get_session():
+        """为每个请求提供独立测试会话,请求结束时关闭。"""
         with Session(engine) as session:
             yield session
 
@@ -667,6 +687,7 @@ def _make_api_client(engine):
 
 
 def test_wecom_credentials_accepts_corp_id_and_meta_lists_it(monkeypatch) -> None:
+    """验证企微凭据接口接收 corp_id 并落库,meta 将其标为必填且非敏感字段。"""
     import app.api.channels as channels_api
 
     engine = _test_engine()
@@ -725,6 +746,7 @@ def test_wecom_credentials_accepts_corp_id_and_meta_lists_it(monkeypatch) -> Non
 
 
 def _seed_owner(engine):
+    """插入租户、员工与所有者账号,返回所有者及其鉴权头。"""
     from app.security.auth import create_access_token
 
     with Session(engine) as db:
@@ -791,6 +813,7 @@ def _seed_scope_history(engine, binding_id: str, scope: str) -> None:
 
 
 def test_credentials_corp_id_fill_migrates_identity_sessions_and_pointer(monkeypatch) -> None:
+    """验证补填 corp_id 后身份、会话与出站指针同步迁移,后续消息仍路由到同一用户。"""
     import app.api.channels as channels_api
     from app.db.models import ChannelConvState
 
@@ -830,6 +853,7 @@ def test_credentials_corp_id_fill_migrates_identity_sessions_and_pointer(monkeyp
 
 
 def test_scope_migration_includes_identities_without_sessions() -> None:
+    """验证 scope 迁移覆盖无会话引用的身份行,且只改写当前绑定的会话。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, corp_id="corpA", bot_id="aib_bot1")
     with Session(engine) as db:
@@ -901,6 +925,7 @@ def test_scope_migration_includes_identities_without_sessions() -> None:
 
 
 def test_scope_migration_normalizes_legacy_group_identity_once() -> None:
+    """验证旧群身份在迁移时被规范化为 group:<room> 形式,且只转换一次。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, bot_id="aib_bot1")
     with Session(engine) as db:
@@ -941,6 +966,7 @@ def test_scope_migration_normalizes_legacy_group_identity_once() -> None:
 
 
 def test_scope_migration_roundtrip_and_noop(monkeypatch) -> None:
+    """验证补填 corp_id 触发迁移、跨企业变更被 400 拦截,且 scope 未变时不重复迁移。"""
     import app.api.channels as channels_api
     from app.channels import service_identity as identity_module
 
@@ -995,6 +1021,7 @@ def test_scope_migration_roundtrip_and_noop(monkeypatch) -> None:
 
 
 def test_migrate_scope_noop_when_unchanged() -> None:
+    """验证新旧 scope 相同时迁移返回全零统计,不触碰任何数据。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, bot_id="aib_bot1")
     with Session(engine) as db:
@@ -1009,6 +1036,7 @@ def test_migrate_scope_noop_when_unchanged() -> None:
 
 
 def test_same_corp_two_bots_get_isolated_sessions_and_outbound() -> None:
+    """验证同企业两个 Bot 的会话与出站投递按 binding 隔离,互不串台。"""
     engine = _test_engine()
     binding_a = _seed_wecom_binding(engine, corp_id="corpX", bot_id="bot_a")
     # uq(agent_id, channel) 全局唯一:同 tenant 两绑定用不同默认员工
@@ -1052,6 +1080,7 @@ def test_same_corp_two_bots_get_isolated_sessions_and_outbound() -> None:
 
 
 def test_scope_migration_narrowed_to_current_binding() -> None:
+    """验证 scope 迁移只影响当前绑定的身份、会话与指针,其它绑定保持原样。"""
     engine = _test_engine()
     binding_a = _seed_wecom_binding(engine, bot_id="bot_a")
     binding_b = _seed_wecom_binding(engine, bot_id="bot_b", agent_id="agent_2")
@@ -1147,6 +1176,7 @@ def test_scope_migration_narrowed_to_current_binding() -> None:
 
 
 def test_scope_migration_conflict_aborts_without_merging_users() -> None:
+    """验证目标 scope 已有冲突身份时抛 IdentityScopeConflict 并回滚,不合并用户数据。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, bot_id="aib_bot1")
     with Session(engine) as db:
@@ -1228,6 +1258,7 @@ def test_scope_migration_conflict_aborts_without_merging_users() -> None:
 
 
 def test_corp_id_read_and_reconfig_keeps_unless_explicit(monkeypatch) -> None:
+    """验证 corp_id 可读回、重配未传时保留原值、显式置空按跨企业变更 400 拦截。"""
     import app.api.channels as channels_api
 
     engine = _test_engine()
@@ -1278,6 +1309,7 @@ def test_corp_id_read_and_reconfig_keeps_unless_explicit(monkeypatch) -> None:
 
 
 def test_channel_bindings_multi_migration_removes_uq(monkeypatch, tmp_path) -> None:
+    """验证迁移重建绑定表去掉 (agent_id, channel) 唯一约束,并支持幂等重跑。"""
     db_path = tmp_path / "multi.db"
     engine = create_engine(f"sqlite:///{db_path}")
     with engine.begin() as conn:
@@ -1336,6 +1368,7 @@ def test_channel_bindings_multi_migration_removes_uq(monkeypatch, tmp_path) -> N
 def test_channel_account_key_migration_uses_corp_and_backfills_sessions(
     monkeypatch, tmp_path
 ) -> None:
+    """验证账号键按企业加机器人生成,并回填已关联会话的账号键。"""
     db_path = tmp_path / "account-key.db"
     engine = create_engine(f"sqlite:///{db_path}")
     SQLModel.metadata.create_all(engine)
@@ -1390,6 +1423,7 @@ def test_channel_account_key_migration_uses_corp_and_backfills_sessions(
 def test_channel_account_key_migration_rolls_back_duplicate_corp_bot(
     monkeypatch, tmp_path
 ) -> None:
+    """验证同一企业同一机器人被多绑定占用时迁移报错回滚,账号键保持为空。"""
     db_path = tmp_path / "account-key-duplicate.db"
     engine = create_engine(f"sqlite:///{db_path}")
     SQLModel.metadata.create_all(engine)
@@ -1419,6 +1453,7 @@ def test_channel_account_key_migration_rolls_back_duplicate_corp_bot(
 def test_channel_account_key_failure_rolls_back_real_legacy_schema(
     monkeypatch, tmp_path
 ) -> None:
+    """验证账号键迁移在真实老库上失败时完整回滚(无新列、无迁移标记),修正后可继续迁移。"""
     db_path = tmp_path / "legacy-account-key-failure.db"
     engine = create_engine(f"sqlite:///{db_path}")
     with engine.begin() as conn:
@@ -1524,6 +1559,7 @@ def test_channel_account_key_failure_rolls_back_real_legacy_schema(
 
 
 def test_scope_backfill_priority_rules(monkeypatch, tmp_path) -> None:
+    """验证 scope 回填按会话引用、租户唯一性、无法推断三级优先级的取值规则。"""
     db_path = tmp_path / "scope-priority.db"
     engine = create_engine(f"sqlite:///{db_path}")
     _build_legacy_scope_schema(engine)

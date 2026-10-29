@@ -47,12 +47,19 @@ const DEFAULT_UI_CONFIG: UiConfigForm = {
   sandbox_allowed_domains: '',
 };
 
+/** 将后端时间字符串统一格式化为 YYYY-MM-DD，缺失时区按 UTC 处理。 */
 function formatDateOnly(value: string): string {
   const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}Z`;
   const date = new Date(normalized);
   return Number.isNaN(date.getTime()) ? value.slice(0, 10) : date.toISOString().slice(0, 10);
 }
 
+/**
+ * 运行设置页：统一维护当前租户的执行记录、上下文压缩与沙盒配置。
+ *
+ * 挂载时拉取 `/api/enterprise/ui-config` 回填表单；保存成功后刷新更新时间与生效目录，
+ * 若沙盒开关变更触发后端重启，则等待健康检查通过后整页刷新。
+ */
 export default function RuntimeSettingsPage({ currentUser }: { currentUser: EnterpriseAuthUser }) {
   const [form, setForm] = useState<UiConfigForm>(DEFAULT_UI_CONFIG);
   const [loading, setLoading] = useState(false);
@@ -62,6 +69,7 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
   const [apiKeyOpen, setApiKeyOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [sandboxStatus, setSandboxStatus] = useState<Pick<UIConfigRead, 'sandbox_status' | 'sandbox_status_message' | 'sandbox_status_remediation'>>({});
+  /** 以局部补丁合并表单字段，保留其余未修改项。 */
   const update = (patch: Partial<UiConfigForm>) => setForm((prev) => ({ ...prev, ...patch }));
 
   useEffect(() => {
@@ -94,6 +102,12 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
       .catch((error) => notify.error(error.message));
   }, []);
 
+  /**
+   * 校验并提交运行设置，保存成功后同步更新时间与存储目录。
+   *
+   * 数字字段或上下文参数非法时直接提示并中止请求；沙盒变更会触发重启，
+   * 此处等待健康检查通过后刷新页面，避免继续操作旧实例。
+   */
   async function save() {
     const reflectionMaxRounds = Number(form.reflection_max_rounds);
     const agentLoopMaxActions = Number(form.agent_loop_max_actions);
@@ -272,6 +286,12 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
   );
 }
 
+/**
+ * 校验上下文压缩相关参数，返回首个错误文案；全部合法时返回 null。
+ *
+ * 依次检查数值有效性、整数要求、各项区间、摘要预算之和与预算的关系，
+ * 以及历史角色和摘要前缀非空约束。
+ */
 export function validateContextSettings(form: UiConfigForm): string | null {
   const tokenBudget = Number(form.context_token_budget);
   const triggerRatio = Number(form.context_compaction_trigger_ratio);
@@ -314,6 +334,7 @@ export function validateContextSettings(form: UiConfigForm): string | null {
   return null;
 }
 
+/** 按勾选状态增删历史上下文允许的角色，返回新数组且不改动入参。 */
 function toggleContextRole(
   roles: UiConfigForm['context_allowed_roles'],
   role: UiConfigForm['context_allowed_roles'][number],
@@ -323,14 +344,21 @@ function toggleContextRole(
   return roles.filter((item) => item !== role);
 }
 
+/** 表单字段容器：统一渲染标题、可选提示文案与子控件。 */
 function LabeledField({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return <label className="flex flex-col gap-[6px]"><span className="text-[12px] font-medium text-[#464c5e]">{label}</span>{hint && <span className="text-[11px] leading-[16px] text-muted-foreground">{hint}</span>}{children}</label>;
 }
 
+/** 开关行：左侧展示标题与可选提示，右侧渲染 Switch 控件。 */
 function SwitchRow({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (next: boolean) => void }) {
   return <label className="flex items-center justify-between gap-[16px]"><span><span className="block text-[12px] font-medium text-[#464c5e]">{label}</span>{hint && <span className="mt-[3px] block text-[11px] leading-[16px] text-muted-foreground">{hint}</span>}</span><Switch checked={checked} onCheckedChange={onChange} /></label>;
 }
 
+/**
+ * 等待 StaffDeck 重启完成：先固定等待 1.8 秒，再最多轮询 60 次健康检查。
+ *
+ * 健康检查成功即返回；超过轮询上限时抛出错误，提示用户手动刷新页面。
+ */
 async function waitForApplicationRestart(): Promise<void> {
   await new Promise((resolve) => window.setTimeout(resolve, 1800));
   for (let attempt = 0; attempt < 60; attempt += 1) {

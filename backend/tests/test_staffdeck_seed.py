@@ -49,11 +49,13 @@ EXPECTED_EXPANDED_EMPLOYEE_PROFILES = {
 
 
 class _FlushOnlySession:
+    """仅提供 flush 的会话替身，避免种子流程调用真实提交。"""
     def flush(self) -> None:
-        pass
+        """空实现，模拟可安全忽略的 flush 调用。"""
 
 
 def _seeded_session() -> Session:
+    """创建内存库并执行一次演示数据种子，返回已提交的会话。"""
     engine = create_engine("sqlite:///:memory:")
     SQLModel.metadata.create_all(engine)
     session = Session(engine)
@@ -63,11 +65,15 @@ def _seeded_session() -> Session:
 
 
 def test_staffdeck_seed_reads_fixture_as_utf8(monkeypatch) -> None:
+    """验证夹具文件按 UTF-8 编码读取，避免中文内容乱码。"""
     class FakeFixturePath:
+        """替身夹具路径，断言读取时必须显式声明 utf-8 编码。"""
         def exists(self) -> bool:
+            """始终报告夹具文件存在。"""
             return True
 
         def read_text(self, *, encoding=None) -> str:
+            """断言调用方传入 encoding='utf-8'，并返回空 JSON 文本。"""
             assert encoding == "utf-8"
             return "{}"
 
@@ -87,11 +93,13 @@ def test_staffdeck_seed_reads_fixture_as_utf8(monkeypatch) -> None:
 
 
 def test_staffdeck_seed_requires_every_bundled_fixture(tmp_path) -> None:
+    """验证缺少任一内置夹具文件时直接抛出 FileNotFoundError。"""
     with pytest.raises(FileNotFoundError):
         staffdeck_seed._load_seed_fixtures((tmp_path / "missing-fixture.json",))
 
 
 def test_expanded_staffdeck_skills_match_runtime_schema() -> None:
+    """验证扩展夹具中的技能卡与分支内容均符合 SkillCard 运行时模式。"""
     data = json.loads(staffdeck_seed.EXPANDED_FIXTURE_PATH.read_text(encoding="utf-8"))
 
     # 每个预置员工一张卡；此外允许绑定到主种子员工的策划卡（如飞书审批提交）。
@@ -112,6 +120,7 @@ def test_expanded_staffdeck_skills_match_runtime_schema() -> None:
 
 
 def test_staffdeck_seed_exposes_selected_agents_with_knowledge_bases() -> None:
+    """验证预置员工可见，且各自绑定的知识库数量、文档与切片数与预期一致。"""
     with _seeded_session() as db:
         admin = db.exec(
             select(User).where(User.tenant_id == "tenant_demo", User.username == "admin")
@@ -146,6 +155,7 @@ def test_staffdeck_seed_exposes_selected_agents_with_knowledge_bases() -> None:
 
 
 def test_staffdeck_seed_adds_expanded_employee_profiles_idempotently() -> None:
+    """验证重复执行种子不会重复创建扩展员工及其知识库与技能分支。"""
     with _seeded_session() as db:
         seed_demo_data(db)
         db.commit()
@@ -225,6 +235,7 @@ def test_staffdeck_seed_adds_expanded_employee_profiles_idempotently() -> None:
 
 
 def test_staffdeck_seed_applies_reliability_defaults_to_existing_rows() -> None:
+    """验证种子会为既有工具与技能节点补齐超时、知识检索字段等可靠性默认值。"""
     with _seeded_session() as db:
         archive_tool = db.exec(
             select(Tool).where(
@@ -249,6 +260,7 @@ def test_staffdeck_seed_applies_reliability_defaults_to_existing_rows() -> None:
 
 
 def test_staffdeck_seed_uses_existing_admin_id_for_seeded_agents() -> None:
+    """验证已存在的管理员账号成为种子员工的归属人，而非新建管理员。"""
     engine = create_engine("sqlite:///:memory:")
     SQLModel.metadata.create_all(engine)
     with Session(engine) as db:
@@ -282,6 +294,7 @@ def test_staffdeck_seed_uses_existing_admin_id_for_seeded_agents() -> None:
 
 
 def test_staffdeck_seed_preserves_custom_avatar_on_restart() -> None:
+    """验证重启重跑种子时用户自定义头像字段不被覆盖。"""
     with _seeded_session() as db:
         agent = db.exec(
             select(AgentProfile).where(
@@ -315,6 +328,7 @@ def test_staffdeck_seed_preserves_custom_avatar_on_restart() -> None:
 
 
 def test_staffdeck_seed_does_not_overwrite_non_seed_employee_name_conflict() -> None:
+    """验证同名但非种子创建的员工不被改写，保留原描述与归属信息。"""
     engine = create_engine("sqlite:///:memory:")
     SQLModel.metadata.create_all(engine)
     with Session(engine) as db:
@@ -357,6 +371,7 @@ def test_staffdeck_seed_does_not_overwrite_non_seed_employee_name_conflict() -> 
 
 
 def test_staffdeck_seed_archives_legacy_default_agent() -> None:
+    """验证旧版默认智能体被归档并从员工列表中隐藏。"""
     engine = create_engine("sqlite:///:memory:")
     SQLModel.metadata.create_all(engine)
     with Session(engine) as db:

@@ -15,7 +15,9 @@ const EXPANDED_EMPLOYEES = [
   ['data-analyst', 'data-insight', '数据分析', '经营分析师', 'staffdeck-avatar-data.png'],
 ] as const;
 
+/** 扩展员工预设的注册信息与头像资源。 */
 describe('expanded employee presets', () => {
+  /** 验证每个扩展员工都注册了独立头像与对应模板元数据。 */
   it.each(EXPANDED_EMPLOYEES)(
     'registers %s with its own avatar and template metadata',
     (roleKey, avatarPreset, categoryName, roleName, avatarFilename) => {
@@ -40,6 +42,7 @@ describe('expanded employee presets', () => {
     },
   );
 
+  /** 验证每个扩展员工使用互不相同的插图。 */
   it('uses a distinct illustration for each expanded employee', () => {
     const images = EXPANDED_EMPLOYEES.map(([, avatarPreset]) => employeeAvatarImage({
       avatarKind: 'preset',

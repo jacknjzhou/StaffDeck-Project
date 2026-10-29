@@ -16,6 +16,7 @@ MAX_ENVELOPE_BYTES = 256 * 1024
 
 
 def encode_replay_envelope(inbound: ChannelInbound, *, account_scope: str) -> dict[str, Any]:
+    """把入站事件封装成可回放的持久化信封，带上信封版本与账号作用域。"""
     return {
         "schema_version": ENVELOPE_VERSION,
         "account": {"scope": account_scope.strip()},
@@ -24,6 +25,7 @@ def encode_replay_envelope(inbound: ChannelInbound, *, account_scope: str) -> di
 
 
 def decode_replay_envelope(payload: object) -> ChannelInbound:
+    """校验并还原回放信封，重建 ChannelInbound；版本、字段或渠道不符时抛 ValueError。"""
     if not isinstance(payload, dict) or payload.get("schema_version") != ENVELOPE_VERSION:
         raise ValueError("unsupported_envelope_version")
     normalized = payload.get("inbound")
@@ -59,6 +61,11 @@ def stage_wechat_kf_inbound(
     account_scope: str,
     inbound: ChannelInbound,
 ) -> StageResult:
+    """把微信客服入站事件落到 ChannelInboundEvent，写库前先校验绑定围栏。
+
+    绑定、配置版本、账号作用域或 open_kfid 任一不符即按安全丢弃处理；
+    同一 event_id 已存在返回 DUPLICATE，数据库异常返回 NACK 交给上游重投。
+    """
     if inbound.channel != "wechat_kf" or not inbound.event_id or not account_scope:
         return StageResult(StageDisposition.SECURITY_DROP, error_code="invalid_event_identity")
     envelope = encode_replay_envelope(inbound, account_scope=account_scope)

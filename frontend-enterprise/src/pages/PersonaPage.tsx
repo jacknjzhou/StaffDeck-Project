@@ -22,6 +22,7 @@ type PersonaForm = {
 
 const BLANK_PERSONA: PersonaForm = { agent_name: '', agent_description: '', system_prompt: '' };
 
+/** 将后端日期字符串格式化为 YYYY-MM-DD，解析失败时截取原始字符串前 10 位。 */
 function formatDateOnly(value: string): string {
   const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}Z`;
   const date = new Date(normalized);
@@ -31,6 +32,11 @@ function formatDateOnly(value: string): string {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * 岗位人设编辑页。
+ *
+ * 挂载时加载员工域列表并回填人设；保存时按当前选中岗位写入岗位或组织默认人设接口。
+ */
 export default function PersonaPage() {
   const [form, setForm] = useState<PersonaForm>(BLANK_PERSONA);
   const [loading, setLoading] = useState(false);
@@ -40,6 +46,7 @@ export default function PersonaPage() {
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || null;
   const isOverallPersona = !selectedAgent || selectedAgent.is_overall;
 
+  /** 以增量补丁方式更新人设表单状态。 */
   const updatePersona = (patch: Partial<PersonaForm>) => setForm((prev) => ({ ...prev, ...patch }));
 
   useEffect(() => {
@@ -47,6 +54,7 @@ export default function PersonaPage() {
   }, []);
 
   useEffect(() => {
+    /** 响应员工域切换事件，同步当前选中的岗位。 */
     const onScopeChange = (event: Event) => {
       const agentId = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
       if (agentId && !isTeamScope(agentId)) setSelectedAgentId(agentId);
@@ -89,6 +97,7 @@ export default function PersonaPage() {
       .catch((error) => notify.error(error.message));
   }, [agents, selectedAgentId]);
 
+  /** 加载员工域列表并确定当前应选中的岗位，失败时提示错误且不中断页面。 */
   async function loadPersonaScope() {
     try {
       const rows = await api.get<AgentProfileRead[]>(`/api/enterprise/agents?tenant_id=${TENANT_ID}`);
@@ -104,6 +113,12 @@ export default function PersonaPage() {
     }
   }
 
+  /**
+   * 保存当前岗位人设。
+   *
+   * 先校验必填项；有选中岗位时更新该岗位（组织默认岗位同时同步 persona），
+   * 成功后广播员工域切换事件，失败时提示错误并恢复按钮状态。
+   */
   async function save() {
     if (!form.system_prompt.trim() || (selectedAgent && !form.agent_name.trim())) {
       notify.error('请填写必填项');
@@ -182,6 +197,7 @@ export default function PersonaPage() {
   );
 }
 
+/** 带标题的表单字段容器，用于包裹输入控件并保持统一间距。 */
 function LabeledField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-[6px]">

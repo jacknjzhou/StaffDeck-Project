@@ -37,6 +37,7 @@ from app.session.session_schema import ChatSessionCreateRequest, ChatTurnRequest
 
 
 def test_existing_chat_session_cannot_switch_agent() -> None:
+    """验证已绑定会话收到其他 agent_id 时返回 409 且原绑定保持不变。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         current_user = User(
@@ -70,6 +71,7 @@ def test_existing_chat_session_cannot_switch_agent() -> None:
 
 
 def test_chat_agent_must_be_active_non_overall_agent() -> None:
+    """验证缺少 agent、使用整体员工或已归档员工时分别返回 400、404、404。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         current_user = User(
@@ -103,6 +105,7 @@ def test_chat_agent_must_be_active_non_overall_agent() -> None:
 
 
 def test_chat_slash_commands_only_list_bound_executable_resources() -> None:
+    """验证斜杠命令只列出已绑定且可执行的 SOP、通用技能与工具。"""
     with _test_session() as db:
         current_user = User(
             id="user_demo", tenant_id="tenant_demo", username="demo", password_hash="x"
@@ -188,6 +191,7 @@ def test_chat_slash_commands_only_list_bound_executable_resources() -> None:
 
 
 def test_create_chat_session_always_creates_new_agent_session() -> None:
+    """验证同一员工下多次创建会话都会生成新的会话记录。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         current_user = User(
@@ -233,6 +237,7 @@ def test_create_chat_session_always_creates_new_agent_session() -> None:
 
 
 def test_chat_session_list_exposes_scheduled_origin_without_title_inference() -> None:
+    """验证会话列表按 ScheduledTaskRun 标记定时来源，且不依据标题推断。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         current_user = User(
@@ -276,6 +281,7 @@ def test_chat_session_list_exposes_scheduled_origin_without_title_inference() ->
 
 
 def test_chat_session_list_hides_pilotdeck_sessions_from_all_supported_origins() -> None:
+    """验证三种来源识别方式下的 PilotDeck 会话都被隐藏，且数据仍然保留。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         current_user = User(
@@ -341,6 +347,7 @@ def test_chat_session_list_hides_pilotdeck_sessions_from_all_supported_origins()
 
 
 def test_agent_loop_persists_pilotdeck_origin_on_legacy_session() -> None:
+    """验证新建会话时会把 PilotDeck 渠道来源写入会话记录。"""
     with _test_session() as db:
         loop = AgentLoop(db)
         session = loop._get_or_create_session(
@@ -357,6 +364,7 @@ def test_agent_loop_persists_pilotdeck_origin_on_legacy_session() -> None:
 
 
 def test_session_title_summary_uses_first_user_message_when_title_empty(monkeypatch) -> None:
+    """验证标题为空时用首条用户消息生成标题并写入摘要事件。"""
     engine = _test_engine()
     monkeypatch.setattr(chat_api, "engine", engine)
     with Session(engine) as db:
@@ -390,6 +398,7 @@ def test_session_title_summary_uses_first_user_message_when_title_empty(monkeypa
 
 
 def test_session_title_summary_does_not_override_existing_title(monkeypatch) -> None:
+    """验证已有标题时不再生成摘要标题，也不写入事件。"""
     engine = _test_engine()
     monkeypatch.setattr(chat_api, "engine", engine)
     with Session(engine) as db:
@@ -426,6 +435,7 @@ def test_session_title_summary_does_not_override_existing_title(monkeypatch) -> 
 
 
 def test_scheduled_task_chat_turn_marks_user_message_metadata() -> None:
+    """验证定时任务轮次会在用户消息元数据中标记 interaction_mode。"""
     request = ChatTurnRequest(
         tenant_id="tenant_demo",
         session_id="session_demo",
@@ -439,6 +449,7 @@ def test_scheduled_task_chat_turn_marks_user_message_metadata() -> None:
 
 
 def test_normal_chat_turn_user_message_metadata_is_empty() -> None:
+    """验证普通对话轮次的用户消息元数据为空。"""
     request = ChatTurnRequest(
         tenant_id="tenant_demo",
         session_id="session_demo",
@@ -451,6 +462,7 @@ def test_normal_chat_turn_user_message_metadata_is_empty() -> None:
 
 
 def test_chat_turn_can_select_enabled_model_config() -> None:
+    """验证轮次可以指定已启用的模型配置。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -489,6 +501,7 @@ def test_chat_turn_can_select_enabled_model_config() -> None:
 
 
 def test_chat_turn_rejects_disabled_selected_model_config() -> None:
+    """验证指定停用模型配置时抛出 disabled_model_config 前置错误。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -518,6 +531,7 @@ def test_chat_turn_rejects_disabled_selected_model_config() -> None:
 
 
 def test_agent_persona_prompt_includes_employee_identity_and_metadata() -> None:
+    """验证员工设定提示包含名称、描述与岗位等元数据，且不泄露 owner_user_id。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -552,6 +566,7 @@ def test_agent_persona_prompt_includes_employee_identity_and_metadata() -> None:
 
 
 def test_agent_persona_prompt_keeps_custom_prompt_with_identity() -> None:
+    """验证自定义员工提示与身份信息同时保留，且不混入全局员工设定。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(PersonaConfig(tenant_id="tenant_demo", system_prompt="全局员工设定"))
@@ -579,10 +594,12 @@ def test_agent_persona_prompt_keeps_custom_prompt_with_identity() -> None:
 
 
 def _test_session() -> Session:
+    """创建绑定内存 SQLite 引擎的数据库会话，供各用例隔离数据。"""
     return Session(_test_engine())
 
 
 def _test_engine():
+    """构造共享连接的内存 SQLite 引擎并建表，保证测试之间互不影响。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

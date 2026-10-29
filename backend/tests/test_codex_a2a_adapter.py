@@ -10,6 +10,7 @@ from app.db.models import A2ATaskEvent, A2ATaskRun
 
 
 def _client(monkeypatch, tmp_path) -> tuple[TestClient, object]:
+    """构建挂载 Codex A2A 路由的测试客户端，用内存库隔离存储并屏蔽真实进程启动。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -32,6 +33,7 @@ def _client(monkeypatch, tmp_path) -> tuple[TestClient, object]:
 
 
 def test_codex_a2a_uses_public_task_id_and_supports_continuation(monkeypatch, tmp_path) -> None:
+    """验证对外只暴露公开任务 ID，且带 taskId 的后续消息沿用同一任务与上下文。"""
     client, engine = _client(monkeypatch, tmp_path)
     message = {
         "messageId": "message-1",
@@ -107,6 +109,7 @@ def test_codex_a2a_uses_public_task_id_and_supports_continuation(monkeypatch, tm
 
 
 def test_codex_a2a_get_cancel_and_list_tasks(monkeypatch, tmp_path) -> None:
+    """验证 GetTask 返回指定任务、ListTasks 按上下文过滤、CancelTask 置为 canceled。"""
     client, _ = _client(monkeypatch, tmp_path)
     submitted = client.post(
         "/api/a2a/codex",
@@ -161,6 +164,7 @@ def test_codex_a2a_get_cancel_and_list_tasks(monkeypatch, tmp_path) -> None:
 
 
 def test_codex_a2a_message_id_is_idempotent(monkeypatch, tmp_path) -> None:
+    """验证重复投递同一 messageId 时复用一个任务记录，不会重复建任务。"""
     client, engine = _client(monkeypatch, tmp_path)
     payload = {
         "jsonrpc": "2.0",

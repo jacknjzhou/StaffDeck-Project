@@ -15,6 +15,7 @@ from app.db.seed import DEMO_TOOLS, REFUND_SKILL
 
 
 def test_optional_handoff_action_does_not_force_handoff() -> None:
+    """验证当前节点只是"允许"转人工时,正常完成不会强制触发转接。"""
     requirement = TaskRequirement(
         task_frame_id="task-refund",
         kind="sop",
@@ -49,6 +50,7 @@ def test_optional_handoff_action_does_not_force_handoff() -> None:
 
 
 def test_terminal_handoff_node_still_forces_handoff() -> None:
+    """验证终止型 handoff 节点即使模型声明完成,结果状态也必须归一为 handoff。"""
     requirement = TaskRequirement(
         task_frame_id="task-handoff",
         kind="sop",
@@ -70,6 +72,7 @@ def test_terminal_handoff_node_still_forces_handoff() -> None:
 
 
 def test_terminal_handoff_node_normalizes_model_failure_to_handoff() -> None:
+    """验证终止型 handoff 节点上模型返回失败时,状态同样归一为 handoff 而非 failed。"""
     requirement = TaskRequirement(
         task_frame_id="task-handoff-failed-model",
         kind="sop",
@@ -95,6 +98,7 @@ def test_terminal_handoff_node_normalizes_model_failure_to_handoff() -> None:
 
 
 def test_refund_skill_executes_real_refund_tool() -> None:
+    """验证退款技能定义真实绑定 order.query/order.refund 工具,节点与边顺序符合 SOP。"""
     node_ids = [node["node_id"] for node in REFUND_SKILL["nodes"]]
     nodes = {node["node_id"]: node for node in REFUND_SKILL["nodes"]}
     refund_tool = next(tool for tool in DEMO_TOOLS if tool["name"] == "order.refund")
@@ -125,6 +129,7 @@ def test_refund_skill_executes_real_refund_tool() -> None:
 
 
 def test_mock_refund_updates_order_and_is_idempotent() -> None:
+    """验证 mock 退款成功后订单不可再退,重复退款请求幂等回放同一结果。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

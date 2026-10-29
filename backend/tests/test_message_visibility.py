@@ -8,6 +8,7 @@ def _message(
     content: str,
     metadata: dict | None = None,
 ) -> Message:
+    """构造指定角色与元数据的消息行，供可见性过滤用例复用。"""
     return Message(
         id=message_id,
         tenant_id="tenant_demo",
@@ -19,6 +20,7 @@ def _message(
 
 
 def test_legacy_team_prompt_is_projected_back_to_the_original_user_message() -> None:
+    """验证历史团队 TL 提示会被还原为用户最初的需求文本。"""
     row = _message(
         "msg_user",
         "user",
@@ -35,6 +37,7 @@ def test_legacy_team_prompt_is_projected_back_to_the_original_user_message() -> 
 
 
 def test_internal_repair_turn_and_its_assistant_reply_are_hidden() -> None:
+    """验证内部修复轮次及其助手回复一并隐藏，只保留正常对话。"""
     visible_user = _message("msg_visible", "user", "帮我调研竞品")
     internal_user = _message(
         "msg_internal",
@@ -61,6 +64,7 @@ def test_internal_repair_turn_and_its_assistant_reply_are_hidden() -> None:
 
 
 def test_legacy_repair_prompt_is_hidden_without_new_visibility_metadata() -> None:
+    """验证仅凭历史提示文案也能识别并隐藏旧版内部修复轮次。"""
     internal_user = _message(
         "msg_legacy_internal",
         "user",

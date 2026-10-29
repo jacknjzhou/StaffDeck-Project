@@ -33,10 +33,12 @@ class _FakeAdapter:
     """模拟适配器:download_media 返回预设字节,用于隔离 attachment_bridge 测试。"""
 
     def __init__(self, download_result: bytes | Exception):
+        """记录预设下载结果与调用轨迹，便于断言调用次数和参数。"""
         self._download_result = download_result
         self.download_calls: list[tuple[ChannelBinding, ChannelInboundAttachment]] = []
 
     def download_media(self, binding, attachment, *, max_bytes=0):
+        """返回预设字节；预设为异常时原样抛出，用于覆盖失败分支。"""
         self.download_calls.append((binding, attachment))
         if isinstance(self._download_result, Exception):
             raise self._download_result
@@ -44,6 +46,7 @@ class _FakeAdapter:
 
 
 def _binding() -> ChannelBinding:
+    """构造使用加密凭据的飞书渠道绑定，满足桥接函数的入参要求。"""
     return ChannelBinding(
         id="chan_test",
         tenant_id="tenant_a",
@@ -57,6 +60,7 @@ def _binding() -> ChannelBinding:
 
 
 def _inbound(attachments: list[ChannelInboundAttachment]) -> ChannelInbound:
+    """构造携带指定附件列表的飞书入站消息。"""
     return ChannelInbound(
         channel="feishu",
         event_id="evt_1",
@@ -73,6 +77,7 @@ def _inbound(attachments: list[ChannelInboundAttachment]) -> ChannelInbound:
 
 
 def _staged_attachment(filename: str = "img.jpg", content_type: str = "image/jpeg") -> ChatAttachmentRead:
+    """构造已暂存附件的读取模型，作为解析与暂存步骤的桩返回值。"""
     return ChatAttachmentRead(
         id="file_1",
         filename=filename,
@@ -86,6 +91,7 @@ def _staged_attachment(filename: str = "img.jpg", content_type: str = "image/jpe
 
 
 def test_channel_inbound_attachments_defaults_to_empty_list() -> None:
+    """验证入站消息未传附件时默认为空列表，且各实例互不共享。"""
     inbound = ChannelInbound(
         channel="feishu",
         event_id="e",
@@ -115,6 +121,7 @@ def test_channel_inbound_attachments_defaults_to_empty_list() -> None:
 
 
 def test_channel_inbound_attachment_construction() -> None:
+    """验证入站附件字段可读写，未指定时 download_params 为独立空字典。"""
     att = ChannelInboundAttachment(
         media_id="img_key",
         kind="image",
@@ -209,6 +216,7 @@ def test_bridge_downloads_and_stages_attachments() -> None:
 
 
 def test_bridge_skips_empty_download_result() -> None:
+    """验证下载返回空字节时该附件被跳过，不产生暂存结果。"""
     fake_adapter = _FakeAdapter(b"")
     previous = get_channel_adapter("feishu")
     register_channel_adapter("feishu", fake_adapter)
@@ -227,7 +235,9 @@ def test_bridge_skips_oversized_attachment() -> None:
     oversized = b"x" * (MAX_CHANNEL_MEDIA_BYTES + 1)
 
     class OversizedAdapter:
+        """下载结果超过容量上限时按适配器约定抛错，用于验证桥接层的跳过逻辑。"""
         def download_media(self, binding, attachment, *, max_bytes=0):
+            """模拟超限下载：超过 max_bytes 时抛出 ValueError。"""
             if max_bytes and len(oversized) > max_bytes:
                 raise ValueError(f"下载内容超过上限 {max_bytes} bytes")
             return oversized
@@ -251,7 +261,9 @@ def test_bridge_continues_on_single_attachment_failure() -> None:
     call_count = {"n": 0}
 
     class MixedAdapter:
+        """首个附件抛错、后续附件成功，用于验证单附件失败不影响整体。"""
         def download_media(self, binding, attachment, *, max_bytes=0):
+            """第一次调用抛 RuntimeError，之后返回正常图片字节。"""
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise RuntimeError("network down")
@@ -344,6 +356,7 @@ def test_detect_image_media_type_rejects_non_image_data() -> None:
 
 
 def test_filename_with_extension_replaces_or_adds_extension() -> None:
+    """验证文件名会按检测到的扩展名替换或追加后缀。"""
     assert filename_with_extension("img_v3_001", ".png") == "img_v3_001.png"
     assert filename_with_extension("photo.jpg", ".png") == "photo.png"
 
@@ -353,6 +366,7 @@ def test_stream_download_with_limit_enforces_content_length() -> None:
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """返回固定 Content-Length 的响应，用于验证下载前的长度预检。"""
         return httpx.Response(
             200,
             headers={"content-length": "100"},
@@ -373,6 +387,7 @@ def test_stream_download_with_limit_enforces_streamed_body() -> None:
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """返回不带 Content-Length 的响应，用于验证流式累计长度校验。"""
         return httpx.Response(200, content=b"x" * 200)
 
     transport = httpx.MockTransport(handler)
@@ -389,6 +404,7 @@ def test_stream_download_with_limit_returns_body_when_under_limit() -> None:
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """返回较小的响应体，用于验证未超限时正常读取。"""
         return httpx.Response(200, content=b"hello world")
 
     transport = httpx.MockTransport(handler)

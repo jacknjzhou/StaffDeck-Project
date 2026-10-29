@@ -7,10 +7,13 @@ from app.llm.client import LLMClient
 
 
 def test_feedback_analysis_uses_model_bucket(monkeypatch) -> None:
+    """验证存在默认模型时按模型返回的分桶结果写入分析字段。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """替换 LLMClient 初始化，避免用例连接真实模型服务。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """断言分析请求携带差评与目标消息，并返回预设的分桶结果。"""
         assert payload["feedback"]["rating"] == "down"
         assert payload["target_message"]["content"] == "请稍候"
         return {
@@ -37,6 +40,7 @@ def test_feedback_analysis_uses_model_bucket(monkeypatch) -> None:
 
 
 def test_feedback_analysis_without_model_marks_needs_model() -> None:
+    """验证租户缺少默认模型时把反馈标记为待模型分析状态。"""
     with _test_session() as db:
         feedback = _seed_feedback(db, with_model=False)
         analyzed = FeedbackAnalysisService(db).analyze_feedback(feedback.id)
@@ -47,6 +51,7 @@ def test_feedback_analysis_without_model_marks_needs_model() -> None:
 
 
 def test_feedback_summary_buckets_downvotes() -> None:
+    """验证反馈汇总按差评分桶计数并生成中文摘要。"""
     rows = [
         MessageFeedback(
             tenant_id="tenant_demo",
@@ -85,6 +90,7 @@ def test_feedback_summary_buckets_downvotes() -> None:
 
 
 def _seed_feedback(db: Session, with_model: bool) -> MessageFeedback:
+    """写入租户、用户、会话、消息和一条差评反馈，并按需补建默认模型。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     user = User(
         id="user_demo",
@@ -122,6 +128,7 @@ def _seed_feedback(db: Session, with_model: bool) -> MessageFeedback:
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 会话并建表，为分析用例提供独立的数据库环境。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

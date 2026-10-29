@@ -20,6 +20,7 @@ from app.api.ui_config import enterprise_router as ui_config_router
 
 
 def test_enterprise_read_endpoints_require_authentication() -> None:
+    """验证所有企业版只读接口在未登录时都返回 401 与统一鉴权错误。"""
     app = FastAPI()
     app.include_router(memories_router)
     app.include_router(tools_router)

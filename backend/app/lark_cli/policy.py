@@ -26,6 +26,7 @@ class LarkCliPolicyError(Exception):
     """argv 被策略拒绝；``code`` 会透传给模型作为可恢复错误。"""
 
     def __init__(self, code: str, message: str) -> None:
+        """记录可恢复错误码与面向模型的说明文案。"""
         super().__init__(message)
         self.code = code
         self.message = message
@@ -33,6 +34,7 @@ class LarkCliPolicyError(Exception):
 
 @dataclass(frozen=True)
 class CommandRule:
+    """一条子命令策略：前缀、动作（read/write/gated_write）、放行 flag 与超时。"""
     prefix: tuple[str, ...]
     action: str  # "read" | "write" | "gated_write"
     allowed_flags: frozenset[str] = field(default_factory=frozenset)
@@ -97,6 +99,7 @@ _HELP_ALLOWED_DOMAINS = {"auth", "approval", "schema", "skills", "config"}
 
 @dataclass(frozen=True)
 class ResolvedCommand:
+    """策略裁决结果：命中规则、规范化 argv、dry-run/help 标记与解析出的提交体。"""
     rule: CommandRule
     argv: tuple[str, ...]
     is_dry_run: bool
@@ -107,6 +110,7 @@ class ResolvedCommand:
 
     @property
     def is_side_effect_write(self) -> bool:
+        """是否属于真实产生外部副作用的写操作（非只读、非 help、非 dry-run）。"""
         if self.rule.action == "read" or self.is_help:
             return False
         return not self.is_dry_run
@@ -356,6 +360,7 @@ def validate_form_against_definition(
     index: dict[str, tuple[dict[str, object], str | None]] = {}
 
     def _walk(widgets: list[object], parent: str | None) -> None:
+        """递归建立“控件 id → (定义节点, 父复合控件 id)”索引。"""
         for widget in widgets:
             if not isinstance(widget, dict) or not widget.get("id"):
                 continue
@@ -371,6 +376,7 @@ def validate_form_against_definition(
     errors: list[str] = []
 
     def _check(controls: list[object], parent: str | None) -> None:
+        """递归校验控件 id/type/嵌套位置与选项 key，错误追加进 errors。"""
         for control in controls:
             if not isinstance(control, dict):
                 continue
@@ -497,6 +503,7 @@ def logical_write_signature(arguments: dict[str, object]) -> str | None:
 
 
 def _match_rule(argv: list[str]) -> CommandRule | None:
+    """按前缀匹配已登记规则，未登记的命令返回 None 交由动态通道裁决。"""
     for rule in _RULES:
         if tuple(argv[: len(rule.prefix)]) == rule.prefix:
             return rule
@@ -556,6 +563,10 @@ def _validate_flags(rest: list[str], rule: CommandRule) -> dict[str, str | None]
 
 
 def _parse_data_json(raw: str | None) -> dict[str, object] | None:
+    """解析 gated_write 的 --data，要求是 JSON object 且不得自带 uuid。
+
+    非法 JSON、非 object 或出现 uuid 时抛 LarkCliPolicyError，避免绕过防重放。
+    """
     if raw is None:
         return None
     try:

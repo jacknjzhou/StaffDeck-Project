@@ -19,7 +19,10 @@ EMPTY_SOP = "（SOP 结构缺失，无法渲染）"
 
 
 def effective_hint(mode: str, hint: str | None) -> str:
-    """Resolve where one SOP runs: an explicit binding hint wins over employee mode."""
+    """判定单条 SOP 在哪里执行：显式 binding hint 优先于员工级 mode。
+
+    未知 mode 一律回落到 LOCAL，避免把员工 SOP 静默转发到远端执行。
+    """
     normalized = (hint or "").strip().lower()
     if normalized in {LOCAL, REMOTE}:
         return normalized
@@ -32,7 +35,11 @@ def effective_hint(mode: str, hint: str | None) -> str:
 
 
 def render_sop_content(card: dict[str, Any] | None) -> str:
-    """Render a stored SkillCard as plain text for in-prompt injection."""
+    """把存储的 SkillCard 渲染成纯文本，供注入 prompt 时使用。
+
+    card 缺失或 nodes 为空时返回 EMPTY_SOP；渲染顺序沿 start_node_id 流转，
+    不可达节点按原顺序追加，避免模型漏掉 SOP 中的步骤。
+    """
     if not isinstance(card, dict):
         return EMPTY_SOP
     nodes = card.get("nodes")
@@ -84,6 +91,7 @@ def render_sop_content(card: dict[str, Any] | None) -> str:
 
 
 def _ordered_nodes(card: dict[str, Any], nodes: list[Any]) -> list[Any]:
+    """按 start_node_id 与边的优先级排出节点顺序，并补上从起点不可达的节点。"""
     by_id = {
         str(node.get("node_id")): node
         for node in nodes
@@ -107,6 +115,7 @@ def _ordered_nodes(card: dict[str, Any], nodes: list[Any]) -> list[Any]:
 
 
 def _next_node_id(card: dict[str, Any], node_id: str) -> str:
+    """取该节点出边中优先级最高的目标节点 id，没有可用出边时返回空字符串。"""
     best: tuple[int, str] | None = None
     for edge in card.get("edges") or []:
         if not isinstance(edge, dict) or str(edge.get("source_node_id")) != node_id:
@@ -121,6 +130,7 @@ def _next_node_id(card: dict[str, Any], node_id: str) -> str:
 
 
 def _transitions(card: dict[str, Any], nodes: list[Any]) -> list[str]:
+    """把 SOP 的边渲染成「源 → 目标（条件）」文本，节点 id 尽量替换为可读名称。"""
     names = {
         str(node.get("node_id")): str(node.get("name") or node.get("node_id"))
         for node in nodes
@@ -144,7 +154,11 @@ def select_sop_documents(
     mode: str,
     binding_metadata: dict[str, dict[str, Any]],
 ) -> tuple[list[dict[str, str]], list[str]]:
-    """Return the SOPs deepchat must inject locally, plus truncation warnings."""
+    """挑出需要在客户端本地注入的 SOP 文档，并附带截断类告警。
+
+    仅保留 execution_hint/mode 判定为本地执行的可见技能，按名称排序后受 MAX_SOPS、
+    MAX_SOP_TITLE、MAX_SOP_CONTENT 约束；被省略或截断的情况写入 warnings。
+    """
     warnings: list[str] = []
     documents: list[dict[str, str]] = []
     local_rows = []

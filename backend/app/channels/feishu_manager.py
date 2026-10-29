@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class FeishuProcessManager:
-    """Reconcile active Feishu bindings onto one spawn child per binding."""
+    """把数据库中的活跃飞书绑定对账成「每 binding 一个 spawn 子进程」的运行态。"""
 
     def __init__(
         self,
@@ -26,6 +26,7 @@ class FeishuProcessManager:
         supervisor_factory: Callable[..., FeishuProcessSupervisor] = FeishuProcessSupervisor,
         reconcile_seconds: float = 5.0,
     ):
+        """初始化管理器：校验数据库是文件 SQLite，supervisor 留到首次使用时再创建。"""
         self._engine = db_engine or engine
         database = self._engine.url.database
         if self._engine.url.get_backend_name() != "sqlite" or not database or database == ":memory:":
@@ -43,12 +44,14 @@ class FeishuProcessManager:
         self._thread: threading.Thread | None = None
 
     def _get_supervisor(self) -> FeishuProcessSupervisor:
+        """惰性创建并复用连接器 supervisor，加锁避免对账线程并发重复创建。"""
         with self._lock:
             if self._supervisor is None:
                 self._supervisor = self._supervisor_factory(database_path=self._database_path)
             return self._supervisor
 
     def start(self) -> None:
+        """启动后台对账线程；线程已在运行时直接返回，可安全重复调用。"""
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return
@@ -62,6 +65,7 @@ class FeishuProcessManager:
             self._thread.start()
 
     def _reconcile_loop(self) -> None:
+        """按 reconcile_seconds 周期对账；单轮异常只记日志，不终止循环。"""
         while not self._stop.is_set():
             try:
                 self.reconcile_once()
@@ -71,6 +75,11 @@ class FeishuProcessManager:
             self._wake.clear()
 
     def reconcile_once(self) -> None:
+        """对账一轮：按绑定状态启停子进程，并把实际连接状态回写数据库。
+
+        status 非 active、处于暂停态或配置版本变化时停掉旧代际；只有在库中
+        connected 与实际不符时才写库，避免每轮无谓的 UPDATE。
+        """
         with Session(self._engine) as db:
             rows = db.exec(
                 select(ChannelBinding).where(ChannelBinding.channel == "feishu")
@@ -122,6 +131,7 @@ class FeishuProcessManager:
                     self._known.pop(binding_id, None)
 
     def ensure_binding(self, binding_id: str) -> None:
+        """按需为该飞书绑定拉起子进程；非飞书、非 active 或已暂停时直接跳过。"""
         with Session(self._engine) as db:
             binding = db.get(ChannelBinding, binding_id)
             if not binding or binding.channel != "feishu" or binding.status != "active":
@@ -135,6 +145,11 @@ class FeishuProcessManager:
             self._known[binding_id] = revision
 
     def pause_binding(self, binding_id: str) -> None:
+        """暂停该绑定的对账，并把停掉当前子进程放到独立线程执行。
+
+        停止线程写 _stop_events 供 wait_binding_stopped / resume_binding 等待，
+        这样调用方不必在请求路径上阻塞数秒。
+        """
         with self._lock:
             self._paused.add(binding_id)
             supervisor = self._supervisor
@@ -148,6 +163,7 @@ class FeishuProcessManager:
             self._stop_events[binding_id] = stop_done
 
         def stop_generation() -> None:
+            """后台停掉旧代际子进程，停稳后清理 known 表并置位完成事件。"""
             try:
                 if supervisor.stop_binding(binding_id, timeout=5.0):
                     with self._lock:
@@ -162,6 +178,10 @@ class FeishuProcessManager:
         ).start()
 
     def resume_binding(self, binding_id: str, *, start: bool = True) -> None:
+        """解除暂停并（默认）重启该绑定，最后唤醒对账线程。
+
+        旧代际 5 秒内未停稳时放弃恢复并记日志，避免同一 binding 出现两个长连接。
+        """
         with self._lock:
             stop_done = self._stop_events.get(binding_id)
         if stop_done and not stop_done.wait(timeout=5.0):
@@ -181,6 +201,7 @@ class FeishuProcessManager:
         self._wake.set()
 
     def stop_binding(self, binding_id: str) -> None:
+        """同步停止该绑定的子进程；确认停稳后把它从已知代际表中移除。"""
         with self._lock:
             supervisor = self._supervisor
         stopped = not supervisor or supervisor.stop_binding(binding_id, timeout=5.0)
@@ -189,6 +210,7 @@ class FeishuProcessManager:
                 self._known.pop(binding_id, None)
 
     def wait_binding_stopped(self, binding_id: str, timeout_seconds: float = 5.0) -> bool:
+        """等待该绑定的异步停止完成，返回是否在超时内进入 ABSENT/CRASH_BACKOFF。"""
         deadline = time.monotonic() + max(0.0, timeout_seconds)
         with self._lock:
             stop_done = self._stop_events.get(binding_id)
@@ -206,6 +228,10 @@ class FeishuProcessManager:
         return False
 
     def stop(self, timeout_seconds: float = 5.0) -> bool:
+        """停止对账线程与全部子进程，返回两者是否都在超时内停稳。
+
+        仅在都停稳时清空线程/supervisor/known，否则保留现场供下次重试。
+        """
         deadline = time.monotonic() + max(0.0, timeout_seconds)
         self._stop.set()
         self._wake.set()

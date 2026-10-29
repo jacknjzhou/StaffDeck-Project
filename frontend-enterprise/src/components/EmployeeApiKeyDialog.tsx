@@ -52,10 +52,17 @@ const ACCESS_META: Record<KeyAccess, { label: string; summary: string; detail: s
   },
 };
 
+/** 将密钥权限转换为界面展示文案，旧版全量权限单独标注。 */
 function accessLabel(access: CredentialAccess): string {
   return access === 'full_access' ? '旧版员工全量密钥' : ACCESS_META.runtime.label;
 }
 
+/**
+ * 员工 API 密钥弹窗：为指定数字员工创建、轮换与禁用运行密钥。
+ *
+ * 打开且已选中员工时加载密钥列表；创建或轮换成功后仅在当前弹窗一次性展示明文，
+ * 创建/操作进行中会忽略关闭请求。
+ */
 export default function EmployeeApiKeyDialog({
   agent,
   open,
@@ -74,6 +81,7 @@ export default function EmployeeApiKeyDialog({
   const revealedKeyRef = useRef<HTMLInputElement | null>(null);
   const displayName = useMemo(() => (agent ? employeeDisplayName(agent) : '数字员工'), [agent]);
 
+  /** 拉取当前员工的密钥列表；未选中员工时直接跳过。 */
   async function load() {
     if (!agent) return;
     setLoading(true);
@@ -96,6 +104,7 @@ export default function EmployeeApiKeyDialog({
     void load();
   }, [agent, open]);
 
+  /** 创建指定权限的运行密钥，展示一次性明文后刷新列表。 */
   async function createCredential(access: KeyAccess) {
     if (!agent) return;
     setCreating(access);
@@ -119,6 +128,7 @@ export default function EmployeeApiKeyDialog({
     }
   }
 
+  /** 轮换密钥：旧密钥立即失效，返回的新明文一次性展示。 */
   async function rotateCredential(row: AgentApiCredential) {
     if (!agent) return;
     setActingId(row.id);
@@ -138,6 +148,7 @@ export default function EmployeeApiKeyDialog({
     }
   }
 
+  /** 二次确认后禁用密钥，并清除该密钥已展示的明文。 */
   async function revokeCredential(row: AgentApiCredential) {
     if (!agent || !window.confirm(`确认禁用「${row.name}」？禁用后调用会立即失败。`)) return;
     setActingId(row.id);
@@ -156,6 +167,11 @@ export default function EmployeeApiKeyDialog({
     }
   }
 
+  /**
+   * 复制当前明文密钥到剪贴板。
+   *
+   * 复制失败时退化为选中只读输入框内容，并提示用户手动复制。
+   */
   async function copyKey() {
     if (!revealed?.api_key) return;
     try {
@@ -305,6 +321,7 @@ export default function EmployeeApiKeyDialog({
   );
 }
 
+/** 将时间字符串格式化为 zh-CN 日期时间；空值返回 '-'，非法值原样返回。 */
 function formatDate(value?: string | null): string {
   if (!value) return '-';
   const date = new Date(value);

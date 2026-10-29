@@ -10,6 +10,10 @@ _FALSE_VALUES = {"0", "false", "no", "off"}
 
 
 def _bundled_version() -> str | None:
+    """读取打包进产物的版本号文件，命中即返回，全部缺失时返回 None。
+
+    依次尝试 PyInstaller 解包目录、可执行文件同级目录、macOS .app 的 Resources 目录。
+    """
     candidates: list[Path] = []
     bundle_root = getattr(sys, "_MEIPASS", None)
     if bundle_root:
@@ -30,6 +34,7 @@ def _bundled_version() -> str | None:
 
 
 def app_version() -> str:
+    """返回应用版本号，优先级为 STAFFDECK_VERSION 环境变量 > 打包版本文件 > 默认值。"""
     return (
         os.environ.get("STAFFDECK_VERSION", "").strip()
         or _bundled_version()
@@ -38,6 +43,7 @@ def app_version() -> str:
 
 
 def update_check_enabled() -> bool:
+    """是否启用更新检查：STAFFDECK_UPDATE_CHECK 显式配置优先，否则仅打包运行时启用。"""
     configured = os.environ.get("STAFFDECK_UPDATE_CHECK", "").strip().lower()
     if configured in _TRUE_VALUES:
         return True

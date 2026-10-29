@@ -177,6 +177,7 @@ const SKILL_CODE_BLOCK_CLASS =
   'm-0 max-h-[520px] max-w-full overflow-auto whitespace-pre border-0 p-[16px_18px] font-mono text-[12px] leading-[1.65]';
 const SKILL_OUTPUT_STACK_CLASS = 'grid gap-[10px]';
 
+/** 生成技能文件树节点的类名，选中项高亮显示。 */
 function skillFileNodeClass(active: boolean) {
   return cn(
     'flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border-0 bg-transparent px-[10px] py-2 text-left text-[12px] text-[#757f9c] transition-[background,color,box-shadow] duration-150',
@@ -185,6 +186,7 @@ function skillFileNodeClass(active: boolean) {
   );
 }
 
+/** 代码明细折叠标题右侧的「展开/收起」提示文案。 */
 function TraceDisclosureLabel() {
   return (
     <span className="ml-auto text-[12px] font-medium text-[#757f9c]">
@@ -260,6 +262,7 @@ const PHASE_LABELS: Record<string, string> = {
   reply_failed: '回复失败',
 };
 
+/** 把任意值格式化为两空格缩进的 JSON 文本，无法解析时原样返回。 */
 function formatJson(value: unknown): string {
   if (value === undefined || value === null || value === '') return '';
   if (typeof value === 'string') {
@@ -272,6 +275,7 @@ function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+/** 推断代码块语言：内容可被 JSON.parse 时返回 json，否则返回 fallback。 */
 function codeLanguage(value: string, fallback = 'text'): string {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
@@ -283,12 +287,14 @@ function codeLanguage(value: string, fallback = 'text'): string {
   }
 }
 
+/** 判断文件是否为 zip 技能包，依据扩展名与 MIME 类型判定。 */
 function isSkillPackageArchive(file: File): boolean {
   const name = file.name.toLowerCase();
   const type = file.type.toLowerCase();
   return name.endsWith('.zip') || type === 'application/zip' || type === 'application/x-zip-compressed';
 }
 
+/** 读取文件并返回去掉 data URL 前缀的 Base64 字符串。 */
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -301,6 +307,7 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+/** 可折叠的代码或输出展示面板，默认按内容推断高亮语言。 */
 function RunCodePanel({
   title,
   code,
@@ -330,14 +337,23 @@ type GeneralSkillPageProps = {
   onLogout?: () => void;
 };
 
+/** 新建技能页面入口，复用编辑器组件的 new 模式。 */
 export function GeneralSkillNewPage(props: GeneralSkillPageProps = {}) {
   return <GeneralSkillEditorPage mode="new" {...props} />;
 }
 
+/** 编辑技能页面入口，复用编辑器组件的 edit 模式。 */
 export function GeneralSkillEditPage(props: GeneralSkillPageProps = {}) {
   return <GeneralSkillEditorPage mode="edit" {...props} />;
 }
 
+/**
+ * 技能广场与员工技能列表页，提供搜索、状态筛选、分页和技能管理操作。
+ *
+ * - 挂载后按当前数字员工范围拉取技能，并监听全局范围切换事件。
+ * - 新增、复制、导入、启停与删除均在本页完成并即时刷新列表。
+ * - embedded 为 true 时只输出内容区，不渲染页面头部。
+ */
 export default function GeneralSkillsPage({ embedded = false, currentUser, onLogout }: { embedded?: boolean } & GeneralSkillPageProps) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -370,6 +386,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     ? canManageEmployeeAgent(currentAgent, currentUser)
     : isEnterpriseAdmin(currentUser) && isOverallAgent;
 
+  /** 按当前数字员工范围拉取技能列表，失败时弹出错误提示。 */
   const load = () => {
     const agentSuffix = agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
     setLoading(true);
@@ -416,6 +433,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
   }, [agentScopeLoaded, isOverallAgent, searchParams, setSearchParams]);
 
   useEffect(() => {
+    /** 响应全局数字员工范围切换事件，同步列表的查询范围。 */
     const onScopeChange = (event: Event) => {
       const next = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
       setAgentId(next && !isTeamScope(next) ? next : readEmployeeScope());
@@ -448,6 +466,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     archived: rows.filter((row) => row.status === 'archived').length,
   }), [rows]);
 
+  /** 启用或停用技能，成功后用返回数据原地替换列表行。 */
   async function setSkillPublished(row: GeneralSkillRead, published: boolean) {
     try {
       const agentSuffix = agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
@@ -461,6 +480,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     }
   }
 
+  /** 把员工私有技能发布到开放广场，仅分支范围下可用。 */
   async function publishSkillToGallery(row: GeneralSkillRead) {
     if (!agentId) return;
     try {
@@ -474,6 +494,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     }
   }
 
+  /** 删除或移除确认框选中的技能，并同步列表与弹窗状态。 */
   async function confirmDeleteSkill() {
     const row = deleteTarget;
     if (!row) return;
@@ -492,6 +513,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     }
   }
 
+  /** 打开开源平台导入弹窗，并清理上一次的请求状态。 */
   function requestClawHubImport() {
     clawhubAbortRef.current?.abort();
     clawhubAbortRef.current = null;
@@ -500,6 +522,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     setClawhubModalOpen(true);
   }
 
+  /** 取消开源平台导入：中止进行中的请求并关闭弹窗。 */
   function cancelClawHubImport() {
     clawhubAbortRef.current?.abort();
     clawhubAbortRef.current = null;
@@ -507,6 +530,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     setClawhubModalOpen(false);
   }
 
+  /** 打开资源复制弹窗，按模式预选来源员工并加载其可复制技能。 */
   async function requestAgentImport(mode: GeneralSkillImportMode, selectedResourceId?: string) {
     try {
       const agents = await api.get<AgentProfileRead[]>(`/api/enterprise/agents?tenant_id=${TENANT_ID}`);
@@ -531,6 +555,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     }
   }
 
+  /** 加载来源员工可复制的已发布技能，并剔除当前范围已有的技能。 */
   async function loadAgentImportSourceSkills(sourceAgentId: string): Promise<GeneralSkillRead[]> {
     setAgentImportSourceSkills([]);
     setAgentImportSelectedSkillIds([]);
@@ -549,6 +574,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     }
   }
 
+  /** 提交技能复制请求，成功后关闭弹窗并刷新列表。 */
   async function submitAgentImportSkills() {
     if (!agentId) {
       notify.warning('请先选择一个数字员工');
@@ -580,6 +606,12 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     }
   }
 
+  /**
+   * 按用户填写的地址从开源平台导入技能。
+   *
+   * - 成功后把新技能置顶到列表并跳转到其编辑页。
+   * - 用户取消（AbortError）时仅提示已取消，不按失败处理。
+   */
   async function importClawHubSource() {
     if (!clawhubSource.trim()) {
       notify.warning('请输入开源平台地址、GitHub 仓库或 SKILL.md 链接');
@@ -615,6 +647,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     }
   }
 
+  /** 渲染单行技能的操作下拉菜单，无管理权限时返回 null。 */
   function renderActions(row: GeneralSkillRead) {
     const published = row.status === 'published';
     if (isOverallAgent && !canManageCurrentScope) {
@@ -736,6 +769,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
     },
   ];
 
+  /** 渲染移动端列表卡片，展示名称、创建者、状态与更新时间。 */
   const renderMobileCard = (row: GeneralSkillRead) => {
     const preset = STATUS_BADGE[row.status] || { tone: 'gray' as BadgeTone, text: row.status };
     return (
@@ -963,6 +997,7 @@ export default function GeneralSkillsPage({ embedded = false, currentUser, onLog
   );
 }
 
+/** 开源平台导入弹窗，用于填写仓库地址或 SKILL.md 链接。 */
 function ClawHubDialog({
   open,
   loading,
@@ -1029,6 +1064,7 @@ function ClawHubDialog({
   );
 }
 
+/** 汇总执行轨迹条目中的详情文本，供展开面板展示。 */
 function traceDetail(item: Record<string, unknown>): string {
   return [
     item.rationale,
@@ -1042,21 +1078,25 @@ function traceDetail(item: Record<string, unknown>): string {
     .join('\n');
 }
 
+/** 取出轨迹条目中的代码内容，无有效代码时返回空串。 */
 function traceItemCode(item: Record<string, unknown>): string {
   return typeof item.code === 'string' && item.code.trim() ? item.code : '';
 }
 
+/** 判断运行结果是否成功：未显式失败且没有 stderr 即视为成功。 */
 function resultSucceeded(result: Partial<GeneralSkillRunResponse> | null): boolean {
   if (!result) return false;
   const success = result.structured_result?.success;
   return success !== false && !result.stderr;
 }
 
+/** 判断异常是否由 AbortController 取消产生。 */
 function isAbortError(error: unknown): boolean {
   if (error instanceof DOMException && error.name === 'AbortError') return true;
   return error instanceof Error && error.name === 'AbortError';
 }
 
+/** 根据文件扩展名推断高亮语言，未知类型返回 text。 */
 function languageFromFilePath(path?: string): string {
   const extension = (path || '').split('.').pop()?.toLowerCase();
   if (extension === 'py') return 'python';
@@ -1065,15 +1105,18 @@ function languageFromFilePath(path?: string): string {
   return 'text';
 }
 
+/** 归一化技能文件路径：统一分隔符并去掉首部冗余斜杠。 */
 function normalizeSkillFilePath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/').trim();
 }
 
+/** 校验技能文件路径合法：非空且不含 . 或 .. 段。 */
 function isValidSkillFilePath(path: string): boolean {
   const parts = path.split('/');
   return Boolean(path) && parts.every((part) => Boolean(part) && part !== '.' && part !== '..');
 }
 
+/** 汇总文件与显式目录涉及的全部文件夹路径，按中文名称排序。 */
 function skillFolderPaths(files: GeneralSkillFile[], explicitDirectories: string[]): string[] {
   const paths = new Set<string>();
   [...explicitDirectories, ...files.map((file) => file.path)]
@@ -1087,10 +1130,12 @@ function skillFolderPaths(files: GeneralSkillFile[], explicitDirectories: string
   return Array.from(paths).sort((left, right) => left.localeCompare(right, 'zh-CN'));
 }
 
+/** 把技能文件与文件夹路径构建为树形结构，文件夹优先排序。 */
 function buildSkillFileTree(files: GeneralSkillFile[], explicitDirectories: string[]): SkillFileTreeNode[] {
   const root: SkillFileTreeNode[] = [];
   const folders = new Map<string, Extract<SkillFileTreeNode, { kind: 'folder' }>>();
 
+  /** 确保指定路径的文件夹节点存在并返回，必要时递归创建父级。 */
   const ensureFolder = (path: string) => {
     const normalized = normalizeSkillFilePath(path);
     const existing = folders.get(normalized);
@@ -1119,6 +1164,7 @@ function buildSkillFileTree(files: GeneralSkillFile[], explicitDirectories: stri
     (parentPath ? ensureFolder(parentPath).children : root).push(node);
   });
 
+  /** 递归排序节点：文件夹在前，同级按中文名称排序。 */
   const sortNodes = (nodes: SkillFileTreeNode[]) => {
     nodes.sort((left, right) => {
       if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1;
@@ -1132,6 +1178,7 @@ function buildSkillFileTree(files: GeneralSkillFile[], explicitDirectories: stri
   return root;
 }
 
+/** 根据文件扩展名推断 MIME 类型，未知类型按纯文本处理。 */
 function mimeTypeFromSkillFilePath(path: string): string {
   const extension = path.split('.').pop()?.toLowerCase();
   if (extension === 'md' || extension === 'markdown') return 'text/markdown';
@@ -1140,6 +1187,7 @@ function mimeTypeFromSkillFilePath(path: string): string {
   return 'text/plain';
 }
 
+/** 递归渲染技能文件树节点，并提供右键新建、重命名与删除入口。 */
 function SkillFileTreeEntry({
   node,
   depth,
@@ -1265,25 +1313,30 @@ function SkillFileTreeEntry({
   );
 }
 
+/** 去掉拖入路径的首层目录，得到技能包内的相对路径。 */
 function packagePathFromRaw(value: string): string {
   const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '');
   const parts = normalized.split('/').filter(Boolean);
   return parts.length > 1 ? parts.slice(1).join('/') : normalized;
 }
 
+/** 取文件在技能包中的相对路径，优先使用 webkitRelativePath。 */
 function packagePath(file: File): string {
   return packagePathFromRaw((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
 }
 
+/** 把 FileSystemEntry 的 file 回调封装为 Promise。 */
 function readEntryFile(entry: SkillFileEntry): Promise<File> {
   return new Promise((resolve, reject) => entry.file(resolve, reject));
 }
 
+/** 分批读取目录条目，直到读到空数组为止。 */
 function readDirectoryEntries(entry: SkillDirectoryEntry): Promise<SkillFileSystemEntry[]> {
   const reader = entry.createReader();
   const output: SkillFileSystemEntry[] = [];
 
   return new Promise((resolve, reject) => {
+    /** 递归读取下一批目录条目，读完（空数组）后 resolve 汇总结果。 */
     const readNext = () => {
       reader.readEntries((entries) => {
         if (!entries.length) {
@@ -1298,6 +1351,7 @@ function readDirectoryEntries(entry: SkillDirectoryEntry): Promise<SkillFileSyst
   });
 }
 
+/** 递归收集拖入的文件或目录内的全部文件及其相对路径。 */
 async function collectDroppedEntryFiles(entry: SkillFileSystemEntry): Promise<DroppedSkillFile[]> {
   if (entry.isFile) {
     const file = await readEntryFile(entry as SkillFileEntry);
@@ -1309,6 +1363,7 @@ async function collectDroppedEntryFiles(entry: SkillFileSystemEntry): Promise<Dr
   return nested.flat();
 }
 
+/** 取 DataTransferItem 的 webkitGetAsEntry 结果，非条目时返回 null。 */
 function dataTransferEntry(item: DataTransferItem): SkillFileSystemEntry | null {
   const getter = (item as unknown as { webkitGetAsEntry?: () => unknown }).webkitGetAsEntry;
   const entry = getter?.call(item);
@@ -1316,6 +1371,7 @@ function dataTransferEntry(item: DataTransferItem): SkillFileSystemEntry | null 
   return entry as SkillFileSystemEntry;
 }
 
+/** 收集拖拽释放的文件：优先走目录条目，回退到 dataTransfer.files。 */
 async function droppedSkillFiles(dataTransfer: DataTransfer): Promise<DroppedSkillFile[]> {
   const entries = Array.from(dataTransfer.items || [])
     .map(dataTransferEntry)
@@ -1327,6 +1383,7 @@ async function droppedSkillFiles(dataTransfer: DataTransfer): Promise<DroppedSki
   return Array.from(dataTransfer.files || []).map((file) => ({ file, path: packagePath(file) }));
 }
 
+/** 解析 Markdown 头部 YAML 片段中的键值对，无头部时返回空对象。 */
 function parseMetadata(markdownText: string): Record<string, string> {
   const lines = markdownText.split(/\r?\n/);
   if (lines[0]?.trim() !== '---') return {};
@@ -1343,6 +1400,7 @@ function parseMetadata(markdownText: string): Record<string, string> {
   return result;
 }
 
+/** 把 Markdown 头部的元信息回填到名称、Slug、描述与主页字段。 */
 function applyMetadata(
   markdownText: string,
   setters: {
@@ -1359,6 +1417,7 @@ function applyMetadata(
   if (metadata.homepage || metadata.url) setters.setSkillHomepage(metadata.homepage || metadata.url);
 }
 
+/** 生成技能文件列表的稳定快照字符串，用于比较内容是否变更。 */
 function normalizedSkillFiles(files: GeneralSkillFile[] = []): string {
   return JSON.stringify(
     [...files]
@@ -1371,6 +1430,7 @@ function normalizedSkillFiles(files: GeneralSkillFile[] = []): string {
   );
 }
 
+/** 通用分区卡片容器，支持标题、右上角操作与加载态。 */
 function SectionCard({
   className,
   bodyClassName,
@@ -1406,6 +1466,7 @@ function SectionCard({
   );
 }
 
+/** 表单字段容器，展示字段标签并包裹输入控件。 */
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-[6px]">
@@ -1415,6 +1476,13 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/**
+ * 技能编辑器页面，承载基本信息、技能文件编辑与运行测试。
+ *
+ * - mode 为 new 时初始化空白技能，为 edit 时按路由 Slug 载入已有技能。
+ * - 文件树支持新建、重命名、删除，以及拖拽导入文件、zip 与整个目录。
+ * - 运行测试通过流式接口实时展示执行轨迹、代码与输出。
+ */
 function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' } & GeneralSkillPageProps) {
   const navigate = useNavigate();
   const { slug: routeSlug } = useParams();
@@ -1511,6 +1579,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
       ? '为当前数字员工创建技能，填写基本信息并编辑技能文件。'
       : '维护当前数字员工技能的定义、文件包和运行测试。');
 
+  /** 拉取技能列表；编辑模式下定位路由 Slug 对应技能并载入编辑区。 */
   const load = () => {
     const agentSuffix = agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
     return api
@@ -1578,6 +1647,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
   }, []);
 
   useEffect(() => {
+    /** 响应全局范围切换事件；开放广场视图下忽略该事件。 */
     const onScopeChange = (event: Event) => {
       if (forceGalleryScope) return;
       const next = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
@@ -1629,6 +1699,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }, [selectedFileCanPreview]);
 
+  /** 判断编辑区内容相对原始技能是否存在未保存的改动。 */
   function hasUnsavedEditingChanges(): boolean {
     if (!editingSlug) return false;
     const original = rows.find((row) => row.slug === editingSlug);
@@ -1648,6 +1719,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     );
   }
 
+  /** 校验权限与内容后保存技能，成功则同步编辑区并跳转编辑路由。 */
   async function importSkill(): Promise<GeneralSkillRead | null> {
     if (!canManageCurrentScope) {
       notify.error('只有管理员可以编辑技能广场内容');
@@ -1701,6 +1773,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 把编辑区重置为空白技能的初始状态。 */
   function newSkill() {
     setMarkdown(EMPTY_SKILL_MARKDOWN);
     setSkillName('');
@@ -1721,6 +1794,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setMarkdownPreviewOpen(false);
   }
 
+  /** 将指定技能的数据载入编辑区，并清除上一次的运行结果。 */
   function editSkill(row: GeneralSkillRead) {
     setMarkdown(row.skill_markdown);
     setSkillName(row.name);
@@ -1740,6 +1814,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setMarkdownPreviewOpen(false);
   }
 
+  /** 用服务端返回的技能替换列表中同 id 行，必要时同步编辑区。 */
   function replaceRow(row: GeneralSkillRead) {
     setRows((current) => current.map((item) => (item.id === row.id ? row : item)));
     if (editingSlug === row.slug) {
@@ -1756,6 +1831,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 启用或停用技能，结果同步到列表与编辑区。 */
   async function setSkillPublished(row: GeneralSkillRead, published: boolean) {
     if (!canManageCurrentScope) {
       notify.error('只有管理员可以编辑技能广场内容');
@@ -1773,6 +1849,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 删除或移除目标技能，并切换到剩余技能或空白新建状态。 */
   async function runDeleteSkill() {
     const row = deleteSkillTarget;
     if (!row) return;
@@ -1804,6 +1881,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 导入前清理编辑态，使后续内容作为未保存的新技能处理。 */
   function startImportedDraft() {
     setEditingSlug(null);
     setSelectedSlug(undefined);
@@ -1813,6 +1891,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setMarkdownPreviewOpen(false);
   }
 
+  /** 存在未保存改动时先弹出保存确认，否则直接执行导入动作。 */
   async function withImportPreparation(importAction: () => void | Promise<void>) {
     if (!hasUnsavedEditingChanges()) {
       await importAction();
@@ -1822,6 +1901,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setImportPrepareOpen(true);
   }
 
+  /** 保存当前技能后再执行待处理的导入动作。 */
   async function confirmImportPrepareSave() {
     const action = importPrepareActionRef.current;
     setImportPrepareOpen(false);
@@ -1830,6 +1910,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     importPrepareActionRef.current = null;
   }
 
+  /** 放弃保存当前技能，直接执行待处理的导入动作。 */
   async function confirmImportPrepareSkip() {
     const action = importPrepareActionRef.current;
     setImportPrepareOpen(false);
@@ -1837,6 +1918,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     if (action) await action();
   }
 
+  /** 触发隐藏的文件或文件夹选择框，必要时先确认保存。 */
   function requestImport(kind: 'file' | 'folder') {
     void withImportPreparation(() => {
       if (kind === 'folder') {
@@ -1847,6 +1929,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     });
   }
 
+  /** 打开开源平台导入弹窗，必要时先确认保存。 */
   function requestClawHubImport() {
     void withImportPreparation(() => {
       clawhubAbortRef.current?.abort();
@@ -1857,6 +1940,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     });
   }
 
+  /** 中止进行中的导入请求并关闭开源平台弹窗。 */
   function cancelClawHubImport() {
     clawhubAbortRef.current?.abort();
     clawhubAbortRef.current = null;
@@ -1864,6 +1948,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setClawhubModalOpen(false);
   }
 
+  /** 打开资源复制弹窗，按模式预选来源并加载可复制技能。 */
   function requestAgentImport(mode: GeneralSkillImportMode) {
     void withImportPreparation(async () => {
       try {
@@ -1887,6 +1972,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     });
   }
 
+  /** 加载来源员工可复制的已发布技能，并排除当前已有的技能。 */
   async function loadAgentImportSourceSkills(sourceAgentId: string) {
     setAgentImportSourceSkills([]);
     setAgentImportSelectedSkillIds([]);
@@ -1902,6 +1988,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 提交技能复制请求，成功后关闭弹窗并刷新列表。 */
   async function submitAgentImportSkills() {
     if (!agentId) {
       notify.warning('请先选择一个数字员工');
@@ -1933,6 +2020,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 从开源平台地址导入技能，成功后载入编辑区并刷新列表。 */
   async function importClawHubSource() {
     if (!clawhubSource.trim()) {
       notify.warning('请输入开源平台地址、GitHub 仓库或 SKILL.md 链接');
@@ -1970,6 +2058,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 上传 zip 技能包并导入，成功后载入编辑区。 */
   async function importSkillPackageFile(file: File) {
     const controller = new AbortController();
     clawhubAbortRef.current?.abort();
@@ -2006,6 +2095,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 更新当前选中文件的内容，SKILL.md 时同步 Markdown 状态。 */
   function updateSelectedFile(text: string) {
     if (!selectedFile) return;
     setSkillFiles((current) => current.map((file) => (
@@ -2018,12 +2108,14 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 取路径的父目录，根目录下的文件返回空串。 */
   function parentDirectory(path: string): string {
     const parts = normalizeSkillFilePath(path).split('/');
     parts.pop();
     return parts.join('/');
   }
 
+  /** 生成不冲突的新建文件或文件夹路径，重名时追加序号。 */
   function nextAvailableEntryPath(parentPath: string, mode: 'file' | 'folder'): string {
     const baseName = mode === 'file' ? 'notes.md' : '新建文件夹';
     let candidateName = baseName;
@@ -2038,12 +2130,14 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     return candidate;
   }
 
+  /** 打开新建文件或文件夹弹窗，并给出默认的可用路径。 */
   function openCreateEntry(mode: 'file' | 'folder', parentPath?: string) {
     const resolvedParent = parentPath ?? selectedFolderPath ?? parentDirectory(selectedFilePath);
     setCreateEntryMode(mode);
     setCreateEntryValue(nextAvailableEntryPath(resolvedParent, mode));
   }
 
+  /** 判断路径的任一上级目录是否已被同名文件占用。 */
   function pathHasFileAncestor(path: string, ignoredFilePath?: string): boolean {
     const parts = path.split('/');
     return parts.slice(0, -1).some((_, index) => {
@@ -2052,6 +2146,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     });
   }
 
+  /** 校验并创建新文件或文件夹，成功后更新选中项。 */
   function runCreateEntry() {
     const mode = createEntryMode;
     if (!mode) return;
@@ -2083,6 +2178,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setCreateEntryMode(null);
   }
 
+  /** 删除当前选中的文件或文件夹入口。 */
   function deleteSelectedEntry() {
     if (selectedFolderPath) {
       deleteSkillFolder(selectedFolderPath);
@@ -2091,6 +2187,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     if (selectedFile) deleteSkillFile(selectedFile);
   }
 
+  /** 请求删除文件；SKILL.md 是技能入口，禁止删除。 */
   function deleteSkillFile(target: GeneralSkillFile) {
     if (target.path.split('/').pop()?.toLowerCase() === 'skill.md') {
       notify.warning('SKILL.md 是技能入口，不能删除');
@@ -2099,6 +2196,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setDeleteFileTarget(target);
   }
 
+  /** 从文件列表中移除已确认删除的文件。 */
   function runDeleteFile() {
     const target = deleteFileTarget;
     if (!target) return;
@@ -2106,6 +2204,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setDeleteFileTarget(null);
   }
 
+  /** 请求删除文件夹；包含 SKILL.md 的文件夹禁止删除。 */
   function deleteSkillFolder(path: string) {
     const prefix = `${path}/`;
     if (skillFiles.some((file) => file.path.startsWith(prefix) && file.path.split('/').pop()?.toLowerCase() === 'skill.md')) {
@@ -2115,6 +2214,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setDeleteFolderTarget(path);
   }
 
+  /** 删除文件夹及其下所有文件、子目录与展开状态。 */
   function runDeleteFolder() {
     const target = deleteFolderTarget;
     if (!target) return;
@@ -2126,6 +2226,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setDeleteFolderTarget(null);
   }
 
+  /** 打开文件重命名弹窗；SKILL.md 是入口文件，禁止重命名。 */
   function renameSkillFile(target: GeneralSkillFile) {
     if (target.path.split('/').pop()?.toLowerCase() === 'skill.md') {
       notify.warning('SKILL.md 是技能入口，不能重命名');
@@ -2136,12 +2237,14 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setRenameValue(target.path);
   }
 
+  /** 打开文件夹重命名弹窗并带入当前路径。 */
   function renameSkillFolder(path: string) {
     setRenameTarget(null);
     setRenameFolderTarget(path);
     setRenameValue(path);
   }
 
+  /** 校验新路径后重命名文件，并同步选中文件路径。 */
   function runRenameFile() {
     const target = renameTarget;
     if (!target) return;
@@ -2178,6 +2281,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 重命名文件夹，同时更新其下文件、子目录与选中路径。 */
   function runRenameFolder() {
     const target = renameFolderTarget;
     if (!target) return;
@@ -2217,6 +2321,12 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setRenameFolderTarget(null);
   }
 
+  /**
+   * 以流式接口运行当前技能，并实时渲染执行轨迹与输出。
+   *
+   * - 运行期间用 liveResult 增量累积轨迹、代码与 stdout/stderr。
+   * - 空闲超时会取消后端会话并中止请求，异常信息写入 stderr。
+   */
   async function runSkill() {
     const slug = selectedSkill?.slug;
     if (!slug) {
@@ -2245,6 +2355,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     let debugTurnId = '';
     const receivedTrace: Record<string, unknown>[] = [];
     let timeoutId = 0;
+    /** 重置空闲超时计时器，超时后取消后端会话并中止请求。 */
     const resetIdleTimeout = () => {
       window.clearTimeout(timeoutId);
       timeoutId = window.setTimeout(() => {
@@ -2351,6 +2462,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 读取单个 Markdown 文件作为 SKILL.md，并回填头部元信息。 */
   async function importSingleFile(target: File) {
     const text = await target.text();
     const nextFile = { path: 'SKILL.md', content: text, size: target.size, mime_type: target.type || 'text/markdown' };
@@ -2365,6 +2477,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     notify.success(`已读取 ${target.name}`);
   }
 
+  /** 批量读取导入的文件作为技能包，并优先定位其中的 SKILL.md。 */
   async function importSkillPackage(targets: DroppedSkillFile[]) {
     if (!targets.length) return;
     const nextFiles: GeneralSkillFile[] = [];
@@ -2405,10 +2518,12 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     }
   }
 
+  /** 把文件夹选择结果转为技能包文件后导入。 */
   async function importFolderFiles(fileList: FileList | null) {
     await importSkillPackage(Array.from(fileList || []).map((file) => ({ file, path: packagePath(file) })));
   }
 
+  /** 处理文件选择：zip 走技能包上传，其余按单个 Markdown 导入。 */
   async function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
     const target = event.target.files?.[0];
     if (target) {
@@ -2421,21 +2536,25 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     event.target.value = '';
   }
 
+  /** 处理文件夹选择并清空 input，便于重复选择同一目录。 */
   async function handleFolderInputChange(event: ChangeEvent<HTMLInputElement>) {
     await importFolderFiles(event.target.files);
     event.target.value = '';
   }
 
+  /** 判断拖拽数据中是否包含文件。 */
   function acceptsFileDrop(event: DragEvent<HTMLElement>): boolean {
     return Array.from(event.dataTransfer.types || []).includes('Files');
   }
 
+  /** 拖入文件时阻止默认行为并显示拖放提示层。 */
   function handleDragEnter(event: DragEvent<HTMLElement>) {
     if (!acceptsFileDrop(event)) return;
     event.preventDefault();
     setDragActive(true);
   }
 
+  /** 拖拽悬停时维持提示层并设置复制光标。 */
   function handleDragOver(event: DragEvent<HTMLElement>) {
     if (!acceptsFileDrop(event)) return;
     event.preventDefault();
@@ -2443,12 +2562,14 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     setDragActive(true);
   }
 
+  /** 离开拖拽区域时隐藏提示层，移入子元素时不处理。 */
   function handleDragLeave(event: DragEvent<HTMLElement>) {
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
     setDragActive(false);
   }
 
+  /** 处理文件释放：单文件直接导入，多文件或目录按技能包导入。 */
   async function handleDrop(event: DragEvent<HTMLElement>) {
     if (!acceptsFileDrop(event)) return;
     event.preventDefault();

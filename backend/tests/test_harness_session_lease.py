@@ -19,6 +19,7 @@ from app.db.models import (
 
 
 def _engine():
+    """创建共享同一内存数据库的 SQLite 引擎并建表，供各测试独立使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -29,6 +30,7 @@ def _engine():
 
 
 def test_session_lease_blocks_parallel_worker_and_releases_cleanly() -> None:
+    """验证租约阻止第二个 worker 抢占同一会话，释放后可被重新获取。"""
     engine = _engine()
     with Session(engine) as first_db, Session(engine) as second_db:
         session = ChatSession(id="session-1", tenant_id="tenant-demo")
@@ -48,6 +50,7 @@ def test_session_lease_blocks_parallel_worker_and_releases_cleanly() -> None:
 
 
 def test_expired_session_lease_is_taken_over_and_old_owner_is_fenced() -> None:
+    """验证过期租约可被新 worker 接管，旧持有者续约时抛出 LeaseLost。"""
     engine = _engine()
     with Session(engine) as first_db, Session(engine) as second_db:
         session = ChatSession(id="session-1", tenant_id="tenant-demo")

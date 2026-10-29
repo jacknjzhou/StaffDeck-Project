@@ -8,6 +8,11 @@ router = APIRouter(prefix="/examples", tags=["developer"])
 
 @router.get("/{language}", response_model=dict)
 def get_example(language: str) -> dict:
+    """按语言返回一段可复制的 Public API 调用示例代码。
+
+    目前只支持 python 与 typescript；其他语言返回空 code 并给出 supported，
+    方便调用方自行提示可选值。
+    """
     if language == "python":
         return {
             "language": "python",

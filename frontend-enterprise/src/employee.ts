@@ -93,11 +93,12 @@ const PRESET_AVATAR_IMAGES: Record<string, string> = {
 
 type AvatarSource = Pick<EmployeeProfile, 'avatarKind' | 'avatarImage' | 'avatarPreset'>;
 
+/** 判断员工头像是否为已上传的自定义图片（需同时满足上传类型与图片地址非空）。 */
 export function isUploadedAvatar(profile: AvatarSource): boolean {
   return profile.avatarKind === 'upload' && Boolean(profile.avatarImage);
 }
 
-/** Resolve the image URL for an employee avatar (uploaded image or preset illustration). */
+/** 解析员工头像图片地址：上传图片优先，否则按预设头像键回退到内置插画或默认头像。 */
 export function employeeAvatarImage(profile: AvatarSource): string {
   if (isUploadedAvatar(profile)) return profile.avatarImage;
   return PRESET_AVATAR_IMAGES[profile.avatarPreset || DEFAULT_AVATAR_PRESET] || avatarDefault;
@@ -205,16 +206,19 @@ export const EMPLOYEE_TEMPLATES: EmployeeTemplate[] = [
   },
 ];
 
+/** 原样返回展示文案，作为员工相关文案的统一取值入口（当前不做任何转换）。 */
 export function staffdeckDisplayText(value: string): string {
   return value;
 }
 
+/** 判断代理是否被标记为默认数字员工（广场代理始终返回 false）。 */
 export function isDefaultEmployeeAgent(agent?: EmployeeAgentLike | null): boolean {
   if (!agent || agent.is_overall) return false;
   const metadata = agent.metadata || {};
   return metadata.is_default_employee === true;
 }
 
+/** 优先选取默认数字员工，否则回退到第一个非广场代理；没有可用项时返回 undefined。 */
 export function preferredEmployeeAgent<T extends EmployeeAgentLike>(agents: T[]): T | undefined {
   return agents.find(isDefaultEmployeeAgent) || agents.find((item) => !item.is_overall);
 }
@@ -226,6 +230,12 @@ export type EmployeeVisibilityOptions = {
   includeOverall?: boolean;
 };
 
+/**
+ * 判断当前用户是否可在员工列表中看到指定代理。
+ *
+ * - 先按 excludeAgentId、activeOnly 选项做排除。
+ * - 管理员可额外看到广场代理；普通用户仅可见本人创建、广场公开或默认员工。
+ */
 export function canAccessEmployeeAgent(
   agent: AgentProfileRead,
   user?: EnterpriseAuthUser | null,
@@ -246,11 +256,18 @@ export function canAccessEmployeeAgent(
   );
 }
 
+/** 判断该代理是否被当前用户使用过（会话或聊天元数据任一命中即为真）。 */
 export function isEmployeeUsedByCurrentUser(agent: AgentProfileRead): boolean {
   const metadata = agent.metadata || {};
   return metadata.used_by_current_user === true || metadata.chat_used_by_current_user === true;
 }
 
+/**
+ * 判断当前用户能否在会话中选用指定代理。
+ *
+ * - 比可见性更严格：广场代理要求当前用户已使用过。
+ * - 管理员对非广场代理默认可选，普通用户仍受创建者与使用记录限制。
+ */
 export function canSelectCurrentEmployeeAgent(
   agent: AgentProfileRead,
   user?: EnterpriseAuthUser | null,
@@ -277,6 +294,7 @@ export function canSelectCurrentEmployeeAgent(
   );
 }
 
+/** 判断当前用户能否管理该代理：广场代理仅管理员可管理，其余为管理员或创建者。 */
 export function canManageEmployeeAgent(
   agent: AgentProfileRead,
   user?: EnterpriseAuthUser | null,
@@ -285,6 +303,7 @@ export function canManageEmployeeAgent(
   return isEnterpriseAdmin(user) || isEmployeeOwnedBy(agent, user);
 }
 
+/** 判断该代理是否为当前用户自己创建的数字员工（广场代理始终返回 false）。 */
 export function isMyEmployeeAgent(
   agent: AgentProfileRead,
   user?: EnterpriseAuthUser | null,
@@ -292,6 +311,7 @@ export function isMyEmployeeAgent(
   return !agent.is_overall && isEmployeeOwnedBy(agent, user);
 }
 
+/** 按可见性规则过滤代理列表，返回当前用户可查看的员工。 */
 export function visibleEmployeeAgents(
   rows: AgentProfileRead[],
   user?: EnterpriseAuthUser | null,
@@ -300,6 +320,7 @@ export function visibleEmployeeAgents(
   return rows.filter((agent) => canAccessEmployeeAgent(agent, user, options));
 }
 
+/** 按可选用规则过滤代理列表，返回当前用户可在会话中选用的员工。 */
 export function currentEmployeeAgents(
   rows: AgentProfileRead[],
   user?: EnterpriseAuthUser | null,
@@ -308,14 +329,17 @@ export function currentEmployeeAgents(
   return rows.filter((agent) => canSelectCurrentEmployeeAgent(agent, user, options));
 }
 
+/** 从代理列表中找出开放广场代理（is_overall），不存在时返回 undefined。 */
 export function openGalleryAgent(rows: AgentProfileRead[]): AgentProfileRead | undefined {
   return rows.find((agent) => agent.is_overall);
 }
 
+/** 返回开放广场代理的 ID，列表中不存在时返回空字符串。 */
 export function openGalleryAgentId(rows: AgentProfileRead[]): string {
   return openGalleryAgent(rows)?.id || '';
 }
 
+/** 构造导入来源下拉选项：存在广场代理时返回单个选项，否则返回空数组。 */
 export function openGalleryImportSourceOptions(
   rows: AgentProfileRead[],
   label: string,
@@ -324,15 +348,18 @@ export function openGalleryImportSourceOptions(
   return agentId ? [{ value: agentId, label }] : [];
 }
 
+/** 将未知值归一化为非空字符串数组，非数组输入返回空数组。 */
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
+/** 从元数据对象中读取字符串字段，字段缺失或类型不符时返回空字符串。 */
 function stringFromMeta(metadata: Record<string, unknown>, key: string): string {
   const value = metadata[key];
   return typeof value === 'string' ? value : '';
 }
 
+/** 依次返回首个非空字符串（已去除首尾空白），全部为空时返回空字符串。 */
 function firstString(...values: unknown[]): string {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) return value.trim();
@@ -340,6 +367,7 @@ function firstString(...values: unknown[]): string {
   return '';
 }
 
+/** 从元数据的多个候选键解析创建者名称，均缺失时回退到 fallback。 */
 export function creatorNameFromMetadata(
   metadata?: Record<string, unknown> | null,
   fallback = '',
@@ -361,6 +389,7 @@ export function creatorNameFromMetadata(
   return normalized || fallback;
 }
 
+/** 拼接「名称 @创建者」，名称为空时显示「未命名」，无创建者时只返回名称。 */
 export function displayNameWithCreator(name: string, creator?: string): string {
   const cleanName = name.trim() || '未命名';
   const cleanCreator = (creator || '').trim();
@@ -368,6 +397,12 @@ export function displayNameWithCreator(name: string, creator?: string): string {
   return `${cleanName} @${cleanCreator}`;
 }
 
+/**
+ * 由代理元数据推导完整的员工展示档案（岗位、头像、入职时间与标签）。
+ *
+ * - 广场代理固定使用「开放广场」身份与 overall 头像。
+ * - 元数据缺失时依次回退到角色模板与默认头像预设。
+ */
 export function employeeProfile(agent?: AgentProfileRead | null): EmployeeProfile {
   const metadata = agent?.metadata || {};
   const template = EMPLOYEE_TEMPLATES.find((item) => item.key === metadata.role_key);
@@ -393,24 +428,29 @@ export function employeeProfile(agent?: AgentProfileRead | null): EmployeeProfil
   };
 }
 
+/** 返回员工展示名：空代理为「数字员工」，广场代理为「开放广场」，其余取代理名称。 */
 export function employeeDisplayName(agent?: AgentProfileRead | null): string {
   if (!agent) return '数字员工';
   if (agent.is_overall) return '开放广场';
   return agent.name || '数字员工';
 }
 
+/** 返回员工创建者名称，缺少创建者信息时为空字符串。 */
 export function employeeCreatorName(agent?: AgentProfileRead | null): string {
   return creatorNameFromMetadata(agent?.metadata);
 }
 
+/** 返回带创建者后缀的员工展示名，用于列表与详情中的归属标注。 */
 export function employeeDisplayNameWithCreator(agent?: AgentProfileRead | null): string {
   return displayNameWithCreator(employeeDisplayName(agent), employeeCreatorName(agent));
 }
 
+/** 从资源元数据中解析创建者名称，用于资源归属展示。 */
 export function resourceCreatorName(resource?: { metadata?: Record<string, unknown> } | null): string {
   return creatorNameFromMetadata(resource?.metadata);
 }
 
+/** 返回带创建者后缀的资源展示名。 */
 export function resourceDisplayNameWithCreator(
   name: string,
   resource?: { metadata?: Record<string, unknown> } | null,
@@ -418,6 +458,7 @@ export function resourceDisplayNameWithCreator(
   return displayNameWithCreator(name, resourceCreatorName(resource));
 }
 
+/** 统计指定类型的有效资源绑定数量（排除 deleted 与 inactive 状态）。 */
 export function resourceCount(resources: AgentResourceBindingRead[] | undefined, type: AgentResourceBindingRead['resource_type']): number {
   return (resources || []).filter((item) => (
     item.resource_type === type
@@ -426,7 +467,7 @@ export function resourceCount(resources: AgentResourceBindingRead[] | undefined,
   )).length;
 }
 
-/** Employees selectable in the chat sidebar: active employees visible to the current user. */
+/** 会话侧边栏可选的员工：当前用户可见且处于启用状态的数字员工。 */
 export function visibleChatEmployees(
   rows: AgentProfileRead[],
   user?: EnterpriseAuthUser | null,
@@ -434,6 +475,7 @@ export function visibleChatEmployees(
   return currentEmployeeAgents(rows, user, { activeOnly: true });
 }
 
+/** 统计代理自身绑定中指定类型的有效资源数量（排除 deleted 与 inactive 状态）。 */
 export function agentResourceCount(agent: AgentProfileRead, resourceType: AgentResourceType): number {
   return (agent.resources || []).filter((resource) => (
     resource.resource_type === resourceType
@@ -442,10 +484,12 @@ export function agentResourceCount(agent: AgentProfileRead, resourceType: AgentR
   )).length;
 }
 
+/** 统计状态为 active 的资源绑定数量。 */
 export function activeResourceCount(resources: AgentResourceBindingRead[] | undefined): number {
   return (resources || []).filter((item) => item.status === 'active').length;
 }
 
+/** 基于员工模板生成写入代理的元数据，并保留 currentMetadata 中的既有字段。 */
 export function employeeMetadataFromTemplate(templateKey: string, currentMetadata: Record<string, unknown> = {}): Record<string, unknown> {
   const template = EMPLOYEE_TEMPLATES.find((item) => item.key === templateKey) || EMPLOYEE_TEMPLATES[0];
   return {
@@ -463,6 +507,12 @@ export function employeeMetadataFromTemplate(templateKey: string, currentMetadat
   };
 }
 
+/**
+ * 生成「空白入职」场景的员工元数据，缺失字段以默认岗位与默认头像补齐。
+ *
+ * - 保留 currentMetadata 中的既有字段，并标记 blank_onboarding。
+ * - 入职时间缺失时取当天日期。
+ */
 export function employeeBlankMetadata(currentMetadata: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     ...currentMetadata,

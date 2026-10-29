@@ -20,6 +20,7 @@ def _skill(
     scope: str = "general",
     status: str = "published",
 ) -> Skill:
+    """构造带完整 content_json 的技能行,便于在测试里拼装嵌套结构。"""
     node_ids = [str(node["node_id"]) for node in nodes]
     return Skill(
         tenant_id="tenant_test",
@@ -48,6 +49,7 @@ def _skill(
 
 
 def test_sop_specific_is_not_a_routing_candidate() -> None:
+    """验证 scope 为 sop_specific 的子 SOP 不会成为路由候选。"""
     general = _skill("general", nodes=[{"node_id": "done", "name": "Done"}])
     nested_only = _skill(
         "nested_only",
@@ -59,6 +61,7 @@ def test_sop_specific_is_not_a_routing_candidate() -> None:
 
 
 def test_nested_sop_is_expanded_and_parent_edges_are_rewired() -> None:
+    """验证子 SOP 展开为带前缀的节点,父子边按子流程入口与出口重新接线。"""
     child = _skill(
         "child",
         nodes=[
@@ -116,6 +119,7 @@ def test_nested_sop_is_expanded_and_parent_edges_are_rewired() -> None:
 
 
 def test_nested_sop_preserves_deepest_source_metadata() -> None:
+    """验证多层嵌套时节点保留最深层来源与完整嵌套路径。"""
     leaf = _skill("leaf", nodes=[{"node_id": "leaf_done", "name": "Leaf"}])
     child = _skill(
         "child",
@@ -149,6 +153,7 @@ def test_nested_sop_preserves_deepest_source_metadata() -> None:
 
 
 def test_nested_sop_cycle_is_rejected() -> None:
+    """验证两级互相嵌套形成环时校验失败。"""
     first = _skill(
         "first",
         nodes=[
@@ -177,6 +182,7 @@ def test_nested_sop_cycle_is_rejected() -> None:
 
 
 def test_nesting_validator_accepts_compact_rewrite_catalog() -> None:
+    """验证校验器兼容紧凑写法的技能目录(仅含 id、状态与 content)。"""
     current = _skill(
         "parent",
         nodes=[
@@ -203,6 +209,7 @@ def test_nesting_validator_accepts_compact_rewrite_catalog() -> None:
 
 
 def test_deep_nested_sop_cycle_is_rejected() -> None:
+    """验证三级嵌套成环时错误信息给出完整环路径。"""
     first = _skill(
         "first",
         nodes=[{"node_id": "to_second", "name": "Second", "type": "subflow", "sub_sop_id": "second"}],
@@ -221,6 +228,7 @@ def test_deep_nested_sop_cycle_is_rejected() -> None:
 
 
 def test_missing_or_unpublished_nested_sop_is_rejected() -> None:
+    """验证引用缺失或未发布的子 SOP 时校验失败。"""
     parent = _skill(
         "parent",
         nodes=[
@@ -238,6 +246,7 @@ def test_missing_or_unpublished_nested_sop_is_rejected() -> None:
 
 
 def test_broken_nested_sop_does_not_disable_unrelated_sops() -> None:
+    """验证坏掉的嵌套 SOP 只被剔除,不影响其他可见 SOP 展开。"""
     broken = _skill(
         "broken",
         nodes=[

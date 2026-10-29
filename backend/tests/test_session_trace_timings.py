@@ -6,6 +6,7 @@ from app.observability.session_timings import enrich_turn_traces_with_timings
 
 
 def test_enterprise_trace_timings_include_each_step_and_model_time() -> None:
+    """验证每步耗时与模型耗时都被统计，动作行不重复计模型时间。"""
     started_at = datetime(2026, 8, 2, 10, 0, 0)
     turn_payload = {
         "turn_id": "msg_user",
@@ -171,6 +172,7 @@ def test_enterprise_trace_timings_include_each_step_and_model_time() -> None:
 
 
 def test_enterprise_trace_timings_merge_overlapping_model_spans() -> None:
+    """验证重叠的模型调用时间窗按并集计算，且不超过整轮总耗时。"""
     started_at = datetime(2026, 8, 2, 11, 0, 0)
     turn_payload = {"turn_id": "msg_overlap", "user_message_id": "msg_overlap"}
     messages = [
@@ -249,6 +251,7 @@ def test_enterprise_trace_timings_merge_overlapping_model_spans() -> None:
 
 
 def test_enterprise_trace_without_model_spans_does_not_report_fake_zero() -> None:
+    """验证没有模型调用事件时不输出 0 的模型耗时字段。"""
     started_at = datetime(2026, 8, 2, 12, 0, 0)
     payload = {
         "turn_id": "msg_channel",
@@ -308,6 +311,7 @@ def test_enterprise_trace_without_model_spans_does_not_report_fake_zero() -> Non
 
 
 def test_enterprise_trace_does_not_time_instantaneous_skill_transition() -> None:
+    """验证瞬时的技能状态迁移不产生虚构的耗时行。"""
     started_at = datetime(2026, 8, 2, 13, 0, 0)
     payload = {
         "turn_id": "msg_skill",
@@ -386,6 +390,7 @@ def _event(
     *,
     session_id: str = "session_demo",
 ) -> AgentEvent:
+    """构造一条带 payload 与时间戳的 AgentEvent，供追踪用例使用。"""
     return AgentEvent(
         tenant_id="tenant_demo",
         session_id=session_id,
@@ -407,6 +412,7 @@ def _model_span(
     task_frame_id: str = "",
     iteration: int | None = None,
 ) -> AgentEvent:
+    """构造一次模型调用结束事件，用相对毫秒锚定起止时间。"""
     return _event(
         "llm_call_finished",
         turn_started_at + timedelta(milliseconds=finished_after_ms),

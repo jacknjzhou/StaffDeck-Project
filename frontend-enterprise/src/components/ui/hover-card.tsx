@@ -3,18 +3,21 @@ import { HoverCard as HoverCardPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/** 悬浮卡片根组件，持有悬浮卡片的开关状态并向下传递上下文。 */
 function HoverCard({
   ...props
 }: React.ComponentProps<typeof HoverCardPrimitive.Root>) {
   return <HoverCardPrimitive.Root data-slot="hover-card" {...props} />
 }
 
+/** 悬浮卡片触发器，鼠标悬停或键盘聚焦时打开对应卡片。 */
 function HoverCardTrigger({
   ...props
 }: React.ComponentProps<typeof HoverCardPrimitive.Trigger>) {
   return <HoverCardPrimitive.Trigger data-slot="hover-card-trigger" {...props} />
 }
 
+/** 悬浮卡片内容面板，通过 Portal 渲染，支持对齐方式与偏移量配置。 */
 function HoverCardContent({
   className,
   align = "center",

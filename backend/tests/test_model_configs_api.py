@@ -24,6 +24,7 @@ from app.security.encryption import encrypt_secret
 
 
 def _db(tmp_path) -> Session:
+    """创建绑定 tenant_a 的临时 SQLite 会话，供模型配置接口测试使用。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'model-api.db'}")
     SQLModel.metadata.create_all(engine)
     db = Session(engine)
@@ -33,6 +34,7 @@ def _db(tmp_path) -> Session:
 
 
 def _admin() -> User:
+    """构造 tenant_a 下的管理员用户，作为接口调用的当前用户。"""
     return User(
         id="user_admin",
         tenant_id="tenant_a",
@@ -43,6 +45,7 @@ def _admin() -> User:
 
 
 def test_new_model_config_is_never_enabled_or_default(tmp_path) -> None:
+    """验证未经验证的新配置即使请求启用，也不会启用或成为默认。"""
     with _db(tmp_path) as db:
         created = create_model_config(
             ModelConfigCreateRequest(
@@ -64,6 +67,7 @@ def test_new_model_config_is_never_enabled_or_default(tmp_path) -> None:
 
 
 def test_verified_create_is_atomic_and_activates_only_after_success(tmp_path, monkeypatch) -> None:
+    """验证创建前校验通过后才启用配置，且整条记录只落库一次。"""
     _install_passing_verification_client(monkeypatch)
     with _db(tmp_path) as db:
         created = create_model_config(
@@ -87,11 +91,14 @@ def test_verified_create_is_atomic_and_activates_only_after_success(tmp_path, mo
 
 
 def test_failed_verified_create_does_not_leave_disabled_model(tmp_path, monkeypatch) -> None:
+    """验证校验失败的创建返回 502，且不残留任何半成品配置。"""
     class FailingClient:
+        """模拟连接失败的 LLM 客户端，用于触发创建时的校验异常。"""
         def __init__(self, _config) -> None:  # noqa: ANN001
-            pass
+            """接收配置但不做初始化，仅保持与真实客户端一致的构造签名。"""
 
         def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            """抛出 LLMError 模拟上游连接失败。"""
             raise LLMError("Connection error")
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
@@ -118,11 +125,14 @@ def test_failed_verified_create_does_not_leave_disabled_model(tmp_path, monkeypa
 
 
 def test_model_test_returns_structured_provider_diagnostics(tmp_path, monkeypatch) -> None:
+    """验证连通性测试失败时，错误对象透出上游结构化诊断字段。"""
     class FailingClient:
+        """模拟返回上游错误详情的客户端，用于检查诊断信息透传。"""
         def __init__(self, _config) -> None:  # noqa: ANN001
-            pass
+            """接收配置但不做初始化，仅保持与真实客户端一致的构造签名。"""
 
         def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            """抛出携带上游状态码与请求 ID 的 LLMError。"""
             raise LLMError(
                 "provider rejected request",
                 code="MODEL_UPSTREAM_ERROR",
@@ -161,6 +171,7 @@ def test_model_test_returns_structured_provider_diagnostics(tmp_path, monkeypatc
 
 
 def test_gemini_model_config_can_be_created(tmp_path) -> None:
+    """验证 gemini_generate_content 协议的配置可创建且默认不启用。"""
     with _db(tmp_path) as db:
         created = create_model_config(
             ModelConfigCreateRequest(
@@ -182,6 +193,7 @@ def test_gemini_model_config_can_be_created(tmp_path) -> None:
 
 
 def test_openai_responses_model_config_can_be_created(tmp_path) -> None:
+    """验证 openai_responses 协议的配置可创建且默认不启用。"""
     with _db(tmp_path) as db:
         created = create_model_config(
             ModelConfigCreateRequest(
@@ -202,6 +214,7 @@ def test_openai_responses_model_config_can_be_created(tmp_path) -> None:
 
 
 def test_chat_extra_body_is_not_validated_as_protocol_options(tmp_path) -> None:
+    """验证 chat 协议的 extra_body 独立存储，不被当作协议选项校验。"""
     with _db(tmp_path) as db:
         created = create_model_config(
             ModelConfigCreateRequest(
@@ -233,6 +246,7 @@ def test_chat_extra_body_is_not_validated_as_protocol_options(tmp_path) -> None:
 
 
 def test_non_chat_protocol_rejects_extra_body_with_distinct_error(tmp_path) -> None:
+    """验证非 chat 协议携带 extra_body 时返回独立的错误码。"""
     with _db(tmp_path) as db:
         with pytest.raises(HTTPException) as exc_info:
             create_model_config(
@@ -253,6 +267,7 @@ def test_non_chat_protocol_rejects_extra_body_with_distinct_error(tmp_path) -> N
 
 
 def test_model_config_delete_removes_agent_bindings(tmp_path) -> None:
+    """验证删除模型配置时级联清理关联的 Agent 模型绑定。"""
     with _db(tmp_path) as db:
         db.add(
             ModelConfig(
@@ -289,6 +304,7 @@ def test_model_config_delete_removes_agent_bindings(tmp_path) -> None:
 
 
 def test_security_change_invalidates_and_disables_legacy_config(tmp_path) -> None:
+    """验证修改安全相关字段后，旧的可信状态被重置并停用配置。"""
     with _db(tmp_path) as db:
         row = ModelConfig(
             id="model_a",
@@ -317,11 +333,14 @@ def test_security_change_invalidates_and_disables_legacy_config(tmp_path) -> Non
 
 
 def test_failed_verified_update_preserves_existing_model(tmp_path, monkeypatch) -> None:
+    """验证更新校验失败时，原配置的所有字段保持不变。"""
     class FailingClient:
+        """模拟连接失败的客户端，用于更新场景的校验失败。"""
         def __init__(self, _config) -> None:  # noqa: ANN001
-            pass
+            """接收配置但不做初始化，仅保持与真实客户端一致的构造签名。"""
 
         def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            """抛出 LLMError 模拟上游连接失败。"""
             raise LLMError("Connection error")
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
@@ -367,6 +386,7 @@ def test_failed_verified_update_preserves_existing_model(tmp_path, monkeypatch) 
 
 
 def test_disabling_default_clears_default_in_same_update(tmp_path) -> None:
+    """验证停用默认配置时，同一次更新内一并清除默认标记。"""
     with _db(tmp_path) as db:
         db.add(
             ModelConfig(
@@ -394,6 +414,7 @@ def test_disabling_default_clears_default_in_same_update(tmp_path) -> None:
 
 
 def test_unverified_config_cannot_become_default(tmp_path) -> None:
+    """验证未验证的配置不能被设为默认，返回 409 错误。"""
     with _db(tmp_path) as db:
         db.add(
             ModelConfig(
@@ -418,6 +439,7 @@ def test_unverified_config_cannot_become_default(tmp_path) -> None:
 
 
 def test_switching_default_clears_existing_row_before_setting_new(tmp_path) -> None:
+    """验证存在唯一索引时，切换默认先清除旧默认再设置新默认。"""
     with _db(tmp_path) as db:
         db.exec(
             text(
@@ -459,6 +481,7 @@ def test_switching_default_clears_existing_row_before_setting_new(tmp_path) -> N
 
 
 def test_read_returns_only_current_protocol_options(tmp_path) -> None:
+    """验证读取配置时只返回当前协议对应的协议选项。"""
     from app.api.model_configs import model_config_read
 
     row = ModelConfig(
@@ -477,21 +500,27 @@ def test_read_returns_only_current_protocol_options(tmp_path) -> None:
 
 
 def test_verification_runs_bounded_text_stream_and_json_probes(tmp_path, monkeypatch) -> None:
+    """验证校验依次执行文本、流式与 JSON 探测，并复用受限的输出上限。"""
     calls = []
 
     class FakeClient:
+        """记录调用顺序且全部探测成功的假客户端，用于校验探测流程。"""
         def __init__(self, config) -> None:  # noqa: ANN001
+            """记录构造时的输出上限与超时，以便断言参数被限制。"""
             calls.append(("init", config.max_output_tokens, config.timeout_seconds))
 
         def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            """返回固定文本，表示文本能力探测通过。"""
             calls.append(("text",))
             return "ok"
 
         def generate_text_stream(self, _prompt, _payload):  # noqa: ANN001
+            """返回单段流式文本，表示流式能力探测通过。"""
             calls.append(("stream",))
             yield "ok"
 
         def generate_json(self, _prompt, _payload):  # noqa: ANN001
+            """返回固定 JSON，表示结构化输出能力探测通过。"""
             calls.append(("json",))
             return {"ok": True}
 
@@ -526,6 +555,7 @@ def test_verification_runs_bounded_text_stream_and_json_probes(tmp_path, monkeyp
 
 
 def test_initial_verification_can_atomically_activate_first_model(tmp_path, monkeypatch) -> None:
+    """验证首个模型的初次校验通过后，在同一事务内启用并设为默认。"""
     _install_passing_verification_client(monkeypatch)
     with _db(tmp_path) as db:
         db.add(
@@ -563,6 +593,7 @@ def test_initial_verification_can_atomically_activate_first_model(tmp_path, monk
 
 
 def test_retesting_disabled_verified_model_does_not_reenable_it(tmp_path, monkeypatch) -> None:
+    """验证重新测试已停用的已验证模型，不会将其重新启用或设为默认。"""
     _install_passing_verification_client(monkeypatch)
     with _db(tmp_path) as db:
         db.add(
@@ -597,6 +628,7 @@ def test_retesting_disabled_verified_model_does_not_reenable_it(tmp_path, monkey
 
 
 def test_verification_does_not_replace_or_clear_existing_default(tmp_path, monkeypatch) -> None:
+    """验证已有默认配置时，新模型校验不会顶替或清除既有默认。"""
     _install_passing_verification_client(monkeypatch)
     with _db(tmp_path) as db:
         db.add_all(
@@ -651,6 +683,7 @@ def test_verification_does_not_replace_or_clear_existing_default(tmp_path, monke
 
 
 def test_concurrent_initial_verification_activates_only_one_default(tmp_path, monkeypatch) -> None:
+    """验证并发初次校验时只有一个模型被激活为默认，另一个保持未启用。"""
     _install_passing_verification_client(monkeypatch)
     engine = create_engine(
         f"sqlite:///{tmp_path / 'concurrent-model-api.db'}",
@@ -689,6 +722,7 @@ def test_concurrent_initial_verification_activates_only_one_default(tmp_path, mo
     thread_state = threading.local()
 
     def synchronized_has_available_model(db, tenant_id):  # noqa: ANN001
+        """在两个线程的首次可用性检查处同步，制造并发激活的竞争窗口。"""
         check_count = getattr(thread_state, "check_count", 0) + 1
         thread_state.check_count = check_count
         if check_count == 1:
@@ -704,6 +738,7 @@ def test_concurrent_initial_verification_activates_only_one_default(tmp_path, mo
     monkeypatch.setattr(model_configs, "_has_available_model", synchronized_has_available_model)
 
     def verify(model_id: str):
+        """在独立会话中对该模型执行带激活选项的连通性校验。"""
         with Session(engine) as db:
             return run_model_config_test(
                 model_id,
@@ -724,17 +759,22 @@ def test_concurrent_initial_verification_activates_only_one_default(tmp_path, mo
 
 
 def _install_passing_verification_client(monkeypatch) -> None:
+    """把 LLMClient 替换成所有探测都通过的假客户端，供激活类用例复用。"""
     class PassingClient:
+        """文本、流式与 JSON 探测均成功的假客户端。"""
         def __init__(self, _config) -> None:  # noqa: ANN001
-            pass
+            """接收配置但不做初始化，仅保持与真实客户端一致的构造签名。"""
 
         def generate_text(self, _prompt, _payload):  # noqa: ANN001
+            """返回固定文本，表示文本探测通过。"""
             return "ok"
 
         def generate_text_stream(self, _prompt, _payload):  # noqa: ANN001
+            """返回单段流式文本，表示流式探测通过。"""
             yield "ok"
 
         def generate_json(self, _prompt, _payload):  # noqa: ANN001
+            """返回固定 JSON，表示结构化输出探测通过。"""
             return {"ok": True}
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", PassingClient)

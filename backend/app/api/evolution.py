@@ -30,6 +30,7 @@ def list_evolution_proposals(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[EvolutionProposalRead]:
+    """列出某数字员工的自进化候选，需校验租户归属与调用方的 agent 管理权限。"""
     ensure_tenant(db, tenant_id)
     ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     return [_proposal_read(row) for row in EvolutionService(db).list(tenant_id, agent_id)]
@@ -45,6 +46,7 @@ def analyze_evolution_candidate(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> EvolutionProposalRead:
+    """基于反馈与运行数据为指定员工生成一个自进化候选，返回候选快照。"""
     ensure_tenant(db, request.tenant_id)
     ensure_agent_scope_manager(db, request.tenant_id, agent_id, current_user)
     return _proposal_read(EvolutionService(db).analyze(agent_id, request, current_user))
@@ -60,6 +62,7 @@ def get_evolution_proposal(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> EvolutionProposalRead:
+    """取单个自进化候选详情，候选人所属 agent 需在调用方管理范围内。"""
     row = _proposal(db, tenant_id, proposal_id)
     ensure_agent_scope_manager(db, tenant_id, row.agent_id, current_user)
     return _proposal_read(row)
@@ -75,6 +78,7 @@ def evaluate_evolution_proposal(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> EvolutionProposalRead:
+    """评估候选的预期收益与风险，返回更新后的候选快照。"""
     row = _proposal(db, request.tenant_id, proposal_id)
     ensure_agent_scope_manager(db, request.tenant_id, row.agent_id, current_user)
     return _proposal_read(EvolutionService(db).evaluate(row))
@@ -90,6 +94,7 @@ def approve_evolution_proposal(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> EvolutionProposalRead:
+    """审批通过候选并把变更发布到生效资源，返回更新后的候选快照。"""
     row = _proposal(db, request.tenant_id, proposal_id)
     ensure_agent_scope_manager(db, request.tenant_id, row.agent_id, current_user)
     return _proposal_read(EvolutionService(db).approve(row, current_user))
@@ -105,6 +110,7 @@ def reject_evolution_proposal(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> EvolutionProposalRead:
+    """驳回候选并记录驳回原因，被驳回的候选不会发布。"""
     row = _proposal(db, request.tenant_id, proposal_id)
     ensure_agent_scope_manager(db, request.tenant_id, row.agent_id, current_user)
     return _proposal_read(EvolutionService(db).reject(row, current_user, request.reason))
@@ -120,12 +126,14 @@ def rollback_evolution_proposal(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> EvolutionProposalRead:
+    """回滚已发布的候选，把目标资源恢复到候选记录的基线版本。"""
     row = _proposal(db, request.tenant_id, proposal_id)
     ensure_agent_scope_manager(db, request.tenant_id, row.agent_id, current_user)
     return _proposal_read(EvolutionService(db).rollback(row, current_user))
 
 
 def _proposal(db: Session, tenant_id: str, proposal_id: str) -> EvolutionProposal:
+    """按租户取候选记录，不存在或跨租户时抛 404 EVOLUTION_PROPOSAL_NOT_FOUND。"""
     ensure_tenant(db, tenant_id)
     row = db.get(EvolutionProposal, proposal_id)
     if not row or row.tenant_id != tenant_id:
@@ -140,6 +148,7 @@ def _proposal(db: Session, tenant_id: str, proposal_id: str) -> EvolutionProposa
 
 
 def _proposal_read(row: EvolutionProposal) -> EvolutionProposalRead:
+    """把候选记录转成 API 响应模型，JSON 字段补空、时间统一为 ISO 字符串。"""
     return EvolutionProposalRead(
         id=row.id,
         tenant_id=row.tenant_id,

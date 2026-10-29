@@ -23,6 +23,7 @@ def get_feedback_summary(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """返回租户内（可按 agent 过滤）当前用户可见会话的反馈汇总统计。"""
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     owned_session_ids = _owned_session_ids(db, tenant_id, current_user, agent_id)
@@ -51,6 +52,10 @@ def list_feedback_sessions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[dict]:
+    """按会话聚合指定评分的反馈，返回反馈视图列表。
+
+    仅覆盖当前用户可见的会话；每条包含最新反馈的分析结论、主归因与归因计数。
+    """
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     owned_session_ids = _owned_session_ids(db, tenant_id, current_user, agent_id)
@@ -124,6 +129,7 @@ def get_feedback_session_detail(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """返回单个会话的详情：会话信息、带反馈标注的消息与全部反馈分析。"""
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     chat_session = _get_owned_chat_session(db, tenant_id, current_user, session_id)
@@ -173,6 +179,7 @@ def reanalyze_feedback(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """重置反馈分析状态并投递分析任务，返回 job_id 供前端轮询。"""
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     row = db.get(MessageFeedback, feedback_id)
@@ -207,6 +214,7 @@ def get_feedback_analysis_job(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """读取反馈分析任务状态；任务不存在、跨租户或类型不符时返回 404。"""
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     job = db.get(APIJob, job_id)
@@ -237,6 +245,7 @@ def get_feedback_analysis_job(
 
 
 def _message_with_feedback(message: Message, feedback: MessageFeedback | None) -> dict:
+    """把消息序列化结果与该条反馈的 id、更新时间和分析结论合并成一份载荷。"""
     payload = message_read(message, feedback.rating if feedback else None).model_dump()
     if feedback:
         payload["feedback_id"] = feedback.id
@@ -251,6 +260,7 @@ def _owned_session_ids(
     current_user: User,
     agent_id: str | None = None,
 ) -> list[str]:
+    """返回当前用户有权查看的会话 id；无全量查看权限时仅限本人会话。"""
     conditions = [ChatSession.tenant_id == tenant_id]
     if agent_id:
         conditions.append(ChatSession.agent_id == agent_id)
@@ -260,6 +270,7 @@ def _owned_session_ids(
 
 
 def _get_owned_chat_session(db: Session, tenant_id: str, current_user: User, session_id: str) -> ChatSession:
+    """校验会话归属（本人、管理员或本人负责的数字员工）后返回，否则抛 404。"""
     row = db.get(ChatSession, session_id)
     if not row or row.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -282,6 +293,7 @@ def _can_view_all_agent_feedback(
     agent_id: str | None,
     current_user: User,
 ) -> bool:
+    """判断当前用户能否查看该数字员工名下全部会话的反馈（管理员或员工负责人）。"""
     if is_admin_user(current_user):
         return bool(agent_id)
     if not agent_id:
@@ -293,5 +305,6 @@ def _can_view_all_agent_feedback(
 
 
 def _ensure_request_tenant(tenant_id: str, current_user: User) -> None:
+    """要求请求租户与当前用户租户一致，不一致时抛 403。"""
     if tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")

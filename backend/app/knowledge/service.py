@@ -106,6 +106,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class IngestPayload:
+    """创建入库任务所需的请求载荷，携带原始文件内容与目标知识库身份。"""
+
     tenant_id: str
     knowledge_base_id: str
     filename: str
@@ -116,14 +118,18 @@ class IngestPayload:
 
 
 class KnowledgeDiscoveryValidationError(ValueError):
-    """Raised when a model-produced discovery cannot safely enter the review queue."""
+    """模型产出的发现项不合规时抛出，用于阻止其进入待确认队列。"""
 
 
 class KnowledgeDiscoveryConflictError(ValueError):
-    """Raised when a discovery cannot transition from pending to confirmed."""
+    """发现项无法从 pending 流转到已确认时抛出，如资源重复或状态已变更。"""
 
 
 def validate_discovered_skill(payload: dict[str, Any]) -> SkillCard:
+    """校验模型产出的技能草稿：字段合法且图结构可从开始节点走到结束节点。
+
+    返回 SkillCard；不合规时抛 KnowledgeDiscoveryValidationError 并说明原因。
+    """
     unknown_skill_fields = sorted(set(payload) - set(SkillCard.model_fields))
     if unknown_skill_fields:
         raise KnowledgeDiscoveryValidationError(
@@ -207,14 +213,24 @@ def validate_discovered_skill(payload: dict[str, Any]) -> SkillCard:
 
 
 class KnowledgeIngestCancelled(RuntimeError):
-    """Raised inside the ingest worker when a persisted job is cancelled."""
+    """入库 worker 检测到持久化任务已被取消时抛出，用于中断后续阶段。"""
 
 
 class KnowledgeService:
+    """知识库领域服务：承担文件入库、多级检索路由与发现项确认等读写操作。
+
+    所有方法共用调用方注入的 Session，写操作在方法内部自行提交事务。
+    """
+
     def __init__(self, db: Session):
+        """绑定请求级数据库会话，供后续入库与检索操作共用。"""
         self.db = db
 
     def create_ingest_job(self, payload: IngestPayload) -> KnowledgeIngestJob:
+        """把原始文件内容落库为排队状态的入库任务并返回持久化记录。
+
+        content_base64 暂存在 metadata_json 中，入库结束或被取消后会被清除。
+        """
         job = KnowledgeIngestJob(
             tenant_id=payload.tenant_id,
             knowledge_base_id=payload.knowledge_base_id,
@@ -243,7 +259,10 @@ class KnowledgeService:
         title: str | None = None,
         status: str | None = None,
     ) -> KnowledgeDocument:
-        """Replace editable source text and rebuild every derived knowledge layer."""
+        """替换文档可编辑正文，并重建全部派生知识层。
+
+        同步刷新章节树、OKF Wiki 页面、引用来源与概念表，不触发模型分桶。
+        """
         normalized_text = _normalize_text(content_md)
         if not normalized_text:
             raise KnowledgeParseError("文档正文不能为空。")
@@ -348,6 +367,10 @@ class KnowledgeService:
         return document
 
     def cancel_ingest_job(self, job_id: str, tenant_id: str) -> KnowledgeIngestJob | None:
+        """请求取消入库任务：排队中的立即终结，运行中的标记为取消中。
+
+        返回 None 表示任务不存在或不属于该租户。
+        """
         job = self.db.get(KnowledgeIngestJob, job_id)
         if not job or job.tenant_id != tenant_id:
             return None
@@ -374,6 +397,10 @@ class KnowledgeService:
         tenant_id: str,
         grace_period: timedelta = CANCEL_REQUEST_STALE_AFTER,
     ) -> list[KnowledgeIngestJob]:
+        """把租户下超过宽限期仍停留在取消中的任务批量终结。
+
+        返回本次实际被终结的任务列表。
+        """
         rows = self.db.exec(
             select(KnowledgeIngestJob)
             .where(KnowledgeIngestJob.tenant_id == tenant_id)
@@ -390,6 +417,10 @@ class KnowledgeService:
         job: KnowledgeIngestJob,
         grace_period: timedelta = CANCEL_REQUEST_STALE_AFTER,
     ) -> KnowledgeIngestJob | None:
+        """在超过宽限期后把单个取消中任务终结为已取消。
+
+        任务不是取消中状态或仍在宽限期内时返回 None。
+        """
         if job.status != "cancel_requested":
             return None
         last_update = job.updated_at or job.created_at
@@ -399,11 +430,16 @@ class KnowledgeService:
         return job
 
     def run_ingest_job(self, job_id: str) -> None:
+        """在独立会话中执行入库任务，供后台线程或任务队列调用。"""
         with Session(engine) as db:
             service = KnowledgeService(db)
             service._run_ingest_job(job_id)
 
     def _run_ingest_job(self, job_id: str) -> None:
+        """按解析、建桶、切片、概念写入、发现建议的顺序推进入库阶段。
+
+        异常会落盘为任务失败并清理半成品文档，取消请求则走取消终结路径。
+        """
         job = self.db.get(KnowledgeIngestJob, job_id)
         if not job:
             return
@@ -587,6 +623,10 @@ class KnowledgeService:
             self._clear_embedded_content(job)
 
     def search(self, request: KnowledgeSearchRequest, model_config: ModelConfig | None = None) -> KnowledgeSearchResponse:
+        """检索知识库，返回引用来源、Wiki 概念与证据包。
+
+        外层包一个知识检索观测 span，实际路由逻辑委托给 _search。
+        """
         with observed_span(
             "knowledge_span",
             "knowledge.search",
@@ -598,6 +638,10 @@ class KnowledgeService:
             return self._search(request, model_config)
 
     def _search(self, request: KnowledgeSearchRequest, model_config: ModelConfig | None = None) -> KnowledgeSearchResponse:
+        """执行 OKF 概念、文档、内部索引到引用来源的多级路由检索。
+
+        模型路由不可用时回退到词法相关性排序；无命中时返回空结果并附带 trace。
+        """
         query = request.query.strip()
         if not query:
             return KnowledgeSearchResponse()
@@ -859,6 +903,10 @@ class KnowledgeService:
         )
 
     def confirm_discovery(self, suggestion: KnowledgeDiscoverySuggestion) -> dict[str, Any]:
+        """确认待处理的发现建议，按类型创建对应的工具或技能草稿。
+
+        仅 pending 状态可确认；资源冲突时抛 KnowledgeDiscoveryConflictError。
+        """
         if suggestion.status != "pending":
             raise KnowledgeDiscoveryConflictError(
                 f"只有待处理建议可以确认，当前状态为 {suggestion.status}。"
@@ -884,6 +932,7 @@ class KnowledgeService:
             raise
 
     def reject_discovery(self, suggestion: KnowledgeDiscoverySuggestion) -> None:
+        """把待处理的发现建议标记为已拒绝，不创建任何资源。"""
         if suggestion.status != "pending":
             raise KnowledgeDiscoveryConflictError(
                 f"只有待处理建议可以拒绝，当前状态为 {suggestion.status}。"
@@ -905,6 +954,10 @@ class KnowledgeService:
         *,
         use_llm: bool = True,
     ) -> list[KnowledgeBucket]:
+        """规划并落库文档的内部索引，同时清空该文档的旧派生数据。
+
+        模型分桶不可用或为空时，回退到结构分桶与纯文本兜底方案。
+        """
         model_config = self._default_model_config(tenant_id)
         structure_buckets = _structure_bucket_specs(section_nodes)
         llm_buckets = (
@@ -974,6 +1027,10 @@ class KnowledgeService:
         section_nodes: list[dict[str, Any]],
         job: KnowledgeIngestJob | None,
     ) -> int:
+        """为每个内部索引生成引用来源切片，并写入相邻片段的关联信息。
+
+        返回本次写入的切片总数，同时回填索引的代表切片与切片数。
+        """
         count = 0
         chunk_ids_by_bucket: dict[str, list[str]] = {}
         section_by_id = {str(node.get("section_id")): node for node in section_nodes}
@@ -1092,6 +1149,10 @@ class KnowledgeService:
         buckets: list[KnowledgeBucket],
         job: KnowledgeIngestJob,
     ) -> None:
+        """调用模型从文档与内部索引中抽取 SOP/工具类发现建议。
+
+        未配置默认模型或模型调用失败时静默跳过，技能草稿校验失败标记为 invalid。
+        """
         model_config = self._default_model_config(tenant_id)
         if not model_config:
             return
@@ -1174,6 +1235,7 @@ class KnowledgeService:
     def _bucket_with_llm(
         self, section_nodes: list[dict[str, Any]], model_config: ModelConfig | None
     ) -> list[dict[str, Any]]:
+        """请求模型给出任务导向的分桶方案，失败时返回空列表。"""
         if not model_config:
             return []
         payload = {
@@ -1199,6 +1261,7 @@ class KnowledgeService:
         return [item for item in buckets if isinstance(item, dict)] if isinstance(buckets, list) else []
 
     def _load_documents_for_search(self, request: KnowledgeSearchRequest) -> list[KnowledgeDocument]:
+        """按租户与可见范围加载就绪状态的文档，最近更新的排在前面。"""
         stmt = select(KnowledgeDocument).where(
             KnowledgeDocument.tenant_id == request.tenant_id,
             KnowledgeDocument.status == "ready",
@@ -1212,6 +1275,7 @@ class KnowledgeService:
         return self.db.exec(stmt.order_by(KnowledgeDocument.updated_at.desc())).all()
 
     def _load_concepts_for_search(self, request: KnowledgeSearchRequest) -> list[KnowledgeConcept]:
+        """加载可见范围内的活跃 OKF 概念，最多取最近更新的 120 条。"""
         stmt = select(KnowledgeConcept).where(
             KnowledgeConcept.tenant_id == request.tenant_id,
             KnowledgeConcept.status == "active",
@@ -1225,6 +1289,7 @@ class KnowledgeService:
         return self.db.exec(stmt.order_by(KnowledgeConcept.updated_at.desc()).limit(120)).all()
 
     def _load_buckets_for_search(self, request: KnowledgeSearchRequest, document_ids: list[str]) -> list[KnowledgeBucket]:
+        """加载指定文档下的内部索引；文档列表为空时直接返回空。"""
         if not document_ids:
             return []
         stmt = select(KnowledgeBucket).where(
@@ -1245,6 +1310,10 @@ class KnowledgeService:
         model_config: ModelConfig,
         trace: list[dict[str, Any]],
     ) -> list[str] | None:
+        """让模型从候选文档中挑选相关文档 ID。
+
+        模型调用失败或返回格式非法时返回 None，把原因写入 trace 由调用方回退。
+        """
         payload = {
             "query": query,
             "max_documents": max_documents,
@@ -1274,6 +1343,10 @@ class KnowledgeService:
         trace: list[dict[str, Any]],
         query_type: str = "answer",
     ) -> list[str] | None:
+        """让模型从候选内部索引中挑选相关 ID，并按 max_buckets 截断。
+
+        失败时把原因写入 trace 并返回 None。
+        """
         payload = {
             "query": query,
             "query_type": query_type,
@@ -1314,6 +1387,7 @@ class KnowledgeService:
     def _load_chunks_for_buckets(
         self, tenant_id: str, bucket_ids: list[str], max_chunks: int | None = None
     ) -> list[KnowledgeChunk]:
+        """按内部索引读取引用来源切片，可选限制返回条数。"""
         if not bucket_ids:
             return []
         statement = (
@@ -1326,6 +1400,10 @@ class KnowledgeService:
         return self.db.exec(statement).all()
 
     def _confirm_tool(self, suggestion: KnowledgeDiscoverySuggestion, payload: dict[str, Any]) -> dict[str, Any]:
+        """把工具类发现建议落库为启用的 Tool 记录。
+
+        name 或 url 缺失时抛 KnowledgeDiscoveryValidationError，重名时抛冲突错误。
+        """
         name = str(payload.get("name") or payload.get("tool_name") or "").strip()
         if not name:
             raise KnowledgeDiscoveryValidationError("工具建议缺少 name。")
@@ -1359,6 +1437,10 @@ class KnowledgeService:
         return {"status": "created", "tool_id": row.id}
 
     def _confirm_skill(self, suggestion: KnowledgeDiscoverySuggestion, payload: dict[str, Any]) -> dict[str, Any]:
+        """把技能类发现建议校验后落库为 draft 状态的 Skill 记录。
+
+        skill_id 已存在时抛 KnowledgeDiscoveryConflictError，避免覆盖既有技能。
+        """
         skill_payload = payload.get("draft_skill") if isinstance(payload.get("draft_skill"), dict) else payload
         card = validate_discovered_skill(skill_payload)
         existing = self.db.exec(
@@ -1384,6 +1466,7 @@ class KnowledgeService:
         return {"status": "created", "skill_id": row.id}
 
     def _default_model_config(self, tenant_id: str) -> ModelConfig | None:
+        """返回租户启用的默认模型运行时配置；未配置时返回 None。"""
         row = self.db.exec(
             select(ModelConfig).where(
                 ModelConfig.tenant_id == tenant_id,
@@ -1396,6 +1479,7 @@ class KnowledgeService:
         return resolve_model_config_for_runtime(self.db, tenant_id, row.id)
 
     def ensure_default_knowledge_base(self, tenant_id: str) -> KnowledgeBase:
+        """返回租户最早创建的知识库，不存在时创建“默认知识库”记录。"""
         existing = self.db.exec(
             select(KnowledgeBase)
             .where(KnowledgeBase.tenant_id == tenant_id)
@@ -1416,6 +1500,7 @@ class KnowledgeService:
         return row
 
     def _update_job(self, job: KnowledgeIngestJob, **changes: Any) -> None:
+        """把若干字段写入入库任务并刷新 updated_at，随后提交事务。"""
         for key, value in changes.items():
             setattr(job, key, value)
         job.updated_at = utc_now()
@@ -1424,6 +1509,10 @@ class KnowledgeService:
         self.db.refresh(job)
 
     def _raise_if_ingest_cancelled(self, job: KnowledgeIngestJob | None) -> None:
+        """任务处于取消中或已取消时抛 KnowledgeIngestCancelled，用于阶段间中断。
+
+        先从数据库刷新任务状态，确保能读到其他请求写入的取消标记。
+        """
         if job is None:
             return
         self.db.refresh(job)
@@ -1431,6 +1520,10 @@ class KnowledgeService:
             raise KnowledgeIngestCancelled("入库任务已取消")
 
     def _finalize_cancelled_job(self, job: KnowledgeIngestJob, detail: str) -> None:
+        """把任务终结为已取消，并删除尚未完成的半成品文档。
+
+        会清除 metadata 中内嵌的原文，并按当前阶段补齐步骤快照。
+        """
         cancelled_document_id = job.document_id
         if cancelled_document_id:
             self._delete_partial_ingest_document(job)
@@ -1454,6 +1547,7 @@ class KnowledgeService:
         )
 
     def _delete_partial_ingest_document(self, job: KnowledgeIngestJob) -> None:
+        """级联删除该任务已产出的文档及其发现建议、概念、切片与索引。"""
         document_id = job.document_id
         if not document_id:
             return
@@ -1474,6 +1568,10 @@ class KnowledgeService:
         stats: dict[str, Any] | None = None,
         **changes: Any,
     ) -> None:
+        """切换入库阶段，同步进度、阶段文案与步骤快照并提交。
+
+        status 为 failed 或 cancelled 时跳过取消检查，避免覆盖终态。
+        """
         if changes.get("status") not in {"failed", "cancelled"}:
             self._raise_if_ingest_cancelled(job)
         stage_def = INGEST_STAGE_BY_KEY.get(stage)
@@ -1488,6 +1586,7 @@ class KnowledgeService:
         self._update_job(job, stage=stage, progress=progress, **changes)
 
     def _clear_embedded_content(self, job: KnowledgeIngestJob) -> None:
+        """从任务 metadata 中移除内嵌的 base64 原文，避免长期占用存储。"""
         metadata = dict(job.metadata_json or {})
         metadata.pop("content_base64", None)
         job.metadata_json = metadata
@@ -1497,6 +1596,7 @@ class KnowledgeService:
 
 
 def bucket_read(row: KnowledgeBucket) -> KnowledgeBucketRead:
+    """把内部索引记录转换为对外读取模型，并补上切片数与就绪状态。"""
     metadata = row.metadata_json or {}
     return KnowledgeBucketRead(
         id=row.id,
@@ -1516,6 +1616,7 @@ def bucket_read(row: KnowledgeBucket) -> KnowledgeBucketRead:
 
 
 def chunk_read(row: KnowledgeChunk) -> KnowledgeChunkRead:
+    """把引用来源记录转换为对外读取模型。"""
     return KnowledgeChunkRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -1533,6 +1634,7 @@ def chunk_read(row: KnowledgeChunk) -> KnowledgeChunkRead:
 
 
 def _normalize_text(text: str) -> str:
+    """统一换行符、去掉行尾空白，并把连续空行压缩为单个空行。"""
     lines = [line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     compact: list[str] = []
     blank = False
@@ -1548,6 +1650,7 @@ def _normalize_text(text: str) -> str:
 
 
 def _split_sections(text: str) -> list[str]:
+    """按标题与段落长度把全文切成语义分节，供分桶兜底使用。"""
     paragraphs = _paragraph_blocks(text)
     if not paragraphs:
         return [text[:BUCKET_SECTION_CHARS]]
@@ -1574,6 +1677,7 @@ def _split_sections(text: str) -> list[str]:
 
 
 def _chunk_text(text: str, max_chars: int) -> list[str]:
+    """把文本切成不超过 max_chars 的片段，优先在段落或换行处断开。"""
     paragraphs = _paragraph_blocks(text)
     if paragraphs:
         chunks: list[str] = []
@@ -1608,6 +1712,10 @@ def _chunk_text(text: str, max_chars: int) -> list[str]:
 
 
 def _chunk_text_related_groups(text: str, max_chars: int) -> list[list[str]]:
+    """把文本切成分组，同组片段视为同一段连续来源。
+
+    标题会切断分组，超长段落独占一组，保证检索命中后能整组展开上下文。
+    """
     paragraphs = _paragraph_blocks(text)
     if not paragraphs:
         chunks = _chunk_text(text, max_chars)
@@ -1618,6 +1726,7 @@ def _chunk_text_related_groups(text: str, max_chars: int) -> list[list[str]]:
     current_len = 0
 
     def flush_current() -> None:
+        """把当前累积的段落收尾为一个独立分组并重置缓存。"""
         nonlocal current, current_len
         if current:
             groups.append(["\n\n".join(current).strip()])
@@ -1644,6 +1753,7 @@ def _chunk_text_related_groups(text: str, max_chars: int) -> list[list[str]]:
 
 
 def _paragraph_blocks(text: str) -> list[str]:
+    """把文本拆成段落块；缺少空行的导出文档退化为按单行拆分。"""
     normalized = _normalize_text(text)
     if not normalized:
         return []
@@ -1656,6 +1766,7 @@ def _paragraph_blocks(text: str) -> list[str]:
 
 
 def _looks_like_heading(text: str) -> bool:
+    """判断文本是否形如 Markdown 标题或中文“第 N 章/节”标题。"""
     stripped = text.strip()
     return bool(
         re.match(r"^#{1,6}\s+\S", stripped)
@@ -1664,6 +1775,10 @@ def _looks_like_heading(text: str) -> bool:
 
 
 def _split_large_paragraph(text: str, max_chars: int) -> list[str]:
+    """把超长段落按句末标点切成不超过 max_chars 的若干片段。
+
+    单句仍超长时退化为按固定长度硬切。
+    """
     if len(text) <= max_chars:
         return [text]
     sentences = [item.strip() for item in re.split(r"(?<=[。！？.!?；;])\s*", text) if item.strip()]
@@ -1692,10 +1807,15 @@ def _split_large_paragraph(text: str, max_chars: int) -> list[str]:
 
 
 def _hard_split_text(text: str, max_chars: int) -> list[str]:
+    """按固定字符数硬切文本，不考虑语义边界。"""
     return [text[index:index + max_chars].strip() for index in range(0, len(text), max_chars) if text[index:index + max_chars].strip()]
 
 
 def _ingest_steps_for(stage: str, progress: float, status: str) -> list[dict[str, Any]]:
+    """按当前阶段、进度与状态生成入库步骤快照，供前端展示进度条。
+
+    failed 或 cancelled 时按进度把之前的步骤标记为完成，不标记运行中。
+    """
     if stage == "failed" or status in {"failed", "cancelled"}:
         return [
             {
@@ -1720,6 +1840,7 @@ def _ingest_steps_for(stage: str, progress: float, status: str) -> list[dict[str
 
 
 def _build_section_nodes(text: str) -> list[dict[str, Any]]:
+    """从段落序列构建带层级、路径、摘要与来源位置的章节树节点。"""
     paragraphs = _paragraph_blocks(text)
     if not paragraphs:
         return [
@@ -1746,6 +1867,7 @@ def _build_section_nodes(text: str) -> list[dict[str, Any]]:
     current_start = 0
 
     def flush(end_paragraph: int) -> None:
+        """收尾当前章节：回填内容、摘要、锚点实体与段落范围后加入结果。"""
         nonlocal current, current_parts, current_start
         if current is None:
             return
@@ -1767,6 +1889,7 @@ def _build_section_nodes(text: str) -> list[dict[str, Any]]:
         parent_id: str | None = None,
         related_section_id: str | None = None,
     ) -> dict[str, Any]:
+        """创建章节节点，按层级栈推导父节点、完整路径与章节序号。"""
         section_id = f"sec_{len(nodes) + 1}"
         parent = next((stack[item] for item in sorted(stack, reverse=True) if item < level), None)
         resolved_parent_id = parent_id if parent_id is not None else (parent.get("section_id") if parent else None)
@@ -1837,6 +1960,7 @@ def _build_document_card(
     text: str,
     section_nodes: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """生成文档卡片，汇总标题、大纲、适用场景与关键实体供检索路由使用。"""
     outline = [
         {
             "section_id": node.get("section_id"),
@@ -1868,6 +1992,7 @@ def _build_document_card(
 
 
 def _heading_info(text: str) -> tuple[int, str] | None:
+    """解析标题行并返回 (层级, 标题)；不是标题时返回 None。"""
     stripped = text.strip()
     if not stripped:
         return None
@@ -1881,6 +2006,7 @@ def _heading_info(text: str) -> tuple[int, str] | None:
 
 
 def _section_summary(title: Any, content: str) -> str:
+    """为章节生成摘要；标题未出现在摘要中时前置标题以提高可检索性。"""
     prefix = str(title or "").strip()
     summary = _summarize_text(content, 260)
     if prefix and prefix not in summary:
@@ -1889,6 +2015,7 @@ def _section_summary(title: Any, content: str) -> str:
 
 
 def _summarize_text(text: str, max_chars: int) -> str:
+    """压缩空白后按标点在 max_chars 内截断，并追加省略号。"""
     compact = re.sub(r"\s+", " ", text or "").strip()
     if len(compact) <= max_chars:
         return compact
@@ -1901,6 +2028,7 @@ def _summarize_text(text: str, max_chars: int) -> str:
 
 
 def _extract_anchor_entities(text: str) -> list[str]:
+    """用正则抽取英文标识、中文词组与版本号等锚点实体，去重后最多 40 个。"""
     candidates: list[str] = []
     patterns = [
         r"[A-Za-z][A-Za-z0-9_.:/-]{2,}",
@@ -1923,6 +2051,7 @@ def _extract_anchor_entities(text: str) -> list[str]:
 
 
 def _structure_bucket_specs(section_nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按章节路径的顶层标题聚合，生成结构型分桶方案。"""
     if not section_nodes:
         return []
     top_groups: dict[str, list[dict[str, Any]]] = {}
@@ -1954,6 +2083,10 @@ def _normalize_llm_bucket_specs(
     buckets: list[dict[str, Any]],
     section_nodes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """把模型返回的分桶方案规范化为内部结构，支持用章节下标指定来源。
+
+    未知章节会被忽略，缺失的摘要、键名与查询类型按内容兜底生成。
+    """
     specs: list[dict[str, Any]] = []
     section_by_index = {index: node for index, node in enumerate(section_nodes)}
     section_by_id = {str(node.get("section_id")): node for node in section_nodes}
@@ -1987,6 +2120,7 @@ def _normalize_llm_bucket_specs(
 
 
 def _unique_bucket_specs(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按 bucket_key 与来源章节集合去重，保留首次出现的分桶方案。"""
     result: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
     seen_sections: set[tuple[str, ...]] = set()
@@ -2003,6 +2137,7 @@ def _unique_bucket_specs(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _unique_strings(items: list[str]) -> list[str]:
+    """按原始顺序去重并丢弃空字符串。"""
     seen: set[str] = set()
     result: list[str] = []
     for item in items:
@@ -2015,6 +2150,7 @@ def _unique_strings(items: list[str]) -> list[str]:
 
 
 def _bucket_quality(spec: dict[str, Any], section_ids: list[str], content: str) -> dict[str, Any]:
+    """评估索引的来源章节、摘要与内容长度，返回质量状态与告警列表。"""
     warnings: list[str] = []
     if not section_ids:
         warnings.append("missing_source_section")
@@ -2032,6 +2168,7 @@ def _bucket_quality(spec: dict[str, Any], section_ids: list[str], content: str) 
 
 
 def _fallback_bucket_specs(sections: list[str], section_nodes: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """在模型与结构分桶都不可用时，用纯文本分节拼出兜底分桶方案。"""
     if section_nodes:
         return _structure_bucket_specs(section_nodes)
     return [
@@ -2050,6 +2187,7 @@ def _fallback_bucket_specs(sections: list[str], section_nodes: list[dict[str, An
 
 
 def _document_card_for_search(row: KnowledgeDocument) -> dict[str, Any]:
+    """从文档记录组装检索用卡片，缺失字段回退到文档自身信息。"""
     metadata = row.metadata_json or {}
     card = metadata.get("document_card") if isinstance(metadata.get("document_card"), dict) else {}
     return {
@@ -2068,6 +2206,7 @@ def _document_card_for_search(row: KnowledgeDocument) -> dict[str, Any]:
 
 
 def _document_card_for_route(row: KnowledgeDocument) -> dict[str, Any]:
+    """组装更精简的文档卡片，截断长文本以适配模型路由的上下文预算。"""
     card = _document_card_for_search(row)
     return {
         "id": card["id"],
@@ -2084,6 +2223,7 @@ def _document_card_for_route(row: KnowledgeDocument) -> dict[str, Any]:
 
 
 def _route_candidates(ranked: list[Any], candidates: list[Any], limit: int) -> list[Any]:
+    """合并排序靠前的命中与原始候选，按 id 去重并截断到条数上限。"""
     selected = list(ranked[:limit])
     selected_ids = {str(getattr(item, "id", "")) for item in selected}
     for item in candidates:
@@ -2097,6 +2237,10 @@ def _route_candidates(ranked: list[Any], candidates: list[Any], limit: int) -> l
 
 
 def _route_labels(value: object, limit: int, char_limit: int) -> list[str]:
+    """把任意标签值规范化为字符串列表，逐项截断到字符上限。
+
+    非列表输入返回空列表；字典项按 path、title、name 等字段取标签，取不到则序列化。
+    """
     if not isinstance(value, list):
         return []
     labels: list[str] = []
@@ -2120,6 +2264,7 @@ def _route_labels(value: object, limit: int, char_limit: int) -> list[str]:
 
 
 def _score_documents(query: str, documents: list[KnowledgeDocument]) -> list[KnowledgeDocument]:
+    """按标题、文件名与文档卡片对文档做词法打分，过滤低分后降序返回。"""
     scored: list[tuple[float, KnowledgeDocument]] = []
     for row in documents:
         card = (row.metadata_json or {}).get("document_card", {})
@@ -2140,6 +2285,10 @@ def _score_buckets(
     buckets: list[KnowledgeBucket],
     query_type: str = "answer",
 ) -> list[KnowledgeBucket]:
+    """按标题、摘要、章节路径与正文给内部索引打分，命中查询类型时加权。
+
+    低于阈值的索引会被过滤，结果按得分降序排列。
+    """
     scored: list[tuple[float, KnowledgeBucket]] = []
     for row in buckets:
         metadata = row.metadata_json or {}
@@ -2165,6 +2314,10 @@ def _rank_chunks(
     selected_buckets: list[KnowledgeBucket],
     expanded_sections: list[dict[str, Any]],
 ) -> list[KnowledgeChunk]:
+    """综合正文相关性与所在章节得分对切片排序，过滤低分项。
+
+    同分时优先排在前面的索引、再按切片序号排序，保证结果稳定。
+    """
     bucket_rank = {bucket.id: index for index, bucket in enumerate(selected_buckets)}
     section_scores = {
         str(item.get("section_id")): _score_weighted_text(
@@ -2200,6 +2353,7 @@ def _select_diverse_chunk_hits(
     selected_buckets: list[KnowledgeBucket],
     max_chunks: int,
 ) -> list[KnowledgeChunk]:
+    """在条数上限内优先覆盖不同索引，再用剩余名额补齐其余高分切片。"""
     if max_chunks <= 0:
         return []
     selected_ids: set[str] = set()
@@ -2228,7 +2382,10 @@ def _expand_related_chunks(
     ranked_hits: list[KnowledgeChunk],
     candidates: list[KnowledgeChunk],
 ) -> list[KnowledgeChunk]:
-    """Return each hit and every chunk from its contiguous source section."""
+    """返回每条命中及其所在连续来源章节的全部切片。
+
+    同一分组只展开一次，重复命中仅补入自身；输出按来源顺序排列，保持相关性优先级。
+    """
     if not ranked_hits:
         return []
     candidates_by_id = {chunk.id: chunk for chunk in candidates}
@@ -2282,6 +2439,7 @@ def _related_chunk_window(
     chunks: list[KnowledgeChunk],
     center_index: int,
 ) -> list[KnowledgeChunk]:
+    """以指定切片为中心向两侧扩展，在条数与字符预算内取连续窗口。"""
     if not chunks:
         return []
     center_index = min(max(center_index, 0), len(chunks) - 1)
@@ -2314,6 +2472,10 @@ def _build_evidence_pack(
     chunks: list[KnowledgeChunk],
     direct_hit_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """把切片整理成证据包条目，标注相关性评分与置信原因。
+
+    低分且既非直接命中、也不属于关联分组的切片会被丢弃。
+    """
     evidence: list[dict[str, Any]] = []
     direct_hit_ids = direct_hit_ids or set()
     for chunk in chunks:
@@ -2354,6 +2516,7 @@ def _expand_sections(
     buckets: list[KnowledgeBucket],
     max_depth: int,
 ) -> list[dict[str, Any]]:
+    """按内部索引的来源章节展开章节，并递归下钻到 max_depth 层子节点。"""
     nodes_by_doc: dict[str, dict[str, dict[str, Any]]] = {}
     for document in documents:
         tree = (document.metadata_json or {}).get("section_tree")
@@ -2381,6 +2544,7 @@ def _collect_section_with_children(
     result: dict[tuple[str, str], dict[str, Any]],
     reason: str,
 ) -> None:
+    """把当前章节写入结果集，并按剩余深度递归收集其子章节。"""
     section_id = str(node.get("section_id") or "")
     if not section_id:
         return
@@ -2402,6 +2566,7 @@ def _collect_section_with_children(
 
 
 def _safe_key(text: str, fallback: str) -> str:
+    """从文本生成稳定的 ASCII 键；无可用英文数字时以哈希值兜底。"""
     ascii_words = re.findall(r"[A-Za-z0-9]+", text)
     if ascii_words:
         key = "_".join(ascii_words).lower()
@@ -2412,6 +2577,10 @@ def _safe_key(text: str, fallback: str) -> str:
 
 
 def _query_terms(query: str) -> list[str]:
+    """把查询拆成检索词并补充中文 n-gram，去掉口语噪声词后去重。
+
+    结果最多返回 96 个词，用于轻量级词法打分。
+    """
     terms: list[str] = []
     for term in re.findall(r"[A-Za-z0-9_.-]{2,}|[\u4e00-\u9fff]{2,}", query or ""):
         normalized = term.lower()
@@ -2438,6 +2607,7 @@ def _query_terms(query: str) -> list[str]:
 
 
 def _score_text(query: str, text: str) -> float:
+    """对多种查询写法分别打分，取最高分并按 0.15 权重叠加其余写法。"""
     variants = _query_variants(query)
     if not variants:
         return 0.0
@@ -2446,6 +2616,7 @@ def _score_text(query: str, text: str) -> float:
 
 
 def _score_single_query(query: str, text: str) -> float:
+    """计算单个查询写法在文本中的命中得分，长词与多次出现权重更高。"""
     haystack = (text or "").lower()
     score = 0.0
     if query and query.lower() in haystack:
@@ -2465,10 +2636,12 @@ def _score_single_query(query: str, text: str) -> float:
 
 
 def _score_weighted_text(query: str, *fields: tuple[str, float]) -> float:
+    """按字段权重累加各字段的查询得分，忽略空字段。"""
     return sum(_score_text(query, text) * weight for text, weight in fields if text)
 
 
 def _query_variants(query: str) -> list[str]:
+    """把查询按行拆成多种写法并去重，忽略空白行。"""
     variants: list[str] = []
     seen: set[str] = set()
     for value in (query or "").splitlines():
@@ -2481,11 +2654,13 @@ def _query_variants(query: str) -> list[str]:
 
 
 def _guess_title(section: str, index: int) -> str:
+    """取分节首个非空行作为标题，缺失时回退为带序号的默认标题。"""
     first_line = next((line.strip("# ").strip() for line in section.splitlines() if line.strip()), "")
     return first_line[:60] if first_line else f"知识主题 {index + 1}"
 
 
 def _optional_str(value: Any) -> str | None:
+    """把任意值规范化为去空白的字符串；空值或空串返回 None。"""
     if value is None:
         return None
     text = str(value).strip()
@@ -2493,4 +2668,5 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _default_knowledge_base_version_id(knowledge_base_id: str) -> str:
+    """按知识库 ID 推导默认版本 ID，与初始化写入的版本命名保持一致。"""
     return f"kbver_{knowledge_base_id}_1_0_0"

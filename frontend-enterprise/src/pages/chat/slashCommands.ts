@@ -13,6 +13,7 @@ export type SlashCommandMessage = {
   requestText: string;
 };
 
+/** 解析斜杠命令输入，返回筛选类型与关键字；输入不符合 `/` 前缀格式时返回 null。 */
 export function slashCommandQuery(input: string): SlashCommandQuery | null {
   const match = PREFIX_PATTERN.exec(input);
   if (!match) return null;
@@ -26,6 +27,12 @@ export function slashCommandQuery(input: string): SlashCommandQuery | null {
   };
 }
 
+/**
+ * 按当前输入筛选可用的斜杠命令候选。
+ *
+ * - 输入无法解析为 `/` 前缀时返回空数组；`limit` 小于 1 时按 1 处理。
+ * - 命中某个 kind 前缀时先按 kind 过滤，再按关键字匹配 kind/target/label/description。
+ */
 export function matchingSlashCommands(
   input: string,
   commands: ChatSlashCommand[],
@@ -43,10 +50,16 @@ export function matchingSlashCommands(
     .slice(0, Math.max(1, limit));
 }
 
+/** 返回填入输入框的斜杠命令文本，末尾保留一个用于接续输入的空格。 */
 export function selectedSlashCommandText(command: ChatSlashCommand): string {
   return `${command.command} `;
 }
 
+/**
+ * 从输入框中剥离已选命令前缀，得到用户实际输入的内容。
+ *
+ * 未选择命令时原样返回；输入不以该前缀开头时也原样返回，避免误截断。
+ */
 export function slashCommandComposerText(
   input: string,
   command: ChatSlashCommand | null,
@@ -56,10 +69,18 @@ export function slashCommandComposerText(
   return input.startsWith(prefix) ? input.slice(prefix.length) : input;
 }
 
+/** 把已选命令前缀与输入框内容拼接为完整输入字符串。 */
 export function slashCommandInput(command: ChatSlashCommand, composerText: string): string {
   return `${selectedSlashCommandText(command)}${composerText}`;
 }
 
+/**
+ * 把形如 `/kind target 需求` 的输入解析为待发送的命令消息。
+ *
+ * - 格式不匹配时返回 null；kind 仅接受 sop/skill/tool（大小写不敏感）。
+ * - 命中已注册命令时复用其标签与描述，否则按输入构造临时命令对象。
+ * - `requestText` 为 target 之后的需求正文（已 trim，可为空串）。
+ */
 export function slashCommandMessage(
   input: string,
   commands: ChatSlashCommand[],
@@ -83,6 +104,12 @@ export function slashCommandMessage(
   return { command, requestText: (match[3] || '').trim() };
 }
 
+/**
+ * 计算命令菜单需要滚动到的位置，使目标选项完整落入可视区。
+ *
+ * - 选项已在可视区内（含 padding 边距）时原样返回当前 scrollTop。
+ * - 越界时向上或向下对齐，并把结果限制为不小于 0。
+ */
 export function slashMenuScrollTop(
   scrollTop: number,
   viewportHeight: number,
@@ -100,6 +127,7 @@ export function slashMenuScrollTop(
   return scrollTop;
 }
 
+/** 返回命令类型的展示文案：sop 显示为 SOP，skill 为“技能”，其余视为工具。 */
 export function slashCommandKindLabel(kind: ChatSlashCommand['kind']): string {
   if (kind === 'sop') return 'SOP';
   if (kind === 'skill') return '技能';

@@ -18,6 +18,7 @@ _WEBP_BYTES = b"RIFF" + b"\x24\x00\x00\x00" + b"WEBP" + b"VP8 " + b"\x00" * 16
 
 
 def _test_engine():
+    """创建内存 SQLite 引擎并建表,让每个用例拥有独立数据库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -28,10 +29,12 @@ def _test_engine():
 
 
 def _make_client(engine):
+    """构建只挂载认证路由的测试客户端,并覆盖数据库依赖。"""
     app = FastAPI()
     app.include_router(auth_api.router)
 
     def override_get_session():
+        """用内存引擎会话替换请求期数据库依赖。"""
         with Session(engine) as session:
             yield session
 
@@ -40,6 +43,7 @@ def _make_client(engine):
 
 
 def _seed_user(engine, *, password: str = "secret") -> User:
+    """写入租户与登录用户,返回已脱离会话的用户对象。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         user = User(
@@ -57,6 +61,7 @@ def _seed_user(engine, *, password: str = "secret") -> User:
 
 
 def _auth(user: User) -> dict[str, str]:
+    """生成该用户的 Bearer 认证头。"""
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
@@ -68,6 +73,7 @@ def _upload(
     content_type: str = "image/png",
     filename: str = "avatar.png",
 ):
+    """以 multipart 形式上传头像文件,返回接口响应。"""
     return client.put(
         "/api/auth/me/avatar",
         files={"file": (filename, data, content_type)},
@@ -76,6 +82,7 @@ def _upload(
 
 
 def test_upload_avatar_and_me_login_carry_avatar_pointer() -> None:
+    """验证上传后 avatar_url 为资源指针,me 与 login 均带出且完整 data_url 只存库。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)
@@ -104,6 +111,7 @@ def test_upload_avatar_and_me_login_carry_avatar_pointer() -> None:
 
 
 def test_get_avatar_returns_image_bytes() -> None:
+    """验证获取头像时原样返回图片字节,并带 image/png 与 no-cache。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)
@@ -117,6 +125,7 @@ def test_get_avatar_returns_image_bytes() -> None:
 
 
 def test_get_avatar_404_without_avatar_and_requires_auth() -> None:
+    """验证无头像时获取接口返回 404,未认证时返回 401。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)
@@ -126,6 +135,7 @@ def test_get_avatar_404_without_avatar_and_requires_auth() -> None:
 
 
 def test_upload_avatar_overwrites_existing() -> None:
+    """验证再次上传会覆盖旧头像:仍只有一行且内容为后传图片。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)
@@ -147,6 +157,7 @@ def test_upload_avatar_overwrites_existing() -> None:
 
 
 def test_upload_accepts_webp_by_magic() -> None:
+    """验证仅凭 RIFF/WEBP 字节头即可识别并接受 WebP 头像。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)
@@ -160,6 +171,7 @@ def test_upload_accepts_webp_by_magic() -> None:
 
 
 def test_delete_avatar_is_idempotent() -> None:
+    """验证删除后头像指针清空、记录删除,且重复删除仍返回 204。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)
@@ -205,6 +217,7 @@ def test_delete_user_cascades_avatar() -> None:
 
 
 def test_upload_rejects_non_image() -> None:
+    """验证非图片文件上传时返回 400。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)
@@ -216,6 +229,7 @@ def test_upload_rejects_non_image() -> None:
 
 
 def test_upload_rejects_oversize() -> None:
+    """验证字节数超过 2MB 的图片上传时返回 413。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)
@@ -247,6 +261,7 @@ def test_upload_rejects_fake_content_type() -> None:
 
 
 def test_me_and_login_without_avatar_return_none() -> None:
+    """验证未设置头像时 me 与 login 返回的 avatar_url 为 null。"""
     engine = _test_engine()
     user = _seed_user(engine)
     client = _make_client(engine)

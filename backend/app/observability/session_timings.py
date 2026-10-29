@@ -9,6 +9,8 @@ from app.db.models import AgentEvent
 
 @dataclass(frozen=True)
 class _ModelSpan:
+    """一次已结束的模型调用跨度，带所属任务帧与重试信息，供耗时归因使用。"""
+
     span_id: str
     operation: str
     model_name: str
@@ -25,11 +27,14 @@ class _ModelSpan:
 
 @dataclass
 class _LineObservation:
+    """某条轨迹日志行被观测到的时间点：运行中事件与终态事件分开记录。"""
+
     running_ms: list[float]
     terminal_ms: list[float]
 
     @property
     def all_ms(self) -> list[float]:
+        """返回运行中与终态时间点的合集，按运行中在前、终态在后拼接。"""
         return [*self.running_ms, *self.terminal_ms]
 
 
@@ -37,7 +42,11 @@ def enrich_turn_traces_with_timings(
     traces: list[dict[str, Any]],
     events: list[AgentEvent],
 ) -> list[dict[str, Any]]:
-    """Attach durable total/model timings to enterprise conversation traces."""
+    """给企业会话轨迹补齐可持久化的总耗时与模型耗时。
+
+    耗时是持久事件的投影而非原始数据，因此每轮先清空旧字段再重算，避免历史缓存里
+    残留 0ms / 0 次调用的占位值；返回值仍是传入的 traces 列表本身。
+    """
     aliases = _turn_aliases(events)
     spans_by_turn = _model_spans_by_turn(events, aliases)
     observations_by_turn = _trace_observations_by_turn(events, aliases)
@@ -146,11 +155,10 @@ def _project_harness_model_calls(
     lines: list[dict[str, Any]],
     spans: list[_ModelSpan],
 ) -> None:
-    """Render every Harness decision call once, under its TaskFrame.
+    """把每次 Harness 决策调用单独渲染到所属 TaskFrame 下。
 
-    New spans carry ``task_frame_id`` and ``iteration`` explicitly.  The
-    positional fallback keeps historical traces useful without pretending that
-    a parent/action window is an individual model call.
+    新跨度自带 task_frame_id 与 iteration；历史事件缺少关联时按先后顺序配对兜底，
+    且不再把父级动作窗口的聚合耗时伪装成单次模型调用。
     """
     harness_spans = [span for span in spans if span.operation == "harness.task_action"]
     if not harness_spans:
@@ -236,6 +244,7 @@ def _project_harness_model_calls(
 
 
 def _harness_action_line_key(line_id: str) -> tuple[str, str] | None:
+    """从 harness_action_* / harness_finish_* 行 id 解析出 (task_frame_id, iteration)。"""
     for prefix in ("harness_action_", "harness_finish_"):
         if not line_id.startswith(prefix):
             continue
@@ -252,6 +261,7 @@ def _harness_model_call_text(
     call_index: int,
     call_count: int,
 ) -> str:
+    """按动作行类型生成单次模型调用的中文标题，同一动作多次调用时标注尝试序号。"""
     action_text = str(action_line.get("text") or "")
     if action_line.get("kind") == "tool" or "能力调用" in action_text:
         decision = "决定调用能力"
@@ -264,6 +274,7 @@ def _harness_model_call_text(
 
 
 def _harness_model_call_detail(span: _ModelSpan) -> str:
+    """拼出模型调用的详情文本，仅在发生重试时标注 JSON 与请求尝试次数。"""
     parts = ["Harness 模型决策"]
     if span.json_max_attempts > 1:
         parts.append(f"JSON 尝试 {span.json_attempt}/{span.json_max_attempts}")
@@ -273,6 +284,7 @@ def _harness_model_call_detail(span: _ModelSpan) -> str:
 
 
 def _turn_aliases(events: list[AgentEvent]) -> dict[str, str]:
+    """建立轮次标识别名表，把 client_turn_id 映射到规范的用户消息 id。"""
     aliases: dict[str, str] = {}
     for event in events:
         payload = event.payload_json or {}
@@ -289,6 +301,7 @@ def _turn_aliases(events: list[AgentEvent]) -> dict[str, str]:
 
 
 def _event_turn_id(event: AgentEvent, aliases: dict[str, str]) -> str:
+    """取出事件所属的轮次 id，并按别名表归一化为规范 id；无法判定时返回空串。"""
     payload = event.payload_json or {}
     raw = str(
         payload.get("user_message_id")
@@ -304,6 +317,10 @@ def _model_spans_by_turn(
     events: list[AgentEvent],
     aliases: dict[str, str],
 ) -> dict[str, list[_ModelSpan]]:
+    """把 llm_call_finished 事件按轮次聚成模型调用跨度，并各自按结束时间排序。
+
+    事件缺少 started_at 时用结束时间减去 duration_ms 反推，duration_ms 也缺失时补 0。
+    """
     spans_by_turn: dict[str, list[_ModelSpan]] = {}
     for event in events:
         if event.event_type != "llm_call_finished":
@@ -344,6 +361,10 @@ def _trace_observations_by_turn(
     events: list[AgentEvent],
     aliases: dict[str, str],
 ) -> dict[str, dict[str, _LineObservation]]:
+    """复用聊天轨迹行格式化器，收集每条可见日志行的运行中与终态时间点。
+
+    时间点全部来自 app.api.chat._event_trace_lines，使耗时归因与用户看到的日志同源。
+    """
     # Keep the timing projection coupled to the same trace-line formatter that
     # produces the visible log. This avoids a second, inevitably drifting list
     # of event-type-to-line-id mappings.
@@ -388,6 +409,11 @@ def _resolve_trace_windows(
     traces: list[dict[str, Any]],
     observations_by_turn: dict[str, dict[str, _LineObservation]],
 ) -> dict[str, dict[str, tuple[float, float]]]:
+    """为每条轨迹日志行推断起止时间窗口。
+
+    有运行中事件时取最早的时间点作为起点，否则回退到前一条观测时间或轨迹开始时间；
+    终点同理取最晚终态事件，缺失时回退到下一条观测或轨迹完成时间，缺失端点的行直接跳过。
+    """
     windows_by_turn: dict[str, dict[str, tuple[float, float]]] = {}
     for trace in traces:
         turn_id = str(trace.get("turn_id") or "").strip()
@@ -439,6 +465,7 @@ def _previous_observation_ms(
     *,
     before_ms: float,
 ) -> float | None:
+    """向前找最近一个不晚于 before_ms 的观测时间点，找不到返回 None。"""
     for candidate in reversed(observations[:index]):
         if not candidate or not candidate.all_ms:
             continue
@@ -454,6 +481,7 @@ def _next_observation_ms(
     *,
     after_ms: float,
 ) -> float | None:
+    """向后找最近一个不早于 after_ms 的观测时间点，找不到返回 None。"""
     for candidate in observations[index + 1 :]:
         if not candidate or not candidate.all_ms:
             continue
@@ -469,6 +497,11 @@ def _extend_action_windows_with_model_decisions(
     spans_by_turn: dict[str, list[_ModelSpan]],
     windows_by_turn: dict[str, dict[str, tuple[float, float]]],
 ) -> None:
+    """用 harness.task_action 跨度把动作行的窗口向前扩展到模型决策开始处。
+
+    每个跨度只与一个动作事件配对；harness_finish_* 行表示终态收尾，直接以决策开始
+    时间作为起点，避免把整轮思考时长算进完成动作。
+    """
     actions_by_turn: dict[str, list[tuple[float, str]]] = {}
     for event in events:
         if event.event_type != "harness_action_created":
@@ -510,6 +543,10 @@ def _extend_router_windows_with_planner(
     windows_by_turn: dict[str, dict[str, tuple[float, float]]],
     observations_by_turn: dict[str, dict[str, _LineObservation]],
 ) -> None:
+    """把 decision_router 行窗口向前扩展到 turn_planner.plan / router.scene 跨度。
+
+    仅把规划器耗时计入决策行，不改变已推断出的结束时间；同轮无规划跨度则保持原窗口。
+    """
     for turn_id, windows in windows_by_turn.items():
         current = windows.get("decision_router")
         if not current:
@@ -532,6 +569,7 @@ def _extend_router_windows_with_planner(
 
 
 def _trace_line_id(event: AgentEvent) -> str:
+    """按事件类型反推它对应哪条轨迹行 id；无法对应时返回空串。"""
     payload = event.payload_json or {}
     event_type = event.event_type
     frame_id = str(payload.get("task_frame_id") or event.id).strip()
@@ -570,6 +608,10 @@ def _model_duration_in_window(
     started_ms: float,
     finished_ms: float,
 ) -> float | None:
+    """统计窗口内的模型耗时：先裁剪并合并相交的跨度区间再求和，避免重叠区间重复计时。
+
+    没有任何跨度与窗口相交时返回 None，让调用方区分“0ms”与“无模型调用”。
+    """
     intervals = sorted(
         (
             max(started_ms, span.started_ms),
@@ -597,6 +639,7 @@ def _model_names_in_window(
     started_ms: float,
     finished_ms: float,
 ) -> list[str]:
+    """列出窗口内出现过的模型名，去重并保持首次出现顺序。"""
     names: list[str] = []
     for span in spans:
         if span.finished_ms < started_ms or span.started_ms > finished_ms:
@@ -607,6 +650,7 @@ def _model_names_in_window(
 
 
 def _event_ms(event: AgentEvent) -> float:
+    """把事件的 created_at 转成毫秒时间戳；naive 时间按 UTC 解释。"""
     value = event.created_at
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
@@ -614,6 +658,7 @@ def _event_ms(event: AgentEvent) -> float:
 
 
 def _iso_ms(value: object) -> float | None:
+    """解析 ISO 8601 时间为毫秒时间戳；空值或格式非法时返回 None。"""
     text = str(value or "").strip()
     if not text:
         return None
@@ -627,6 +672,7 @@ def _iso_ms(value: object) -> float | None:
 
 
 def _float_ms(value: object) -> float:
+    """把输入转成非负毫秒浮点数；无法转换或为负时返回 0.0。"""
     try:
         return max(0.0, float(value or 0))
     except (TypeError, ValueError):
@@ -634,6 +680,7 @@ def _float_ms(value: object) -> float:
 
 
 def _positive_int(value: object, *, default: int) -> int:
+    """把输入转成至少为 1 的整数；无法转换时返回 default。"""
     try:
         return max(1, int(value or default))
     except (TypeError, ValueError):

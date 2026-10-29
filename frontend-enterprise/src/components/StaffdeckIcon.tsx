@@ -106,6 +106,7 @@ const iconPaths: Record<StaffdeckIconName, string[]> = {
   warning: ['M12 4 21 20H3L12 4Z', 'M12 9v5', 'M12 17h.1'],
 };
 
+/** 通用线性图标组件：按 `name` 从内置路径表取图，默认 18px 且对辅助技术隐藏。 */
 export default function StaffdeckIcon({ name, className = '', size = 18, style }: StaffdeckIconProps) {
   return (
     <svg

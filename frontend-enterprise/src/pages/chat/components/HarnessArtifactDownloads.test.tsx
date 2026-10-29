@@ -49,6 +49,7 @@ afterEach(() => {
 });
 
 describe('Harness artifact downloads', () => {
+  /** 验证通过带鉴权的 blob 接口下载，并按作用域拼接 URL 编码后的标识参数。 */
   it('downloads through the authenticated blob API with scoped identifiers', async () => {
     const user = userEvent.setup();
     mocks.blob.mockResolvedValue(new Blob(['artifact']));
@@ -78,6 +79,7 @@ describe('Harness artifact downloads', () => {
     );
   });
 
+  /** 验证会话未持久化时下载按钮禁用，且不会发起请求。 */
   it('keeps the action disabled without a persisted session', () => {
     render(
       <HarnessArtifactDownloads
@@ -95,6 +97,7 @@ describe('Harness artifact downloads', () => {
     expect(mocks.blob).not.toHaveBeenCalled();
   });
 
+  /** 验证生成的图片产物通过鉴权接口加载，并渲染图片预览。 */
   it('loads generated image artifacts through the authenticated API and renders a preview', async () => {
     const imageArtifact: HarnessWorkspaceArtifact = {
       ...artifact,
@@ -124,6 +127,7 @@ describe('Harness artifact downloads', () => {
     expect(screen.getByRole('button', { name: '下载图片 趋势图.png' })).toBeTruthy();
   });
 
+  /** 验证下载失败时提示错误，且不创建对象 URL。 */
   it('reports a failed download without creating an object URL', async () => {
     const user = userEvent.setup();
     mocks.blob.mockRejectedValue(new Error('Artifact not found'));

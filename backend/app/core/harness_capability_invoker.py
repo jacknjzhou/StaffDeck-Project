@@ -78,7 +78,11 @@ _SANDBOX_JSON_FILE_KIND = "sandbox_json_file"
 
 
 class HarnessCapabilityInvoker:
-    """Executes only capabilities frozen into one TaskFrame manifest."""
+    """只执行已冻结进当前 TaskFrame manifest 的能力，并留下可审计的调用记录。
+
+    invoke 是唯一入口：先校验取消状态与激活状态，再按能力类型分派到内部能力、
+    文件工具、通用技能、知识检索或外部 Tool，并把结果状态持久化供重放判定。
+    """
 
     def __init__(
         self,
@@ -99,6 +103,11 @@ class HarnessCapabilityInvoker:
         trace_sink: Callable[[str, dict[str, Any]], None] | None = None,
         step_deadline_monotonic: float | None = None,
     ) -> None:
+        """绑定会话、TaskFrame 与 manifest，并初始化工作区、文件工具与沙箱策略。
+
+        同时从 UIConfig 读取沙箱开关与网络白名单，并把 manifest 中可用的能力记为
+        初始激活集合；显式传入 None 表示兼容受信任的直接调用方。
+        """
         self.db = db
         self.tenant_id = tenant_id
         self.session = session
@@ -166,6 +175,12 @@ class HarnessCapabilityInvoker:
         )
 
     def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """执行一次能力调用：校验授权与激活状态，按类型分派并持久化结果。
+
+        - 未冻结、未激活或已撤权时直接返回 *_NOT_AVAILABLE 类失败，不产生副作用。
+        - 有幂等语义的写操作先按 logical_action_key 查重，命中则重放或阻断。
+        - 结果状态分 completed / failed / outcome_unknown，结果未知时不自动重试。
+        """
         self._raise_if_cancelled()
         if callable(self.ensure_execution_lease):
             self.ensure_execution_lease()
@@ -283,7 +298,11 @@ class HarnessCapabilityInvoker:
         return result
 
     def discover_artifacts(self) -> list[dict[str, Any]]:
-        """Publish every user-facing file changed during this AgentLoop run."""
+        """发布本轮 AgentLoop 期间新增或修改的用户可见文件。
+
+        读取失败时返回空列表而不抛错；每个条目补齐沙箱路径、显示名与 MIME 类型，
+        并标记来源为 harness.workspace_discovery。
+        """
 
         try:
             discovered = publish_changed_harness_artifacts(
@@ -319,6 +338,11 @@ class HarnessCapabilityInvoker:
         descriptor: CapabilityDescriptor,
         arguments: dict[str, Any],
     ) -> str | None:
+        """计算有幂等语义的写操作的稳定指纹；无副作用或未开启重放时返回 None。
+
+        仅 lark_cli 内部能力与配置了重放策略的外部 Tool 参与，指纹由租户、
+        TaskFrame、步骤、工具标识与规范化后的参数摘要共同哈希得到。
+        """
         if descriptor.kind == "internal" and descriptor.name == "lark_cli":
             from app.lark_cli.policy import logical_write_signature
 
@@ -373,6 +397,11 @@ class HarnessCapabilityInvoker:
         self,
         logical_action_key: str,
     ) -> dict[str, Any] | None:
+        """按 logical_action_key 查历史调用：成功记录直接重放，其余一律阻断。
+
+        只有已完成且成功的结果可复用；存在未完成记录时返回
+        TOOL_CALL_OUTCOME_UNKNOWN，避免重复提交同一副作用。
+        """
         prior = self.db.exec(
             select(HarnessInvocationRecord).where(
                 HarnessInvocationRecord.logical_action_key
@@ -395,6 +424,7 @@ class HarnessCapabilityInvoker:
         )
 
     def _raise_if_cancelled(self) -> None:
+        """在关键调用点主动检查取消信号，已取消则抛出 HarnessExecutionCancelled。"""
         if callable(self.is_cancelled) and self.is_cancelled():
             raise HarnessExecutionCancelled(
                 "Harness execution was cancelled before a capability call."
@@ -404,6 +434,10 @@ class HarnessCapabilityInvoker:
         self,
         frozen: CapabilityDescriptor,
     ) -> CapabilityDescriptor | None:
+        """重建当前授权清单，返回与冻结描述符同名同类同 ID 的条目；撤权则返回 None。
+
+        重建过程抛出 CapabilityAuthorizationError 时同样视为已撤权。
+        """
         try:
             current = CapabilityManifestBuilder(self.db).build(
                 self.tenant_id,
@@ -432,6 +466,11 @@ class HarnessCapabilityInvoker:
         *,
         call_id: str,
     ) -> dict[str, Any]:
+        """执行 file 类能力，并把执行器的返回统一包装成能力结果结构。
+
+        exec_command 与 run_skill_script 以超时或非零退出码视为失败；
+        publish_artifact 额外产出 artifacts 条目，写类工具则提示需显式发布。
+        """
         result = self._file_executor.execute(
             self._file_context,
             HarnessToolCall(
@@ -515,6 +554,10 @@ class HarnessCapabilityInvoker:
         name: str,
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
+        """按名称分派内置能力：能力检索/描述、任务状态、交付物读取与 lark_cli。
+
+        未知名称返回 UNSUPPORTED_INTERNAL_CAPABILITY，不做兜底执行。
+        """
         if name == "capability_search":
             return self._search_capabilities(arguments)
         if name == "capability_describe":
@@ -544,6 +587,10 @@ class HarnessCapabilityInvoker:
         )
 
     def _external_task_status(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """查询当前用户某个外部业务任务的状态，仅读取、不重新提交。
+
+        只允许访问同租户且属于当前会话用户的任务；task_id 允许带 # 前缀。
+        """
         task_id = str(arguments.get("task_id") or "").strip().lstrip("#")
         if not task_id:
             return _failure("INVALID_ARGUMENTS", "task_id 不能为空。")
@@ -571,6 +618,10 @@ class HarnessCapabilityInvoker:
         }
 
     def _list_published_deliverables(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """列出当前会话此前发布过的交付物，支持关键字过滤与条数上限。
+
+        结果排除当前 TaskFrame，避免模型把自己本轮尚未发布的内容当成历史交付物。
+        """
         raw_limit = arguments.get("limit", MAX_PUBLISHED_DELIVERABLES)
         if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
             return _failure("INVALID_ARGUMENTS", "limit 必须是整数。")
@@ -595,6 +646,11 @@ class HarnessCapabilityInvoker:
         }
 
     def _read_published_deliverable(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """读取历史交付物，读取前校验 sha256 与大小，防止读到发布后被改动的内容。
+
+        复用 read_file 的分页与限额语义，只是换了目标工作区；交付物缺失、被篡改
+        或路径不安全时返回对应失败码，不向模型暴露宿主机路径。
+        """
         task_frame_id = str(arguments.get("task_frame_id") or "").strip()
         path = str(arguments.get("path") or "").strip()
         if not task_frame_id or not path:
@@ -690,6 +746,11 @@ class HarnessCapabilityInvoker:
         return {"success": True, "data": data}
 
     def _search_capabilities(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """在冻结清单内检索能力，只返回目录摘要，不激活也不下发完整 schema。
+
+        kinds 仅接受 general_skill/tool/knowledge/file，limit 会裁剪到
+        [1, CAPABILITY_SEARCH_MAX_RESULTS]；命中项需再经 capability_describe 激活。
+        """
         query = str(arguments.get("query") or "").strip()
         if not query:
             return _failure("INVALID_ARGUMENTS", "capability_search query 不能为空。")
@@ -742,6 +803,11 @@ class HarnessCapabilityInvoker:
         return {"success": True, "data": payload}
 
     def _describe_capabilities(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """按名称或 ID 描述并激活 1 到 8 个能力，返回其完整模型侧 schema。
+
+        不存在的引用进 not_found，已撤权的进 revoked；至少激活一个才算成功，
+        激活结果只对本次 AgentLoop 生效。
+        """
         raw_refs = arguments.get("capabilities")
         if not isinstance(raw_refs, list) or not raw_refs or len(raw_refs) > 8:
             return _failure(
@@ -803,6 +869,11 @@ class HarnessCapabilityInvoker:
         metadata: dict[str, Any],
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
+        """加载通用技能包说明到当前隔离 transcript，并返回包内文件清单。
+
+        加载前校验发布状态与内容摘要，摘要变化返回 CAPABILITY_SNAPSHOT_CHANGED；
+        旧版 execute 调用安全降级为 read，技能本身不启动独立的 runner。
+        """
         skill = self.db.get(GeneralSkill, capability_id)
         if (
             skill is None
@@ -858,6 +929,11 @@ class HarnessCapabilityInvoker:
         *,
         skill_slug: str,
     ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        """把技能声明的产物路径解析为 artifacts 条目，最多处理 20 条。
+
+        路径为空、越界或不可读时记入 warnings 并发送 rejected trace，
+        不影响主调用返回；成功条目补齐摘要、大小与 MIME 类型。
+        """
         artifacts: list[dict[str, Any]] = []
         warnings: list[dict[str, str]] = []
         for item in declared[:20]:
@@ -928,6 +1004,10 @@ class HarnessCapabilityInvoker:
         metadata: dict[str, Any],
         query: str,
     ) -> dict[str, Any]:
+        """把技能包物化到工作区，返回入口文件、全部文件路径与内容预览。
+
+        entrypoint_path 优先取实际写出的文件路径，缺失时回退为拼接路径。
+        """
         package = package_from_row(skill)
         package_root, file_paths = _materialize_general_skill_package(
             self.workspace_root,
@@ -970,6 +1050,7 @@ class HarnessCapabilityInvoker:
         event_type: str,
         payload: dict[str, Any],
     ) -> None:
+        """向注入的 trace_sink 透传一个事件；未配置 sink 时静默跳过。"""
         if callable(self.trace_sink):
             self.trace_sink(event_type, payload)
 
@@ -980,6 +1061,11 @@ class HarnessCapabilityInvoker:
         *,
         call_id: str,
     ) -> dict[str, Any]:
+        """在授权知识库内检索并返回分片，超大结果转存为沙箱 JSON 引用。
+
+        请求的知识库与授权集合取交集，交集为空返回 KNOWLEDGE_NOT_AVAILABLE；
+        检索按冻结时的版本 ID 锁定版本，避免会话中途知识库内容漂移。
+        """
         query = str(arguments.get("query") or "").strip()
         if not query:
             return _failure("INVALID_ARGUMENTS", "知识检索 query 不能为空。")
@@ -1040,6 +1126,11 @@ class HarnessCapabilityInvoker:
         *,
         call_id: str,
     ) -> dict[str, Any]:
+        """执行外部 Tool：校验可用性与配置摘要，展开结果引用后交给 ToolExecutor。
+
+        MCP Apps 载荷移出模型可见结果，改以 harness_mcp_app_view trace 下发给前端；
+        A2A 附件物化进工作区后并入 artifacts，超大 JSON 同样转存为引用。
+        """
         source_tool_name = str(
             metadata.get("source_tool_name") or name
         ).strip()
@@ -1116,6 +1207,11 @@ class HarnessCapabilityInvoker:
         *,
         call_id: str,
     ) -> list[dict[str, Any]]:
+        """把 A2A 响应里 base64 编码的附件写入工作区，并就地改写为路径引用。
+
+        目录按 call_id 隔离，重名文件自动追加序号；结构不合法或 base64 解码
+        失败的附件直接跳过，不中断整次调用。
+        """
         data = payload.get("data")
         if not isinstance(data, dict) or not isinstance(data.get("artifacts"), list):
             return []
@@ -1178,7 +1274,11 @@ class HarnessCapabilityInvoker:
         *,
         call_id: str,
     ) -> dict[str, Any]:
-        """Keep large knowledge/tool JSON out of the isolated model transcript."""
+        """把超过内联上限的 JSON 结果写入沙箱，模型只看到引用；写入失败即报错。
+
+        阈值由 _INLINE_JSON_TOOL_RESULT_MAX_CHARS 决定，引用含沙箱路径、大小与
+        sha256，供后续工具参数经 _resolve_json_tool_result_references 还原。
+        """
 
         data = payload.get("data")
         if not isinstance(data, (dict, list)):
@@ -1244,6 +1344,10 @@ class HarnessCapabilityInvoker:
         schema: dict[str, Any] | None = None,
         depth: int = 0,
     ) -> Any:
+        """递归展开工具参数中的 JSON 结果引用，并按 schema 决定还原成对象还是字符串。
+
+        嵌套超过 32 层抛 INVALID_TOOL_RESULT_REFERENCE；非引用值原样返回。
+        """
         if depth > 32:
             raise HarnessExecutionError(
                 "INVALID_TOOL_RESULT_REFERENCE",
@@ -1290,6 +1394,11 @@ class HarnessCapabilityInvoker:
         }
 
     def _read_json_tool_result_reference(self, reference: dict[str, Any]) -> Any:
+        """读取 _persist_large_json_result 生成的引用文件并解析为 JSON。
+
+        只接受 /workspace 下 .harness/tool-results 单层目录的 .json；大小超限、
+        摘要不匹配或编码非法时抛 HarnessExecutionError。
+        """
         sandbox_path = str(reference.get("sandbox_path") or "").strip()
         prefix = f"{SANDBOX_WORKSPACE}/"
         if not sandbox_path.startswith(prefix):
@@ -1348,6 +1457,7 @@ class HarnessCapabilityInvoker:
             ) from exc
 
     def _remaining_step_seconds(self) -> float | None:
+        """返回距步骤截止的剩余秒数，最少 0.1 秒；未设置截止时间时返回 None。"""
         if self.step_deadline_monotonic is None:
             return None
         return max(self.step_deadline_monotonic - time.monotonic(), 0.1)
@@ -1356,6 +1466,7 @@ class HarnessCapabilityInvoker:
 def _workspace_root(
     tenant_id: str, session_id: str, task_frame_id: str, *, db: Session | None = None
 ) -> Path:
+    """解析某个 TaskFrame 的隔离工作区根目录，透传可选的 db 会话以复用连接。"""
     return harness_task_workspace_path(
         tenant_id=tenant_id,
         session_id=session_id,
@@ -1368,6 +1479,10 @@ def _intersect_knowledge_metadata(
     frozen: dict[str, Any],
     current: dict[str, Any],
 ) -> dict[str, Any]:
+    """把冻结的知识库元数据与当前授权取交集，同时过滤版本映射。
+
+    返回新的 metadata 副本，保证已撤权的知识库和缺失版本不会进入检索请求。
+    """
     current_ids = {
         str(item)
         for item in current.get("allowed_knowledge_base_ids") or []
@@ -1397,6 +1512,10 @@ def _intersect_knowledge_metadata(
 
 
 def _failure(code: str, message: str, **details: Any) -> dict[str, Any]:
+    """构造统一失败结果：success=False 加 error(code/message/retryable)。
+
+    额外关键字参数会合并进 error，用于携带 details、cause 等诊断字段。
+    """
     error = {
         "code": code,
         "message": message,
@@ -1415,6 +1534,7 @@ def _safe_artifact_label(
     fallback: str,
     max_length: int,
 ) -> str:
+    """生成展示用标签：剔除控制字符并截断；清理后为空则退回 fallback。"""
     cleaned = "".join(
         character
         for character in str(value or fallback).strip()
@@ -1428,6 +1548,10 @@ def _skill_package_preview(
     *,
     max_chars: int = 12_000,
 ) -> dict[str, Any]:
+    """生成技能包预览：按文件顺序消耗字符预算，逐文件标记内容是否被截断。
+
+    总预算受 max_chars 限制，顶层的 truncated 表示仍有文件或内容未返回。
+    """
     package = package_from_row(skill)
     remaining = max_chars
     files: list[dict[str, Any]] = []
@@ -1462,7 +1586,11 @@ def _materialize_general_skill_package(
     workspace_root: Path,
     package: Any,
 ) -> tuple[str, list[str]]:
-    """Write an immutable GeneralSkill snapshot into the current TaskFrame workspace."""
+    """把不可变的 GeneralSkill 快照写入当前 TaskFrame 工作区。
+
+    目录名由 slug 与摘要前 12 位组成，重复加载复用同一目录；路径逃逸或目标
+    不是安全目录时抛 INVALID_SKILL_PACKAGE，返回相对根目录与文件路径列表。
+    """
 
     safe_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(package.slug or "skill")).strip(
         ".-"
@@ -1507,6 +1635,7 @@ def _materialize_general_skill_package(
 
 
 def _safe_general_skill_file_path(path: str) -> str:
+    """规范化技能包内的相对路径，拒绝绝对路径、盘符、.. 与 NUL 字符。"""
     normalized = path.replace("\\", "/").strip()
     parts = [part for part in normalized.split("/") if part not in {"", "."}]
     if (
@@ -1525,6 +1654,7 @@ def _safe_general_skill_file_path(path: str) -> str:
 
 
 def _failure_was_not_sent(result: dict[str, Any]) -> bool:
+    """判断失败是否确定发生在副作用之前，从而可释放幂等认领供稍后重试。"""
     error = result.get("error")
     code = str(error.get("code") or "") if isinstance(error, dict) else ""
     return code in {
@@ -1542,6 +1672,7 @@ def _failure_was_not_sent(result: dict[str, Any]) -> bool:
 
 
 def _replayed_result(invocation: HarnessInvocationRecord) -> dict[str, Any]:
+    """用历史成功响应重建重放结果，并在 data 中标明重放来源调用 ID。"""
     result = dict(invocation.response_cache_json or {})
     data = result.get("data")
     replay_metadata = {
@@ -1560,6 +1691,7 @@ def _replayed_result(invocation: HarnessInvocationRecord) -> dict[str, Any]:
 
 
 def _request_digest(name: str, arguments: dict[str, Any]) -> str:
+    """计算请求摘要，键排序并保证 ASCII 稳定，用于审计与查重比对。"""
     canonical = json.dumps(
         {"name": name, "arguments": arguments},
         ensure_ascii=True,
@@ -1571,6 +1703,7 @@ def _request_digest(name: str, arguments: dict[str, Any]) -> str:
 
 
 def _audit_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """脱敏写入审计记录的入参：敏感键整体替换，列表交给 flag 级脱敏处理。"""
     audited: dict[str, Any] = {}
     for key, value in arguments.items():
         lowered = str(key).lower()
@@ -1600,6 +1733,7 @@ def _redact_secret_flag_values(items: list[Any]) -> list[Any]:
 
 
 def _audit_result(result: dict[str, Any]) -> dict[str, Any]:
+    """裁剪结果用于审计：大文本字段替换为占位符，引用只保留非正文键。"""
     audited = dict(result)
     data = audited.get("data")
     if isinstance(data, dict):
@@ -1626,6 +1760,7 @@ def _audit_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sandbox_path(relative_path: str) -> str:
+    """把工作区相对路径转成 /workspace 沙箱路径；已是沙箱路径则原样返回。"""
     normalized = str(relative_path or "").strip().replace("\\", "/")
     if normalized == SANDBOX_WORKSPACE or normalized.startswith(
         f"{SANDBOX_WORKSPACE}/"
@@ -1637,6 +1772,7 @@ def _sandbox_path(relative_path: str) -> str:
 
 
 def _safe_artifact_name(value: str) -> str:
+    """把任意名字压成安全的单层文件名，仅保留字母数字与 -_.，并截断到 180 字符。"""
     cleaned = "".join(
         character if character.isalnum() or character in {"-", "_", "."} else "-"
         for character in Path(str(value or "artifact").replace("\\", "/")).name
@@ -1645,6 +1781,7 @@ def _safe_artifact_name(value: str) -> str:
 
 
 def _model_visible_file_result(value: Any, *, key: str = "") -> Any:
+    """递归把结果中的路径字段改写为沙箱路径，避免模型看到宿主机绝对路径。"""
     path_keys = {"path", "source_path", "destination_path", "cwd"}
     if isinstance(value, dict):
         return {
@@ -1659,6 +1796,7 @@ def _model_visible_file_result(value: Any, *, key: str = "") -> Any:
 
 
 def _is_user_facing_workspace_file(path: str) -> bool:
+    """判断文件是否应展示给用户，排除附件、技能、缓存与临时产物目录。"""
     parts = Path(path).parts
     if not parts:
         return False

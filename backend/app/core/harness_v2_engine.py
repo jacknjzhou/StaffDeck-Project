@@ -81,11 +81,10 @@ def _turn_skill_projection(
     *,
     interaction_mode: str,
 ) -> tuple[list[Skill], list[Skill]]:
-    """Project executable and routable SOPs for every supported turn mode.
+    """为当前交互模式投影出可执行 SOP 与可路由 SOP 两份列表。
 
-    Team TL conversations already own a dedicated session, so hiding the
-    leader's SOPs here would only disable valid work; it is not required for
-    state isolation.
+    团队 TL 会话已独占一个 ChatSession，隐藏 leader 的 SOP 只会禁掉合法工作，
+    对状态隔离并无必要。
     """
 
     _ = interaction_mode
@@ -96,7 +95,7 @@ def _turn_skill_projection(
 def _turn_planner_message(
     request: ChatTurnRequest,
 ) -> str:
-    """Keep server-only execution context out of Planner task requirements."""
+    """只把用户消息交给 Planner，避免服务端执行上下文混入任务需求。"""
 
     return request.message
 
@@ -106,7 +105,11 @@ def _apply_forced_sop_snapshot(
     forced_sop_id: str | None,
     snapshot: dict[str, Any] | None,
 ) -> list[Skill]:
-    """Replace one currently accessible SOP with its immutable scheduled snapshot."""
+    """用定时任务保存的不可变快照替换当前可访问的指定 SOP。
+
+    快照与指定 SOP 不一致或内容非法时抛 SlashCommandError；SOP 已不可见时原样返回
+    列表，让后续解析照常报能力不可用，历史快照不得复活已解绑的 SOP。
+    """
 
     target = str(forced_sop_id or "").strip()
     if not target or not snapshot:
@@ -154,7 +157,10 @@ def _apply_forced_sop_snapshot(
 
 
 def _turn_slash_selection(request: ChatTurnRequest) -> SlashCommandSelection | None:
-    """Resolve user slash commands and server-pinned scheduled SOPs uniformly."""
+    """统一解析用户斜杠指令与服务端固定的定时 SOP 选择。
+
+    两者同时出现、或定时任务文本里夹带斜杠指令时抛 SlashCommandError。
+    """
 
     selection = parse_slash_command(request.message)
     forced_sop_id = str(request.forced_sop_id or "").strip()
@@ -179,9 +185,10 @@ def _turn_slash_selection(request: ChatTurnRequest) -> SlashCommandSelection | N
 
 
 class HarnessV2Engine:
-    """Outer planner + durable TaskFrame scheduler + isolated Harness runs."""
+    """外层 Planner + 持久化 TaskFrame 调度器 + 隔离的 Harness 执行。"""
 
     def __init__(self, owner: Any) -> None:
+        """保存所属会话运行时，并初始化 Planner、编译器与各持久化存储。"""
         self.owner = owner
         self.db = owner.db
         self.events = owner.events
@@ -206,6 +213,12 @@ class HarnessV2Engine:
         self._session_lock_id: str | None = None
 
     def run(self, request: ChatTurnRequest) -> ChatTurnResponse:
+        """执行一轮 Harness 对话：规划、落盘 TaskFrame、逐帧执行并合成回复。
+
+        先用 client_turn_id 做幂等认领，命中重放直接返回上次结果；随后完成斜杠指令
+        解析、能力投影、规划落盘、帧执行与引用/产物归并，最后写回用户可见回复。
+        会话租约丢失抛 HarnessExecutionFenced，用户取消抛 HarnessExecutionCancelled。
+        """
         session_request = _with_recoverable_first_session(request)
         if session_request.session_id:
             self._session_lock_id = session_request.session_id
@@ -770,6 +783,7 @@ class HarnessV2Engine:
         return response
 
     def close(self) -> None:
+        """释放本轮会话租约并归还进程内会话锁，由 turn 收尾路径调用。"""
         session_id = str(self._session_lock_id or "")
         try:
             self.session_leases.release(self.session_lease)
@@ -783,9 +797,11 @@ class HarnessV2Engine:
         self,
         request: ChatTurnRequest,
     ) -> ChatSession:
+        """取出或创建本轮的 ChatSession，具体创建逻辑委托给所属运行时。"""
         return get_or_create_harness_session(self.owner, request)
 
     def _renew_session_lease(self) -> None:
+        """续期会话租约与 turn 记录并提交，避免长回合被判定为租约过期。"""
         self.session_leases.renew(self.session_lease)
         self.turn_store.renew(self.turn_record)
         self.db.commit()
@@ -794,6 +810,10 @@ class HarnessV2Engine:
         self,
         row: HarnessTaskFrameRecord,
     ) -> None:
+        """续期会话、turn 与正在执行的 TaskFrame 三类租约。
+
+        缺少帧租约信息，或续期时发现租约丢失/被抢占，则抛 HarnessExecutionFenced。
+        """
         lease_owner = str(self.active_frame_lease_owner or "")
         attempt_no = self.active_frame_attempt_no
         if not lease_owner or attempt_no is None:
@@ -824,6 +844,12 @@ class HarnessV2Engine:
         prior_frame_results: list[dict[str, Any]],
         max_actions: int,
     ) -> tuple[TaskExecutionResult, StepAgentResult]:
+        """在独立 Harness run 内推进单个 TaskFrame，直到步骤终态或动作预算耗尽。
+
+        SOP 帧一轮可跨多个节点：每步重新编译需求、续租、写 trace 并保存 AgentLoop
+        检查点；若下一步失败但已有提交过的节点结果，则降级为 action_budget 并把帧
+        重新排队。返回合并后的执行结果与最后一步的 StepAgentResult。
+        """
         self.store.mark_running(row)
         agent_loop = self.store.ensure_agent_loop(row)
         loop_checkpoint = dict(agent_loop.checkpoint_json or {})
@@ -954,6 +980,10 @@ class HarnessV2Engine:
             self.db.commit()
 
             def trace(event_type: str, payload: dict[str, Any]) -> None:
+                """记录带 TaskFrame/run 上下文的执行事件并立即提交。
+
+                立即提交是为了让流式中继实时暴露正在运行的 TaskFrame。
+                """
                 self.events.record(
                     request.tenant_id,
                     session.id,
@@ -1245,7 +1275,7 @@ class HarnessV2Engine:
         return combined, last_step_result
 
     def mark_cancelled(self) -> None:
-        """Close the durable attempt after cooperative stream cancellation."""
+        """收尾被用户取消的执行：回滚未提交改动并终结 run、TaskFrame 与 turn。"""
 
         self.db.rollback()
         source_turn_id = str(self.current_source_turn_id or "").strip()
@@ -1301,7 +1331,10 @@ class HarnessV2Engine:
         self.active_frame_attempt_no = None
 
     def mark_interrupted(self, code: str, message: str) -> None:
-        """Fail the attempt and requeue its frame after an unexpected crash."""
+        """异常崩溃后把本轮 run 标记失败，并将对应 TaskFrame 重新排队。
+
+        仅在仍持有帧租约时收尾运行中的记录，避免覆盖已被其他进程接管的状态。
+        """
 
         self.db.rollback()
         source_turn_id = str(self.current_source_turn_id or "").strip()
@@ -1379,6 +1412,7 @@ class HarnessV2Engine:
         request: ChatTurnRequest,
         session: ChatSession,
     ) -> bool:
+        """按用户消息 id 与 client_turn_id 两种身份判断本轮是否已被取消。"""
         user_message_id = str(self.user_message_id or "").strip()
         client_turn_id = str(request.client_turn_id or "").strip()
         return bool(
@@ -1404,6 +1438,7 @@ class HarnessV2Engine:
         request: ChatTurnRequest,
         session: ChatSession,
     ) -> None:
+        """本轮已被取消时抛 HarnessExecutionCancelled，供执行循环的检查点调用。"""
         if self._is_cancelled(request, session):
             raise HarnessExecutionCancelled(
                 "Harness execution was cancelled by the user."
@@ -1415,6 +1450,10 @@ class HarnessV2Engine:
         row: HarnessTaskFrameRecord,
         skills: list[Skill],
     ) -> Skill | None:
+        """激活 SOP 帧对应的技能并恢复其步骤与会话槽位。
+
+        非 SOP 帧、或技能已下线/解绑时返回 None，由调用方按 SOP 不可用处理。
+        """
         if row.kind != "sop":
             return None
         active_skill = next(
@@ -1481,6 +1520,11 @@ class HarnessV2Engine:
         records: list[HarnessTaskFrameRecord],
         pre_turn_state: dict[str, Any],
     ) -> None:
+        """一轮执行结束后，把会话投影回用户应看到的活跃任务帧。
+
+        优先级为 handoff 帧、等待用户回答的 conversation 帧、本轮 SOP 候选帧；已无
+        候选时按 pre_turn_state 还原会话的技能状态。
+        """
         if session.status == "handoff":
             handoff_row = next(
                 (row for row in records if row.status == "handoff"),
@@ -1593,6 +1637,7 @@ class HarnessV2Engine:
 
 
 def _step_result(result: TaskExecutionResult) -> StepAgentResult:
+    """把 TaskExecutionResult 的状态映射为对外的 StepAgentResult 动作与回复。"""
     action = {
         "completed": "advance",
         "awaiting_user": "ask_user",
@@ -1614,7 +1659,7 @@ def _step_result(result: TaskExecutionResult) -> StepAgentResult:
 
 
 def _is_recoverable_action_protocol_failure(result: TaskExecutionResult) -> bool:
-    """Keep a SOP AgentLoop resumable when only the model action envelope is invalid."""
+    """判断失败是否只源于模型动作协议非法，此时 SOP AgentLoop 仍可恢复。"""
 
     error = result.error if isinstance(result.error, dict) else {}
     return result.status == "failed" and str(error.get("code") or "") == (
@@ -1626,14 +1671,11 @@ def _defer_failed_step_after_completed_checkpoint(
     result: TaskExecutionResult,
     completed_results: list[TaskExecutionResult],
 ) -> TaskExecutionResult:
-    """Keep a committed SOP result when immediate continuation fails.
+    """已提交节点结果后，把后续步骤的失败降级为可继续的排队状态。
 
-    SOP TaskFrames may advance through several nodes in one request.  Once a
-    node has completed, its transition and slots are already durable.  A model
-    or protocol failure while starting the following node must therefore not
-    erase a user-visible result from the completed node.  Represent the
-    unfinished continuation as ``action_budget`` so the frame remains queued
-    and resumable at the already-persisted next step.
+    SOP TaskFrame 可能一次请求推进多个节点，节点完成即已落盘转场与槽位；此时
+    启动下一节点的模型或协议失败不能抹掉用户已看到的结果。因此改写为
+    action_budget，让帧留在已持久化的下一步并保持可恢复。
     """
 
     if result.status != "failed":
@@ -1676,6 +1718,7 @@ def _enforce_required_slots(
     requirement: Any,
     session: ChatSession,
 ) -> TaskExecutionResult:
+    """完成态结果若缺必填槽位，则改为等待用户补充并清空下一步。"""
     if result.status != "completed" or not requirement.required_slots:
         return result
     merged = {
@@ -1697,7 +1740,11 @@ def _enforce_required_slots(
 
 
 def _external_task_for_result(db, frame, result):
-    """Use this result's receipt, not an older completed task in the same SOP frame."""
+    """取出与该结果对应的外部任务回执。
+
+    优先按 structured_result 里的 task_id 精确匹配，避免误用同一 SOP 帧中更早
+    完成的外部任务。
+    """
     data = result.structured_result if isinstance(result.structured_result, dict) else {}
     task_id = str(data.get("task_id") or "").strip()
     query = select(ExternalBusinessTask).where(
@@ -1714,6 +1761,11 @@ def _combine_results(
     task_frame_id: str,
     results: list[TaskExecutionResult],
 ) -> TaskExecutionResult:
+    """把一个 TaskFrame 内多步结果合并为一条对用户可见的执行结果。
+
+    回复只取最后一步非空的 finish 文本，槽位、引用、证据、产物与动作数累加；
+    没有任何结果时返回 EMPTY_TASK_RESULT 失败结果。
+    """
     if not results:
         return TaskExecutionResult(
             task_frame_id=task_frame_id,
@@ -1779,12 +1831,10 @@ def _combine_results(
 
 
 def _single_task_reply(results: list[TaskExecutionResult]) -> str | None:
-    """Use a lone TaskFrame's terminal reply without another model pass.
+    """单帧且回复完整时直接复用其终稿，省去一次模型合成。
 
-    ``finish`` already asks the Harness model for the user-facing reply.  A
-    response synthesis pass is only useful when several TaskFrames must be
-    reconciled.  Empty replies still fall back to ``ResponseGenerator`` so
-    malformed or legacy execution results keep the existing recovery path.
+    finish 已产出面向用户的回复，多帧并存时才需要合成；回复为空或疑似不完整
+    的 JSON 投影时返回 None，回落到 ResponseGenerator。
     """
 
     if len(results) != 1:
@@ -1797,7 +1847,7 @@ def _single_task_reply(results: list[TaskExecutionResult]) -> str | None:
 
 
 def _structured_reply_requires_synthesis(reply: str, structured_result: Any) -> bool:
-    """Reject an obviously partial JSON projection when complete data is available."""
+    """回复是明显不完整的 JSON 投影时要求走合成，而非直接透出给用户。"""
 
     if structured_result is None or not reply:
         return False
@@ -1820,6 +1870,7 @@ def _response_task_payload(
     skill: Skill | None,
     step_result: StepAgentResult,
 ) -> dict[str, object]:
+    """组装供回复生成器使用的单帧任务负载，含技能内容、槽位与能力结果。"""
     projected_step_result = step_result.model_dump(mode="json")
     projected_step_result["reply"] = result.reply_fragment
     projected_step_result["knowledge_results"] = list(result.evidence_results)
@@ -1897,6 +1948,7 @@ def _inject_handoff_context(
 def _globalize_citations(
     results: list[TaskExecutionResult],
 ) -> list[dict[str, Any]]:
+    """把各帧引用合并为全局编号，最多保留 8 条并回写各帧的引用标签。"""
     citations: list[dict[str, Any]] = []
     labels_by_identity: dict[str, str] = {}
     for result in results:
@@ -1918,6 +1970,7 @@ def _globalize_citations(
 
 
 def _citation_identity(citation: dict[str, Any]) -> str:
+    """生成引用的去重标识：优先 concept_id/chunk_id，否则拼接来源字段。"""
     for field in ("concept_id", "chunk_id"):
         value = str(citation.get(field) or "").strip()
         if value:
@@ -1933,6 +1986,7 @@ def _citation_identity(citation: dict[str, Any]) -> str:
 def _aggregate_artifacts(
     results: list[TaskExecutionResult],
 ) -> list[dict[str, Any]]:
+    """跨帧汇总产物，按类型/帧/路径去重，最多返回 20 条。"""
     artifacts: list[dict[str, Any]] = []
     seen: set[str] = set()
     for result in results:
@@ -1954,6 +2008,7 @@ def _merge_discovered_artifacts(
     result: TaskExecutionResult,
     discovered: list[dict[str, Any]],
 ) -> None:
+    """把调用方新发现的产物并入结果，按路径去重且总量不超过 20 条。"""
     known_paths = {
         str(item.get("path") or "")
         for item in result.artifacts
@@ -1973,6 +2028,7 @@ def _append_session_handoff_artifact(
     result: TaskExecutionResult,
     session: ChatSession,
 ) -> None:
+    """会话已进入人工接管时，给执行结果补一条 human_handoff 产物。"""
     awaiting = (
         session.awaiting_input_json
         if isinstance(session.awaiting_input_json, dict)
@@ -1992,7 +2048,10 @@ def _append_session_handoff_artifact(
 def _with_recoverable_first_session(
     request: ChatTurnRequest,
 ) -> ChatTurnRequest:
-    """Derive a stable first-turn session when the caller supplied a turn id."""
+    """首轮未带 session_id 时，由租户、用户与 client_turn_id 派生稳定的会话 id。
+
+    同一 client_turn_id 重试会命中同一会话，避免并发创建重复的首轮会话。
+    """
 
     if request.session_id or not str(request.client_turn_id or "").strip():
         return request
@@ -2013,7 +2072,11 @@ def get_or_create_harness_session(
     owner: Any,
     request: ChatTurnRequest,
 ) -> ChatSession:
-    """Create or recover one Harness session, including concurrent PK races."""
+    """创建或恢复单个 Harness 会话，并处理并发主键冲突。
+
+    两个 worker 抢建同一确定性首轮会话时，落败方复用胜者已提交的行；随后校验
+    租户、用户与 agent 归属，不匹配则抛 HarnessExecutionFenced。
+    """
 
     db = owner.db
     try:
@@ -2055,6 +2118,7 @@ def get_or_create_harness_session(
 
 
 def _session_state(session: ChatSession) -> dict[str, Any]:
+    """快照会话的技能、步骤、槽位与总结字段，供本轮结束后比对和还原。"""
     return {
         "active_skill_id": session.active_skill_id,
         "active_step_id": session.active_step_id,
@@ -2069,6 +2133,7 @@ def _session_state(session: ChatSession) -> dict[str, Any]:
 def _restore_session_state(
     session: ChatSession, state: dict[str, Any]
 ) -> None:
+    """用 _session_state 的快照覆盖写回会话字段，深拷贝以避免共享引用。"""
     session.active_skill_id = state.get("active_skill_id")
     session.active_step_id = state.get("active_step_id")
     session.slots_json = deepcopy(state.get("slots_json") or {})
@@ -2079,6 +2144,7 @@ def _restore_session_state(
 
 
 def _prior_result(result: TaskExecutionResult) -> dict[str, Any]:
+    """裁剪前一帧的执行结果，仅保留下游编译任务需求所需的摘要字段。"""
     return {
         "task_frame_id": result.task_frame_id,
         "status": result.status,
@@ -2091,6 +2157,7 @@ def _prior_result(result: TaskExecutionResult) -> dict[str, Any]:
 
 
 def _source_user_message(db: Any, row: HarnessTaskFrameRecord) -> str:
+    """读取触发该 TaskFrame 的用户消息原文；消息缺失或非用户角色时返回空串。"""
     message = db.get(Message, row.source_turn_id)
     if message is None or message.role != "user":
         return ""
@@ -2101,7 +2168,7 @@ def _sibling_task_intents(
     db: Any,
     row: HarnessTaskFrameRecord,
 ) -> list[str]:
-    """Return work from the same user turn that belongs to another TaskFrame."""
+    """返回同一轮用户消息中属于其他 TaskFrame 的任务意图，用于声明任务边界。"""
 
     siblings = db.exec(
         select(HarnessTaskFrameRecord).where(
@@ -2118,6 +2185,7 @@ def _sibling_task_intents(
 
 
 def _skill_step_timeout_seconds(skill: Skill | None) -> int | None:
+    """读取 SOP 配置的单步超时秒数；缺失或非法返回 None，有效值截断到 1-3600。"""
     if skill is None or not isinstance(skill.content_json, dict):
         return None
     raw = skill.content_json.get("step_timeout_seconds")
@@ -2133,6 +2201,10 @@ def _skill_step_timeout_seconds(skill: Skill | None) -> int | None:
 def _dependency_order(
     records: list[HarnessTaskFrameRecord],
 ) -> list[HarnessTaskFrameRecord]:
+    """按 depends_on_json 对帧列表做拓扑排序。
+
+    依赖不在本批次内的帧视为已满足；出现循环依赖时按原顺序追加剩余帧，避免死循环。
+    """
     by_id = {row.task_id: row for row in records}
     remaining = list(records)
     ordered: list[HarnessTaskFrameRecord] = []

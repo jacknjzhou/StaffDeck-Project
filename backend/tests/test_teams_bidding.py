@@ -79,6 +79,7 @@ def _seed_pool_team(db: Session, *, config: dict | None = None) -> Team:
 def _make_pool_task(
     db: Session, team: Team, *, title: str = "调研竞品定价", description: str | None = "输出调研报告"
 ) -> TeamTask:
+    """创建一条待认领的团队任务，默认标题用于触发调研类标签匹配。"""
     task = TeamTask(
         team_id=team.id,
         tenant_id=team.tenant_id,
@@ -95,6 +96,7 @@ def _make_pool_task(
 
 
 def _run_wake(db: Session, wake_id: str) -> TeamWakeEvent:
+    """领取并执行指定唤醒事件，返回执行后的最新记录。"""
     assert wakeup.claim_wake_event(db, wake_id) is True
     event = db.get(TeamWakeEvent, wake_id)
     wakeup.execute_wake_event(db, event)
@@ -102,6 +104,7 @@ def _run_wake(db: Session, wake_id: str) -> TeamWakeEvent:
 
 
 def _pending_wakes(db: Session, trigger_type: str) -> list[TeamWakeEvent]:
+    """按目标代理排序返回指定触发器下仍处于 pending 的唤醒事件。"""
     rows = db.exec(
         select(TeamWakeEvent).where(
             TeamWakeEvent.trigger_type == trigger_type, TeamWakeEvent.status == "pending"
@@ -111,6 +114,7 @@ def _pending_wakes(db: Session, trigger_type: str) -> list[TeamWakeEvent]:
 
 
 def _events(db: Session, task_id: str, event_type: str) -> list[TeamTaskEvent]:
+    """查询指定任务下某类事件记录，供审计断言使用。"""
     return list(
         db.exec(
             select(TeamTaskEvent).where(
@@ -121,16 +125,19 @@ def _events(db: Session, task_id: str, event_type: str) -> list[TeamTaskEvent]:
 
 
 def _bids(db: Session, task_id: str) -> list[TeamTaskBid]:
+    """查询指定任务的全部竞标记录，供轮次与分数断言使用。"""
     return list(
         db.exec(select(TeamTaskBid).where(TeamTaskBid.task_id == task_id)).all()
     )
 
 
 def _bid_reply(plan: str) -> str:
+    """构造带 bid JSON 代码块的竞标陈述回复，用于模拟候选模型输出。"""
     return f'竞标陈述\n```json\n{{"bid": {{"plan": "{plan}", "confidence": "high"}}}}\n```'
 
 
 def _award_reply(winner: str) -> str:
+    """构造带 bid_award JSON 代码块的裁决回复，含候选评分与评语。"""
     return (
         "```json\n"
         f'{{"bid_award": {{"winner_agent_id": "{winner}", '
@@ -141,6 +148,7 @@ def _award_reply(winner: str) -> str:
 
 
 def _score_reply(*agent_scores: tuple[str, float]) -> str:
+    """按 (agent_id, 分数) 构造带 bid_scores JSON 代码块的打分回复。"""
     inner = ", ".join(
         f'"{agent_id}": {{"score": {score}, "rationale": "打分理由"}}'
         for agent_id, score in agent_scores
@@ -152,6 +160,7 @@ def _score_reply(*agent_scores: tuple[str, float]) -> str:
 
 
 def test_parse_bid_block_and_fallback() -> None:
+    """验证可从 JSON 代码块解析竞标陈述，缺代码块或 plan 为空时返回 None。"""
     reply = '说明\n```json\n{"bid": {"plan": "先调研再写", "estimated_cost": "2h"}}\n```'
     assert parse_bid(reply) == {"plan": "先调研再写", "estimated_cost": "2h"}
     assert parse_bid("没有代码块") is None
@@ -159,6 +168,7 @@ def test_parse_bid_block_and_fallback() -> None:
 
 
 def test_parse_bid_award_requires_candidate_winner() -> None:
+    """验证裁决解析要求 winner 属于候选集，非候选或缺失代码块时返回 None。"""
     candidates = {"agent_a", "agent_b"}
     reply = _award_reply("agent_a")
     award = parse_bid_award(reply, candidates)
@@ -172,6 +182,7 @@ def test_parse_bid_award_requires_candidate_winner() -> None:
 
 
 def test_parse_bid_scores() -> None:
+    """验证打分解析会过滤非候选、截断越界分数到 0-10，无效输入返回 None。"""
     candidates = {"agent_a", "agent_b"}
     scores = parse_bid_scores(_score_reply(("agent_a", 9.0), ("agent_b", 8.0)), candidates)
     assert scores == {
@@ -191,6 +202,7 @@ def test_parse_bid_scores() -> None:
 
 
 def _scored_bid(agent_id: str, round_: int, score: float | None) -> TeamTaskBid:
+    """构造指定轮次与分数的竞标记录，供血条计算测试使用。"""
     return TeamTaskBid(
         task_id="task_1",
         team_id="team_1",
@@ -204,6 +216,7 @@ def _scored_bid(agent_id: str, round_: int, score: float | None) -> TeamTaskBid:
 
 
 def test_candidate_hp_calculation() -> None:
+    """验证血条按每轮失分累计扣减、未打分不计且下限为 0。"""
     bids = [
         _scored_bid("agent_a", 1, 10.0),  # 满分不扣
         _scored_bid("agent_b", 1, 8.0),  # 扣 6
@@ -225,6 +238,7 @@ def test_candidate_hp_calculation() -> None:
 
 
 def test_select_candidates_tag_ranking_excludes_tl_and_caps3() -> None:
+    """验证候选按标签匹配度排序、排除 TL 且最多只取 3 人。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         task = _make_pool_task(db, team)  # 标题:调研竞品定价
@@ -235,6 +249,7 @@ def test_select_candidates_tag_ranking_excludes_tl_and_caps3() -> None:
 
 
 def test_select_candidates_zero_match_fallback() -> None:
+    """验证全员零匹配时回退为除 TL 外的成员，仍封顶 3 人。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         task = _make_pool_task(db, team, title="完全无关的xyz任务", description=None)
@@ -243,6 +258,7 @@ def test_select_candidates_zero_match_fallback() -> None:
 
 
 def test_start_bidding_without_candidates_escalates() -> None:
+    """验证无候选时开始竞标会升级任务、写入原因且不入队唤醒。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_tl", tenant_id="tenant_demo", name="TL"))
@@ -265,6 +281,7 @@ def test_start_bidding_without_candidates_escalates() -> None:
 
 
 def test_start_bidding_enqueues_round1_wakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证开始竞标会记录候选并为首轮陈述分别入队唤醒。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         task = _make_pool_task(db, team, title="调研")  # 候选: agent_a, agent_b
@@ -313,6 +330,7 @@ def test_bidding_full_flow_three_rounds_hp(monkeypatch: pytest.MonkeyPatch) -> N
         replies = {"agent_a": _bid_reply("甲的方案"), "agent_b": "乙的纯文本方案(无代码块)"}
 
         def fake_turn(*args, **kw):
+            """模拟各角色轮次：记录收到的消息，TL 按内容打分或裁决，候选返回陈述。"""
             agent_id = kw["agent"].id
             messages[agent_id].append(kw["message"])
             if agent_id == "agent_tl":
@@ -437,6 +455,7 @@ def test_bidding_elimination_skips_to_award(monkeypatch: pytest.MonkeyPatch) -> 
         _stub_start_wakeup(monkeypatch)
 
         def fake_turn(*args, **kw):
+            """模拟 TL 给出 10/0 分打分并最终裁决甲，候选正常提交方案。"""
             agent_id = kw["agent"].id
             if agent_id == "agent_tl":
                 if "bid_scores" in kw["message"]:
@@ -489,6 +508,7 @@ def test_bid_score_fallback_five_points(monkeypatch: pytest.MonkeyPatch) -> None
         monkeypatch.setattr(wakeup, "collect_turn_reply_fragments", lambda *a, **kw: [])
 
         def fake_turn(*args, **kw):
+            """模拟 TL 首轮与纠错轮都给出无法解析的回复，候选正常提交方案。"""
             if kw["agent"].id == "agent_tl":
                 return "我打不了分"  # 首轮与纠错轮都无打分块
             return _bid_reply(f"{kw['agent'].id}的方案")
@@ -529,6 +549,7 @@ def test_bidding_config_one_statement_then_award(monkeypatch: pytest.MonkeyPatch
 
 
 def test_bidding_skips_rebuttal_when_config_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证反驳轮数配置为 0 时跳过反驳，陈述完成后直接进入裁决。"""
     with _test_session() as db:
         team = _seed_pool_team(db, config={"bid_rebuttal_rounds": 0})
         task = _make_pool_task(db, team, title="调研")
@@ -542,12 +563,14 @@ def test_bidding_skips_rebuttal_when_config_disabled(monkeypatch: pytest.MonkeyP
 def test_bidding_partial_failure_advances_with_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证部分候选失败时任务不升级，凭有效陈述继续推进到裁决。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         task = _make_pool_task(db, team, title="调研")
         started = _stub_start_wakeup(monkeypatch)
 
         def fake_turn(*args, **kw):
+            """模拟 agent_a 调用失败、agent_b 正常提交方案的模型回复。"""
             if kw["agent"].id == "agent_a":
                 raise RuntimeError("LLM 不可用")
             return _bid_reply("乙的方案")
@@ -576,12 +599,14 @@ def test_bidding_partial_failure_advances_with_material(
 
 
 def test_bidding_no_valid_statements_escalates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证所有候选陈述均失败时以“无人应标”原因升级任务。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         task = _make_pool_task(db, team, title="调研")
         _stub_start_wakeup(monkeypatch)
 
         def boom(*args, **kw):
+            """模拟 LLM 调用始终失败，让所有候选陈述都拿不到有效回复。"""
             raise RuntimeError("LLM 不可用")
 
         monkeypatch.setattr(wakeup, "run_agent_turn", boom)
@@ -600,6 +625,7 @@ def test_bidding_no_valid_statements_escalates(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_bid_judge_parses_award_from_fragment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证裁决块只存在于回复片段、最终回复被改写时仍能解析中标者并派发。"""
     with _test_session() as db:
         team = _seed_pool_team(db, config={"bid_rebuttal_rounds": 0})
         task = _make_pool_task(db, team, title="调研")
@@ -619,6 +645,7 @@ def test_bid_judge_parses_award_from_fragment(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_bid_judge_repair_retry_then_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证裁决解析失败会触发纠错重试，重试成功即按新 winner 派发。"""
     with _test_session() as db:
         team = _seed_pool_team(db, config={"bid_rebuttal_rounds": 0})
         task = _make_pool_task(db, team, title="调研")
@@ -638,6 +665,7 @@ def test_bid_judge_repair_retry_then_success(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_bid_judge_invalid_winner_escalates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证纠错后 winner 仍非候选时任务升级且不派发执行人。"""
     with _test_session() as db:
         team = _seed_pool_team(db, config={"bid_rebuttal_rounds": 0})
         task = _make_pool_task(db, team, title="调研")
@@ -663,6 +691,7 @@ def test_bid_judge_invalid_winner_escalates(monkeypatch: pytest.MonkeyPatch) -> 
 def test_award_override_during_bidding_and_late_wakes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证竞标中人工改判会立即派发，并跳过迟到的竞标与裁决唤醒。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         task = _make_pool_task(db, team, title="调研")
@@ -708,6 +737,7 @@ def test_award_override_during_bidding_and_late_wakes(
 
 
 def test_award_override_pending_task_and_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 pending 任务可被改判，并拒绝非成员、越权与执行中任务的改判。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         started = _stub_start_wakeup(monkeypatch)
@@ -771,6 +801,7 @@ def test_award_override_pending_task_and_guards(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_create_task_endpoint_assign_and_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证人建任务指定执行人时直接派发、省略执行人时投池竞标，并校验权限与参数。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         started = _stub_start_wakeup(monkeypatch)
@@ -833,6 +864,7 @@ def test_create_task_endpoint_assign_and_pool(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_list_tasks_filter_bidding() -> None:
+    """验证任务列表可按 bidding 状态过滤，且列表视图不返回竞标明细。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         task = _make_pool_task(db, team)

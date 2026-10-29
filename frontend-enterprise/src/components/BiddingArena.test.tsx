@@ -7,6 +7,7 @@ import type { TeamTaskBidRead } from '@/types';
 
 import BiddingArena, { computeBidHp } from './BiddingArena';
 
+/** 构造一条竞价记录，并按需覆盖默认字段。 */
 function makeBid(overrides: Partial<TeamTaskBidRead>): TeamTaskBidRead {
   return {
     id: 'bid-1',
@@ -25,7 +26,9 @@ function makeBid(overrides: Partial<TeamTaskBidRead>): TeamTaskBidRead {
 
 afterEach(cleanup);
 
+/** 验证竞价战力的扣减与下限规则。 */
 describe('computeBidHp', () => {
+  /** 验证初始战力 100，每轮按 (10 - 得分) * 3 扣减。 */
   it('starts at 100 and deducts (10 - score) * 3 per scored round', () => {
     const bids = [
       makeBid({ id: 'bid-1', round: 1, score: 8 }),
@@ -34,18 +37,22 @@ describe('computeBidHp', () => {
     expect(computeBidHp(bids)).toBe(100 - 6 - 15);
   });
 
+  /** 验证战力最低不会低于 0。 */
   it('floors HP at 0', () => {
     const bids = [1, 2, 3, 4].map((round) => makeBid({ id: `bid-${round}`, round, score: 0 }));
     expect(computeBidHp(bids)).toBe(0);
   });
 
+  /** 验证没有得分的历史竞价保持满战力。 */
   it('keeps full HP for legacy bids without scores', () => {
     expect(computeBidHp([makeBid({})])).toBe(100);
     expect(computeBidHp([])).toBe(100);
   });
 });
 
+/** 验证竞价竞技场的界面渲染结果。 */
 describe('BiddingArena', () => {
+  /** 验证胜者皇冠、战力条宽度与淘汰状态均正确渲染。 */
   it('renders the winner crown, HP bar width and elimination state', () => {
     const bids = [
       makeBid({ id: 'bid-1', agent_id: 'agent-1', agent_name: '小艾', round: 1, score: 9 }),

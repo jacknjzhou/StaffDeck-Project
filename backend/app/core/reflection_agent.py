@@ -25,6 +25,8 @@ PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "reflection_pro
 
 
 class ReflectionDecision(BaseModel):
+    """反思判定结果：是否放行、是否需要重试，以及重试的目标技能/步骤/工具。"""
+
     action: str = "pass"
     needs_retry: bool = False
     reason: str | None = None
@@ -34,6 +36,8 @@ class ReflectionDecision(BaseModel):
 
 
 class ReflectionAgent:
+    """在关键步骤后审查执行结果，判断是放行、重试还是改走其它技能或工具。"""
+
     def review(
         self,
         message: str,
@@ -48,6 +52,12 @@ class ReflectionAgent:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> ReflectionDecision:
+        """审查本轮路由决策、步骤结果与工具结果，产出是否需要重试的判定。
+
+        先用 action_needs_reflection 过滤掉无需反思的常规推进；需要反思时组装
+        当前步骤、槽位、工具结果等上下文调用 LLM，并校验返回的 JSON 结构。
+        任何非 LLMError 的异常都包装成 LLMError 抛出，避免上层收到半成品判定。
+        """
         if not action_needs_reflection(router_decision, step_result, tool_result):
             return ReflectionDecision()
 
@@ -93,6 +103,11 @@ def action_needs_reflection(
     step_result: StepAgentResult,
     tool_result: ToolResult | None,
 ) -> bool:
+    """判断本轮是否值得触发反思：外部动作、知识查询、转人工或整体完成才需要。
+
+    clarify/answer_only 场景只有存在工具调用或工具结果时才反思；若步骤已确定
+    下一节点，则属于技能图的正常推进，仅当步骤整体结束时才反思。
+    """
     if router_decision.decision in {"clarify", "answer_only"}:
         return bool(tool_result or step_result.tool_call or step_result.knowledge_query)
     if (
@@ -111,12 +126,18 @@ def action_needs_reflection(
 
 
 def tool_result_needs_reflection(tool_result: ToolResult | None) -> bool:
+    """判断工具结果是否需要反思：只有失败结果需要，成功或没有结果都不需要。"""
     if tool_result is None:
         return False
     return not tool_result.success
 
 
 def _data_indicates_unexpected_result(value: object) -> bool:
+    """判断工具返回的数据是否暗示结果异常，供重试判定使用。
+
+    空值、空列表、found/success 为 False、带 miss_reason 或 error 类字段，
+    以及 results/items/data 为空数组时都算异常；其余情况一律视为正常。
+    """
     if value is None:
         return True
     if isinstance(value, list):

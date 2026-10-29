@@ -25,17 +25,11 @@ def append_events(
     principal: PublicPrincipal = Depends(require_scopes("sessions:write")),
     db: Session = Depends(get_session),
 ) -> ExternalEventsBatchResult:
-    """Append events replayed from a conversation executed on the client.
+    """追加客户端回放的事件到既有会话，逐事件去重后写入消息表。
 
-    There is no matching "create external session" endpoint on purpose:
-    `POST /agents/{agent_id}/sessions` already takes `external_session_id` and is
-    idempotent on it. A second create path would give one rule two
-    implementations, and the day they diverge a conversation lands in two rows
-    with its messages split between them.
-
-    Idempotency is per event, because a retry resends the whole batch: a
-    batch-level key would reject the retry as soon as one event was already
-    stored, dropping every new event travelling with it.
+    刻意不提供创建外部会话的接口：``POST /agents/{agent_id}/sessions`` 已接受
+    ``external_session_id`` 且对其幂等，再加一条创建路径会让同一规则有两份实现。
+    幂等粒度是单个事件而非整批，否则重投时随批的新事件会被一起丢弃。
     """
     ensure_public_agent(db, principal, agent_id)
 
@@ -74,6 +68,7 @@ def append_events(
 
 
 def _stored_event_ids(db: Session, principal: PublicPrincipal, session_id: str) -> set[str]:
+    """汇总该会话已落库的事件 id，用于整批重投时的逐事件去重。"""
     rows = db.exec(
         select(Message).where(
             Message.tenant_id == principal.tenant_id,
@@ -88,6 +83,11 @@ def _stored_event_ids(db: Session, principal: PublicPrincipal, session_id: str) 
 
 
 def _to_message(tenant_id: str, session_id: str, event) -> Message:
+    """把回放事件映射成 Message 行，并把事件 id 写入 metadata。
+
+    message 事件保留原 role 与内容；tool_call 事件落成 ``tool`` 行，
+    usage 事件落成无正文的 ``system`` 行，均可被既有会话记录查询到。
+    """
     metadata: dict = {EVENT_KEY: event.event_id}
     if event.type == "message":
         role = event.role

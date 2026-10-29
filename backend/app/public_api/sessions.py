@@ -16,6 +16,7 @@ router = APIRouter(prefix="/agents/{agent_id}/sessions", tags=["sessions"])
 
 
 def _session_payload(row: ChatSession, binding: ExternalSessionBinding | None = None) -> dict:
+    """把会话行与可选的外部会话绑定序列化成公开 API 响应体，时间戳统一带 Z 后缀。"""
     return {
         "id": row.id,
         "agent_id": row.agent_id,
@@ -35,6 +36,7 @@ def _session_payload(row: ChatSession, binding: ExternalSessionBinding | None = 
 
 
 def ensure_public_agent(db: Session, principal: PublicPrincipal, agent_id: str) -> None:
+    """确认员工存在、属于本租户且未归档；不可见一律按 404 AGENT_NOT_FOUND 处理。"""
     enforce_agent_access(principal, agent_id)
     row = db.get(AgentProfile, agent_id)
     if row and row.tenant_id == principal.tenant_id and row.status != "archived":
@@ -48,6 +50,11 @@ def owned_public_session(
     agent_id: str,
     session_id: str,
 ) -> tuple[ChatSession, ExternalSessionBinding | None]:
+    """取主体名下的会话：校验员工访问权与租户/员工/用户归属，再按凭据查外部会话绑定。
+
+    归属不满足统一抛 404 SESSION_NOT_FOUND，避免泄露他人会话是否存在；
+    无 credential_id（用户 token 调用）时不返回外部绑定。
+    """
     ensure_public_agent(db, principal, agent_id)
     row = db.get(ChatSession, session_id)
     if (
@@ -75,6 +82,11 @@ def create_public_session_row(
     agent_id: str,
     body: PublicSessionCreate,
 ) -> tuple[ChatSession, ExternalSessionBinding | None]:
+    """创建 channel 为 public_api 的会话，并按需写入 external_session_id 幂等绑定。
+
+    同一凭据下该 external_session_id 已绑定同员工时直接复用原会话，绑定到其他员工抛
+    409 EXTERNAL_SESSION_CONFLICT；主体没有 credential_id 时抛 403 API_KEY_REQUIRED。
+    """
     ensure_public_agent(db, principal, agent_id)
     if not principal.credential_id:
         raise PublicAPIError(403, "API_KEY_REQUIRED", "Public sessions require an API key.")
@@ -135,6 +147,7 @@ def create_session(
     principal: PublicPrincipal = Depends(require_scopes("sessions:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """POST 创建会话：命中 Idempotency-Key 时回放旧响应，否则建行、回 ETag 并登记响应。"""
     replay = replay_idempotent_response(db, principal, request, body.model_dump(mode="json"))
     if replay:
         response.status_code = replay[0]
@@ -161,6 +174,10 @@ def list_sessions(
     principal: PublicPrincipal = Depends(require_scopes("sessions:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """列出当前主体在该员工下的 public_api 会话，按更新时间倒序，limit 收敛到 1-100。
+
+    同一凭据的外部会话绑定会一并回填；next_cursor 恒为 None（暂不支持分页游标）。
+    """
     ensure_public_agent(db, principal, agent_id)
     rows = db.exec(
         select(ChatSession)
@@ -194,6 +211,7 @@ def get_session(
     principal: PublicPrincipal = Depends(require_scopes("sessions:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """读取单个会话详情并回写 ETag，供后续 PATCH 用 If-Match 做乐观锁。"""
     row, binding = owned_public_session(db, principal, agent_id, session_id)
     payload = _session_payload(row, binding)
     response.headers["ETag"] = etag_for(payload)
@@ -210,6 +228,11 @@ def update_session(
     principal: PublicPrincipal = Depends(require_scopes("sessions:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """PATCH 更新会话标题、状态与绑定元数据：必须带 If-Match 且与当前 ETag 一致。
+
+    缺 If-Match 抛 428 IF_MATCH_REQUIRED，ETag 不匹配抛 412 ETAG_MISMATCH；
+    只改请求体里显式给出的字段，成功后返回新响应体与新 ETag。
+    """
     row, binding = owned_public_session(db, principal, agent_id, session_id)
     current = _session_payload(row, binding)
     if not if_match:

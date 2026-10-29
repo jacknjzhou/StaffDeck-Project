@@ -11,18 +11,20 @@ HarnessWorkspaceSnapshot = dict[str, tuple[int, int, int, int]]
 
 
 class HarnessArtifactAccessError(RuntimeError):
-    """Raised when a workspace artifact cannot be opened without escaping its root."""
+    """工作区产物无法在不逃逸根目录的前提下安全打开时抛出。"""
 
 
 class OpenedHarnessArtifact:
-    """A regular workspace file held by descriptor for race-safe streaming."""
+    """持有文件描述符的常规工作区文件,用于规避路径竞态的安全流式读取。"""
 
     def __init__(self, descriptor: int, *, filename: str, size: int) -> None:
+        """接管已打开的描述符,并记录展示用文件名与字节大小。"""
         self._descriptor: int | None = descriptor
         self.filename = filename
         self.size = size
 
     def sha256(self) -> str:
+        """计算整份文件的 SHA-256;读完回溯到起始位置,可重复调用。"""
         descriptor = self._require_descriptor()
         digest = hashlib.sha256()
         os.lseek(descriptor, 0, os.SEEK_SET)
@@ -37,6 +39,7 @@ class OpenedHarnessArtifact:
         return digest.hexdigest()
 
     def iter_bytes(self, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+        """按块流式产出文件内容,迭代结束或异常时自动关闭描述符。"""
         descriptor = self._require_descriptor()
         try:
             while True:
@@ -48,18 +51,23 @@ class OpenedHarnessArtifact:
             self.close()
 
     def close(self) -> None:
+        """关闭描述符;重复调用安全,关闭后不再允许读取。"""
         descriptor, self._descriptor = self._descriptor, None
         if descriptor is not None:
             os.close(descriptor)
 
     def _require_descriptor(self) -> int:
+        """取当前描述符,已关闭时抛 HarnessArtifactAccessError。"""
         if self._descriptor is None:
             raise HarnessArtifactAccessError("Harness artifact is already closed.")
         return self._descriptor
 
 
 def normalize_harness_artifact_path(raw_path: str) -> str:
-    """Return a canonical relative artifact path or fail closed."""
+    """把外部路径归一化为工作区内的相对 POSIX 路径,不合法即拒绝。
+
+    拒绝空路径、NUL 字节、盘符或绝对路径、含 ".." 的越级路径以及 .harness-trash。
+    """
 
     if not isinstance(raw_path, str) or not raw_path.strip():
         raise HarnessArtifactAccessError("Artifact path cannot be empty.")
@@ -96,11 +104,10 @@ def open_harness_artifact(
     workspace_root: Path,
     raw_path: str,
 ) -> OpenedHarnessArtifact:
-    """Open one regular file beneath ``workspace_root`` without following symlinks.
+    """在 workspace_root 下打开常规文件,逐级 O_NOFOLLOW 打开以拒绝符号链接。
 
-    Every directory from the filesystem root through the requested file is opened
-    relative to its parent descriptor with ``O_NOFOLLOW``. The returned descriptor
-    remains bound to the verified file even if a path is renamed after this check.
+    从根目录起按父目录描述符逐段打开,返回的文件描述符在打开瞬间绑定已校验的文件,
+    因此校验后路径即使被改名也不会读到别的文件;非常规文件与硬链接一律拒绝。
     """
 
     root = Path(workspace_root)
@@ -164,7 +171,11 @@ def publish_harness_artifacts(
     max_artifacts: int = 20,
     max_file_bytes: int = 50 * 1024 * 1024,
 ) -> list[dict[str, object]]:
-    """Validate explicitly declared workspace files and build public metadata."""
+    """校验显式声明的产物路径并生成对外发布的元数据,非法路径或超限直接抛错。
+
+    同一路径只登记一次,最多 max_artifacts 个,单文件上限 max_file_bytes;
+    返回项含 sha256 与字节大小,供前端展示与下载。
+    """
     published: list[dict[str, object]] = []
     seen: set[str] = set()
     for declaration in declarations[:max_artifacts]:
@@ -201,7 +212,10 @@ def snapshot_harness_workspace(
     *,
     max_entries: int = 1000,
 ) -> HarnessWorkspaceSnapshot:
-    """Capture bounded regular-file identities for command artifact discovery."""
+    """采集工作区常规文件快照(设备号、inode、大小、mtime),供命令产物发现比对。
+
+    跳过符号链接与 .harness-trash;条目数超过 max_entries 时抛错,避免无界遍历。
+    """
 
     root = Path(workspace_root).resolve(strict=True)
     snapshot: HarnessWorkspaceSnapshot = {}
@@ -245,7 +259,7 @@ def publish_changed_harness_artifacts(
     max_file_bytes: int = 50 * 1024 * 1024,
     path_filter: Callable[[str], bool] | None = None,
 ) -> list[dict[str, object]]:
-    """Publish regular files created or modified by one sandboxed command."""
+    """对比命令前后的快照,把新增或变更的文件登记为本次命令产出的产物。"""
 
     after = snapshot_harness_workspace(workspace_root, max_entries=max_entries)
     changed = [
@@ -265,7 +279,7 @@ def publish_changed_harness_artifacts(
 
 
 def _open_harness_artifact_windows(root: Path, relative_path: str) -> OpenedHarnessArtifact:
-    """Open a Windows artifact after rejecting every reparse/symlink component."""
+    """Windows 分支的产物打开:逐段拒绝重解析点与符号链接后再打开最终文件。"""
     if os.name == "nt":
         return _open_harness_artifact_windows_native(root, relative_path)
     try:
@@ -302,7 +316,7 @@ def _open_harness_artifact_windows(root: Path, relative_path: str) -> OpenedHarn
 def _open_harness_artifact_windows_native(
     root: Path, relative_path: str
 ) -> OpenedHarnessArtifact:
-    """Open by handle and validate the final Windows file identity."""
+    """用 CreateFileW 打开文件并校验句柄身份(非重解析、无硬链接、不越出根目录)。"""
     import ctypes
     import msvcrt
     from ctypes import wintypes
@@ -316,6 +330,8 @@ def _open_harness_artifact_windows_native(
     invalid_handle = wintypes.HANDLE(-1).value
 
     class FileInformation(ctypes.Structure):
+        """GetFileInformationByHandle 的返回结构,用于校验文件属性与硬链接计数。"""
+
         _fields_ = [
             ("dwFileAttributes", wintypes.DWORD),
             ("ftCreationTime", wintypes.FILETIME),
@@ -390,6 +406,7 @@ def _open_harness_artifact_windows_native(
 
 
 def _required_os_flag(name: str) -> int:
+    """取必需的 os 标志位;平台不支持时抛错,避免静默降级为不安全的打开方式。"""
     value = getattr(os, name, 0)
     if not isinstance(value, int) or value == 0:
         raise HarnessArtifactAccessError(

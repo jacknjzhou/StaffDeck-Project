@@ -15,6 +15,7 @@ from app.public_api.auth import PublicPrincipal
 
 
 def _seeded() -> Session:
+    """创建内存 SQLite 库、建表并写入演示种子数据，返回一个可用的 Session。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -26,13 +27,14 @@ def _seeded() -> Session:
 
 
 def _principal(db: Session) -> PublicPrincipal:
+    """用种子数据里的 admin 用户构造租户内全权限的 PublicPrincipal。"""
     admin = db.exec(select(User).where(User.username == "admin")).first()
     assert admin is not None
     return PublicPrincipal(tenant_id=admin.tenant_id, actor_user=admin, scopes=frozenset({"*"}))
 
 
 def _enable_all_sync(db: Session, principal: PublicPrincipal) -> None:
-    """Explicitly opt every branch-resolved version in (harmless under opt-out)."""
+    """把所有分支可见版本显式标为 deepchat_sync_enabled=True；opt-out 语义下默认已同步，这里只是显式确认。"""
     for branch in db.exec(select(AgentKnowledgeBranch)).all():
         versions = visible_knowledge_base_versions(db, principal.tenant_id, branch.agent_id)
         version = versions.get(branch.knowledge_base_id)
@@ -44,6 +46,7 @@ def _enable_all_sync(db: Session, principal: PublicPrincipal) -> None:
 
 
 def test_every_synced_concept_is_addressable_and_hashed():
+    """验证每个下发概念都能按 id 取回，且 hash 与 size 与正文实际内容一致。"""
     session = _seeded()
     try:
         principal = _principal(session)
@@ -74,6 +77,7 @@ def test_every_synced_concept_is_addressable_and_hashed():
 
 
 def test_config_version_changes_when_a_concept_changes():
+    """验证概念正文变化后，列表 configVersion 与对应包的 configHash 都会改变。"""
     session = _seeded()
     try:
         principal = _principal(session)

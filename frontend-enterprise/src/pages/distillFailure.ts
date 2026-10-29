@@ -13,6 +13,13 @@ const GENERIC_FAILURE_DETAILS = new Set([
   '改写失败，当前草稿未变更。',
 ]);
 
+/**
+ * 归一化 SOP 草稿生成或局部改写失败时的错误信息。
+ *
+ * @param error 原始错误，可为 Error、字符串或其它未知值。
+ * @param kind 失败场景：distill 为草稿生成，rewrite 为局部改写。
+ * @returns 含 code/detail/stage/summary 的失败描述；通用文案会替换为排查提示。
+ */
 export function buildDistillFailure(
   error: unknown,
   kind: 'distill' | 'rewrite',
@@ -32,6 +39,14 @@ export function buildDistillFailure(
   };
 }
 
+/**
+ * 从错误详情文本中提取稳定错误码，供界面展示与排查。
+ *
+ * 依次尝试显式 code 字段、request/provider failed (...) 括号内容与全大写稳定码。
+ *
+ * @param detail 错误详情文本。
+ * @returns 命中的错误码；无法识别时返回 undefined。
+ */
 function extractFailureCode(detail: string): string | undefined {
   const explicit = detail.match(/(?:error[_ ]?code|provider_code|code)\s*[=:]\s*['"]?([\w.-]+)/i);
   if (explicit?.[1]) return explicit[1];

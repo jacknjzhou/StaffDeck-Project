@@ -7,26 +7,33 @@ from app.llm.protocol_drivers import OpenAIResponsesDriver
 
 
 class _ClosableEvents(list):
+    """可关闭的事件列表桩对象，用于断言驱动读完流后调用了 close()。"""
     def __init__(self, values) -> None:  # noqa: ANN001
+        """把事件序列装入列表并标记为尚未关闭。"""
         super().__init__(values)
         self.closed = False
 
     def close(self) -> None:
+        """标记事件列表已关闭，供测试断言流式响应被正确清理。"""
         self.closed = True
 
 
 class _Responses:
+    """伪造 OpenAI responses 资源，记录调用参数并返回预置的响应或事件。"""
     def __init__(self, response=None, events=None) -> None:  # noqa: ANN001
+        """初始化调用记录，并保存预置的普通响应与流式事件。"""
         self.calls = []
         self.response = response
         self.events = events
 
     def create(self, **kwargs):  # noqa: ANN003
+        """记录调用参数，流式请求返回事件列表，否则返回预置响应。"""
         self.calls.append(kwargs)
         return self.events if kwargs.get("stream") else self.response
 
 
 def _request(**overrides):  # noqa: ANN003
+    """构造驱动测试用的请求字典，可用关键字参数覆盖任意字段。"""
     value = {
         "model": "gpt-test",
         "messages": [
@@ -41,6 +48,7 @@ def _request(**overrides):  # noqa: ANN003
 
 
 def test_responses_driver_maps_request_and_completion() -> None:
+    """验证请求字段映射为 Responses 入参，并合并文本输出与用量。"""
     response = SimpleNamespace(
         id="resp_123",
         status="completed",
@@ -81,6 +89,7 @@ def test_responses_driver_maps_request_and_completion() -> None:
 
 
 def test_responses_driver_maps_multimodal_content() -> None:
+    """验证多模态消息的文本与图片分别改写为 input_text 与 input_image。"""
     response = {
         "id": "resp_image",
         "status": "completed",
@@ -122,6 +131,7 @@ def test_responses_driver_maps_multimodal_content() -> None:
 
 
 def test_responses_driver_maps_typed_stream_events() -> None:
+    """验证流式事件映射为文本增量与结束原因，收尾时关闭事件流。"""
     usage = SimpleNamespace(input_tokens=4, output_tokens=2, total_tokens=6)
     events = _ClosableEvents(
         [
@@ -153,6 +163,7 @@ def test_responses_driver_maps_typed_stream_events() -> None:
 
 
 def test_llm_client_selects_responses_driver(monkeypatch) -> None:
+    """验证 openai_responses 协议下 LLMClient 选用该驱动并透传 base_url 与消息。"""
     response = SimpleNamespace(
         id="resp_client",
         status="completed",

@@ -35,10 +35,11 @@ _CHANNEL_LABELS = {
 
 
 class IdentityScopeConflict(RuntimeError):
-    pass
+    """身份作用域迁移冲突:目标企业下同一渠道身份已归属其他 StaffDeck 用户。"""
 
 
 def channel_label(channel: str) -> str:
+    """把渠道标识换成用户可读的中文名;未知渠道原样返回。"""
     return _CHANNEL_LABELS.get(channel, channel)
 
 
@@ -95,6 +96,7 @@ def external_account_key(channel: str, config: dict) -> str | None:
 
 
 def legacy_external_account_keys(channel: str, config: dict) -> set[str]:
+    """列出仅为兼容存量数据保留的历史账号连接键;当前只有 wecom 的纯 bot 键。"""
     if channel != "wecom":
         return set()
     bot_id = str(config.get("bot_id") or "").strip()
@@ -102,6 +104,7 @@ def legacy_external_account_keys(channel: str, config: dict) -> set[str]:
 
 
 def p2p_external_conv_id(channel: str, account_scope: str, from_user_id: str) -> str:
+    """生成私聊的外部会话 ID:有账号作用域时插入 scope 段,避免多账号串会话。"""
     if account_scope:
         return f"{channel}_{account_scope}_p2p_{from_user_id}"
     return f"{channel}_p2p_{from_user_id}"
@@ -158,6 +161,7 @@ def find_channel_identity(
     external_id: str,
     account_scope: str = "",
 ) -> ChannelIdentity | None:
+    """按 (租户, 渠道, 作用域, 外部用户 ID) 四元组查渠道身份映射,不存在返回 None。"""
     return db.exec(
         select(ChannelIdentity).where(
             ChannelIdentity.tenant_id == tenant_id,

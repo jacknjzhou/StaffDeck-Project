@@ -58,6 +58,7 @@ from app.skills.skill_schema import SkillCard, SkillUpdateRequest
 
 
 def _admin_user() -> User:
+    """构造管理员用户，作为需要管理员身份的智能体与资源接口调用者。"""
     return User(
         id="user_admin",
         tenant_id="tenant_demo",
@@ -68,6 +69,7 @@ def _admin_user() -> User:
 
 
 def test_management_and_chat_agent_lists_share_one_access_scope() -> None:
+    """验证管理列表与聊天列表共享同一可见范围，并标记广场员工是否被当前用户用过。"""
     with _test_session() as db:
         member = User(
             id="user_member",
@@ -140,6 +142,7 @@ def test_management_and_chat_agent_lists_share_one_access_scope() -> None:
 
 
 def test_seed_publishing_writes_explicit_admin_owner_without_backfilling_user_resources() -> None:
+    """验证种子发布只回填系统资源的管理员归属，不接管用户自建资源与已删除绑定。"""
     with _test_session() as db:
         overall = AgentProfile(
             id="agent_tenant_demo_overall",
@@ -233,6 +236,7 @@ def test_seed_publishing_writes_explicit_admin_owner_without_backfilling_user_re
 
 
 def test_agent_skill_branch_is_copy_on_write_and_reports_branch_state() -> None:
+    """验证分支技能写时复制：改分支不影响主干，并正确上报 synced/diverged 状态。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -282,6 +286,7 @@ def test_agent_skill_branch_is_copy_on_write_and_reports_branch_state() -> None:
 
 
 def test_open_gallery_delete_skill_hides_gallery_without_removing_agent_binding() -> None:
+    """验证广场删除技能只隐藏广场绑定，不删除技能数据与员工已有绑定。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -343,6 +348,7 @@ def test_open_gallery_delete_skill_hides_gallery_without_removing_agent_binding(
 
 
 def test_open_gallery_deleted_skill_binding_is_not_restored_by_ensure() -> None:
+    """验证已删除的广场绑定不会被后续 ensure 调用重新激活。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -389,6 +395,7 @@ def test_open_gallery_deleted_skill_binding_is_not_restored_by_ensure() -> None:
 
 
 def test_open_gallery_skill_requires_explicit_overall_binding() -> None:
+    """验证技能没有显式绑定整体智能体时不算开放广场资源。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -414,6 +421,7 @@ def test_open_gallery_skill_requires_explicit_overall_binding() -> None:
 
 
 def test_open_gallery_skill_read_returns_persisted_creator_metadata() -> None:
+    """验证广场技能的读接口返回绑定中持久化的创建者元信息。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -455,6 +463,7 @@ def test_open_gallery_skill_read_returns_persisted_creator_metadata() -> None:
 
 
 def test_private_skill_branch_creator_metadata_is_written_from_agent_owner() -> None:
+    """验证个人分支技能的创建者元信息取自员工所有者，并写入分支记录。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(
@@ -505,6 +514,7 @@ def test_private_skill_branch_creator_metadata_is_written_from_agent_owner() -> 
 
 
 def test_list_agents_allows_tool_resource_bindings() -> None:
+    """验证员工摘要允许展示工具类资源的绑定。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(
@@ -531,6 +541,7 @@ def test_list_agents_allows_tool_resource_bindings() -> None:
 
 
 def test_copy_overall_scope_to_agent_does_not_auto_bind_open_gallery_tools() -> None:
+    """验证复制整体范围时不会自动绑定广场工具，只有显式导入才对员工可见。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -592,6 +603,7 @@ def test_copy_overall_scope_to_agent_does_not_auto_bind_open_gallery_tools() -> 
 
 
 def test_copy_overall_scope_to_agent_does_not_auto_bind_open_gallery_knowledge_bases() -> None:
+    """验证复制整体范围时不会自动绑定广场知识库。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -636,6 +648,7 @@ def test_copy_overall_scope_to_agent_does_not_auto_bind_open_gallery_knowledge_b
 
 
 def test_list_agents_knowledge_count_ignores_stale_or_empty_default_bindings() -> None:
+    """验证员工摘要忽略没有分支的过期知识库绑定与空的默认绑定。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(
@@ -686,6 +699,7 @@ def test_list_agents_knowledge_count_ignores_stale_or_empty_default_bindings() -
 
 
 def test_agent_summary_resources_match_operational_resource_lists() -> None:
+    """验证员工摘要里的有效资源与各运营列表的可见资源一致。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(
@@ -814,6 +828,7 @@ def test_agent_summary_resources_match_operational_resource_lists() -> None:
 
 
 def test_archiving_open_gallery_resources_updates_binding_status() -> None:
+    """验证停用广场技能、通用技能与知识库时，对应绑定状态同步变为 inactive。"""
     with _test_session() as db:
         admin = _admin_user()
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -877,6 +892,7 @@ def test_archiving_open_gallery_resources_updates_binding_status() -> None:
 
 
 def test_import_open_gallery_tool_creates_private_agent_binding() -> None:
+    """验证从广场导入工具会生成员工私有绑定，广场隐藏后员工仍可用。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         overall = AgentProfile(
@@ -952,17 +968,21 @@ def test_import_open_gallery_tool_creates_private_agent_binding() -> None:
 
 
 def test_import_resources_retries_once_when_sqlite_database_is_locked(monkeypatch) -> None:
+    """验证导入遇到 SQLite 锁库时先回滚再重试一次，最终成功返回结果。"""
     calls = 0
 
     class FakeSession:
+        """最小会话替身，只记录 rollback 次数，便于断言重试前的回滚。"""
         rollback_count = 0
 
         def rollback(self) -> None:
+            """累计回滚次数，用于断言锁库冲突后确实执行了回滚。"""
             self.rollback_count += 1
 
     expected = {"status": "imported", "imported": [], "missing": []}
 
     def fake_import_once(*_args: object, **_kwargs: object) -> dict[str, object]:
+        """伪造导入实现：首次抛出锁库错误，第二次返回成功结果。"""
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -995,6 +1015,7 @@ def test_import_resources_retries_once_when_sqlite_database_is_locked(monkeypatc
 
 
 def test_non_overall_agent_cannot_delete_global_resources() -> None:
+    """验证非整体智能体删除全局资源时返回 403。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -1016,6 +1037,7 @@ def test_non_overall_agent_cannot_delete_global_resources() -> None:
 
 
 def test_management_rows_keep_archived_global_and_inactive_branch_skills() -> None:
+    """验证管理列表保留主干已下线与分支已停用的技能，便于继续管理。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -1075,6 +1097,7 @@ def test_management_rows_keep_archived_global_and_inactive_branch_skills() -> No
 
 
 def test_updating_inactive_branch_skill_keeps_it_inactive() -> None:
+    """验证编辑已停用的分支技能后仍保持停用，并标记为 diverged。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -1134,6 +1157,7 @@ def test_updating_inactive_branch_skill_keeps_it_inactive() -> None:
 
 
 def test_inactive_bound_skill_can_be_loaded_and_saved_from_management_api() -> None:
+    """验证停用绑定的技能仍可在管理接口读取并保存，且不改变分支与绑定状态。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -1227,6 +1251,7 @@ def test_inactive_bound_skill_can_be_loaded_and_saved_from_management_api() -> N
 
 
 def test_inactive_bound_skill_can_be_reenabled_from_management_api() -> None:
+    """验证停用绑定的技能可通过发布接口重新启用，绑定同步恢复为 active。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -1295,6 +1320,7 @@ def test_inactive_bound_skill_can_be_reenabled_from_management_api() -> None:
 
 
 def test_disabled_open_gallery_resources_cannot_be_learned() -> None:
+    """验证已停用的广场资源不可被学习导入，继承整体范围时也不会自动绑定。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         overall = AgentProfile(
@@ -1385,6 +1411,7 @@ def test_disabled_open_gallery_resources_cannot_be_learned() -> None:
 
 
 def test_archived_knowledge_remains_manageable_but_is_not_runtime_visible() -> None:
+    """验证停用知识库运行时不可见，但带 include_inactive 查询时仍可管理。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         overall = AgentProfile(
@@ -1443,6 +1470,7 @@ def test_archived_knowledge_remains_manageable_but_is_not_runtime_visible() -> N
 
 
 def test_private_agent_resources_are_not_visible_in_open_gallery() -> None:
+    """验证个人私有资源不会出现在开放广场，也无法被其他员工导入学习。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         overall = AgentProfile(
@@ -1563,6 +1591,7 @@ def test_private_agent_resources_are_not_visible_in_open_gallery() -> None:
 
 
 def test_import_private_general_skill_creates_independent_package_copy() -> None:
+    """验证导入个人通用技能时生成独立副本，携带完整技能包与来源信息。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         source = AgentProfile(
@@ -1638,6 +1667,7 @@ def test_import_private_general_skill_creates_independent_package_copy() -> None
 
 
 def test_knowledge_branch_write_clones_existing_wiki_before_appending_concept() -> None:
+    """验证分支写入前先克隆现有文档、桶、切片与 wiki 概念，再追加新概念。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(
@@ -1746,6 +1776,7 @@ def test_knowledge_branch_write_clones_existing_wiki_before_appending_concept() 
 
 
 def test_knowledge_branch_write_normalizes_nested_branch_base_version() -> None:
+    """验证分支基版本被归一化为原始版本号，并递增生成新的分支版本。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(
@@ -1774,6 +1805,7 @@ def test_knowledge_branch_write_normalizes_nested_branch_base_version() -> None:
 
 
 def _graph(name: str, version: str) -> dict[str, object]:
+    """构造两节点、单连线的技能图内容，供分支与可见性用例复用。"""
     return {
         "skill_id": "skill_purchase",
         "version": version,
@@ -1804,6 +1836,7 @@ def _graph(name: str, version: str) -> dict[str, object]:
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 会话，隔离各用例的数据库状态。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

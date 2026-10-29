@@ -25,6 +25,7 @@ _security = HTTPBearer(auto_error=False)
 
 @dataclass(frozen=True)
 class PublicPrincipal:
+    """一次公开 API 调用的已鉴权主体：租户、操作人、生效 scope，以及可见/可管理员工集合。"""
     tenant_id: str
     actor_user: User
     scopes: frozenset[str]
@@ -36,6 +37,7 @@ class PublicPrincipal:
     bootstrap_user: bool = False
 
     def can(self, required: str) -> bool:
+        """判断主体是否具备某个 scope：支持 "*" 全量授权与同命名空间 "ns:*" 通配。"""
         if "*" in self.scopes or required in self.scopes:
             return True
         namespace = required.split(":", 1)[0]
@@ -43,12 +45,14 @@ class PublicPrincipal:
 
 
 def generate_api_key() -> tuple[str, str, str]:
+    """生成新的 API key，返回（完整 token、前 20 位前缀、HMAC 摘要），库中只存前缀与摘要。"""
     token = f"{PUBLIC_KEY_PREFIX}{secrets.token_urlsafe(32)}"
     prefix = token[:20]
     return token, prefix, _credential_digest(token)
 
 
 def _credential_digest(token: str) -> str:
+    """用 public_api_key_pepper（缺省回退 app_secret）对 token 做 HMAC-SHA256 摘要。"""
     settings = get_settings()
     pepper = settings.public_api_key_pepper or settings.app_secret
     return hmac.new(
@@ -59,6 +63,11 @@ def _credential_digest(token: str) -> str:
 
 
 def _api_key_principal(token: str, db: Session) -> PublicPrincipal:
+    """校验 sd_* API key 并构造主体：前缀查凭据、摘要比对，再校验状态、过期与客户端。
+
+    校验通过会顺带刷新 last_used_at；生效 scope 取凭据与客户端 scope 的交集，
+    user_full_access 凭据自动补齐新增账户能力，可见员工集合每次请求重新解析。
+    """
     prefix = token[:20]
     credential = db.exec(
         select(APICredential).where(APICredential.key_prefix == prefix)
@@ -119,10 +128,10 @@ def _agent_access_sets(
     tenant_id: str,
     actor: User,
 ) -> tuple[frozenset[str], frozenset[str]]:
-    """Resolve account visibility on every API-key request.
+    """每次 API-key 请求都重新解析账户可见范围，返回（可见员工 id、可管理员工 id）。
 
-    Account master keys therefore follow later ownership, gallery-publishing,
-    hiding, and role changes without issuing a new credential.
+    账户主密钥因此能跟随后续的归属、上架、隐藏与角色变更，无需重新签发凭据；
+    metadata_json 中 hidden_from_staffdeck 为 True 的员工直接跳过。
     """
     rows = db.exec(select(AgentProfile).where(AgentProfile.tenant_id == tenant_id)).all()
     visible: set[str] = set()
@@ -144,6 +153,7 @@ def _agent_access_sets(
 
 
 def _bootstrap_principal(token: str, db: Session) -> PublicPrincipal:
+    """用控制台签发的用户 token 构造管理员主体（scope 为 {"*"}）；非租户管理员抛 403。"""
     payload = _decode_token(token)
     user = db.get(User, str(payload.get("user_id") or ""))
     if not user or user.tenant_id != payload.get("tenant_id"):
@@ -163,6 +173,7 @@ def get_public_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_security),
     db: Session = Depends(get_session),
 ) -> PublicPrincipal:
+    """FastAPI 依赖：要求 Bearer sd_* API key，校验后写入 request.state.public_principal。"""
     if not credentials:
         raise PublicAPIError(401, "NOT_AUTHENTICATED", "A Bearer API key is required.")
     token = credentials.credentials
@@ -178,6 +189,7 @@ def get_public_or_admin_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_security),
     db: Session = Depends(get_session),
 ) -> PublicPrincipal:
+    """FastAPI 依赖：sd_* 前缀走 API key 鉴权，其余 token 按控制台管理员鉴权。"""
     if not credentials:
         raise PublicAPIError(401, "NOT_AUTHENTICATED", "A Bearer token is required.")
     token = credentials.credentials
@@ -196,9 +208,11 @@ def get_public_or_admin_principal(
 
 
 def require_scopes(*required_scopes: str) -> Callable[[PublicPrincipal], PublicPrincipal]:
+    """生成 scope 校验依赖：任一必需 scope 缺失即抛 403 INSUFFICIENT_SCOPE（带 WWW-Authenticate）。"""
     def dependency(
         principal: Annotated[PublicPrincipal, Depends(get_public_principal)],
     ) -> PublicPrincipal:
+        """校验主体是否具备闭包捕获的全部必需 scope，通过则原样返回主体。"""
         missing = [scope for scope in required_scopes if not principal.can(scope)]
         if missing:
             raise PublicAPIError(
@@ -213,6 +227,10 @@ def require_scopes(*required_scopes: str) -> Callable[[PublicPrincipal], PublicP
 
 
 def enforce_agent_access(principal: PublicPrincipal, agent_id: str, *, write: bool = False) -> None:
+    """校验主体能否访问指定员工：绑定员工不符、不在可见集合、写操作越权时抛 PublicAPIError。
+
+    员工级 key 只能操作自身且不能改配置；写操作要求该员工在 manageable_agent_ids 内。
+    """
     if principal.agent_id and principal.agent_id != agent_id:
         raise PublicAPIError(403, "AGENT_SCOPE_MISMATCH", "This key is bound to another agent.")
     if principal.allowed_agent_ids is not None and agent_id not in principal.allowed_agent_ids:

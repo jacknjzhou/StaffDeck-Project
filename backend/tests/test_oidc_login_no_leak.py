@@ -12,6 +12,7 @@ from app.db.models import User, utc_now
 
 
 def test_user_timestamp_default_factory_restored_to_original():
+    """验证其他测试改写 User 时间戳 factory 后已恢复为原始 utc_now。"""
     for field_name in ("created_at", "updated_at"):
         factory = User.model_fields[field_name].default_factory
         assert factory is utc_now, (

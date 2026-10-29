@@ -20,14 +20,17 @@ const SOP_SPECIFIC_INLINE_DESCRIPTIONS: Record<CapabilityScopeResourceType, stri
   knowledge_base: '仅在 SOP 步骤指定相关知识库时可用。',
 };
 
+/** 归一化能力范围入参：仅 'sop_specific'（含旧写法 'sop-specific'）视为仅限 SOP，其余回落为通用。 */
 export function normalizeCapabilityScope(value: unknown): CapabilityScope {
   return value === 'sop_specific' || value === 'sop-specific' ? 'sop_specific' : 'general';
 }
 
+/** 能力范围中文文案：仅限 SOP 或通用。 */
 export function capabilityScopeLabel(value: unknown): string {
   return normalizeCapabilityScope(value) === 'sop_specific' ? '仅限 SOP' : '通用';
 }
 
+/** 能力范围只读徽标：仅限 SOP 用橙色系配色，通用用蓝色系配色。 */
 export function CapabilityScopeBadge({
   value,
   className,
@@ -51,6 +54,12 @@ export function CapabilityScopeBadge({
   );
 }
 
+/**
+ * 能力范围切换控件：在「通用」与「仅限 SOP」之间切换，并展示对应场景说明。
+ *
+ * 开关回传 'sop_specific' 或 'general'；compact 为 true 时省略行内说明，仅保留标题旁的提示气泡。
+ * resourceType 决定气泡与行内说明的措辞，disabled 为 true 时开关不可交互。
+ */
 export function CapabilityScopeControl({
   value,
   onChange,

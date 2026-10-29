@@ -5,14 +5,14 @@ import { cn } from '@/lib/utils';
 import { Pagination, PaginationContent, PaginationItem } from './ui';
 
 export type PaginatorProps = {
-  /** Current 1-based page. */
+  /** 当前页码，从 1 开始。 */
   page: number;
-  /** Total number of pages. */
+  /** 总页数。 */
   pageCount: number;
   onChange: (page: number) => void;
-  /** How many page numbers to show on each side of the current page. */
+  /** 当前页左右两侧各显示的页码数量。 */
   siblingCount?: number;
-  /** Zero-pad page numbers (01, 02, …) to match the SD1 design. Defaults to true. */
+  /** 页码是否补零（01、02……）以匹配 SD1 设计，默认 true。 */
   padZero?: boolean;
   className?: string;
   'aria-label'?: string;
@@ -23,6 +23,12 @@ const PILL_CLASS =
 const ARROW_CLASS =
   'flex size-[14px] shrink-0 items-center justify-center text-[#464c5e] transition-opacity disabled:cursor-not-allowed disabled:opacity-30';
 
+/**
+ * 计算分页条要展示的页码序列。
+ *
+ * 页数不超过 `siblingCount * 2 + 5` 时直接列出全部页码；
+ * 否则固定保留首尾页，中间超出可视窗口的部分用 'ellipsis' 占位。
+ */
 function getPaginationRange(
   current: number,
   total: number,
@@ -43,10 +49,11 @@ function getPaginationRange(
 }
 
 /**
- * Global paginator (SD1 design: node 281:2020).
- * Built on the shadcn `Pagination` primitives (nav / ul / li) for structure & a11y,
- * with the SD1 look: 20px pills, 10px zero-padded numbers, `#f6f6f6` active fill,
- * `#999` inactive text, and 14px chevron arrows.
+ * 全局分页器（SD1 设计稿：node 281:2020）。
+ *
+ * 基于 shadcn 的 `Pagination` 原语（nav / ul / li）获得语义结构与可访问性，
+ * 外观遵循 SD1：20px 药丸、10px 补零页码、`#f6f6f6` 选中底色、
+ * `#999` 未选中文字以及 14px 箭头。
  */
 export function Paginator({
   page,
@@ -59,7 +66,9 @@ export function Paginator({
 }: PaginatorProps) {
   if (pageCount < 1) return null;
   const range = getPaginationRange(page, pageCount, siblingCount);
+  /** 按 `padZero` 决定是否把页码补成两位数字面量。 */
   const label = (value: number) => (padZero ? String(value).padStart(2, '0') : String(value));
+  /** 把目标页码夹在 [1, pageCount] 内，仅在页码变化时触发 `onChange`。 */
   const goTo = (target: number) => {
     const next = Math.min(Math.max(target, 1), pageCount);
     if (next !== page) onChange(next);

@@ -56,6 +56,7 @@ from app.session.session_schema import ChatTurnResponse
 
 
 def _skill_card() -> dict:
+    """构造一份最小可用的技能卡，供 SOP 草稿与发布接口使用。"""
     return {
         "skill_id": "expense_policy_v1",
         "name": "报销制度",
@@ -82,6 +83,7 @@ def _skill_card() -> dict:
 
 
 def _client(monkeypatch):
+    """创建内存数据库、管理员令牌与挂载公开 API 的测试客户端。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -124,6 +126,7 @@ def _client(monkeypatch):
     app = create_public_api_app()
 
     def session_override():
+        """为每个请求提供独立的测试数据库会话。"""
         with Session(engine) as db:
             yield db
 
@@ -136,6 +139,7 @@ def _client(monkeypatch):
 def _tenant_key(
     client: TestClient, admin_token: str, scopes: list[str], name: str = "integration"
 ) -> str:
+    """创建 API 客户端及其凭据，返回指定 scope 的 API key。"""
     created = client.post(
         "/api-clients",
         headers={"Authorization": f"Bearer {admin_token}"},
@@ -152,6 +156,7 @@ def _tenant_key(
 
 
 def test_problem_details_and_openapi_contract(monkeypatch) -> None:
+    """验证未认证响应符合 problem+json 契约，且 OpenAPI 暴露预期路由。"""
     client, _engine, _token = _client(monkeypatch)
     unauthorized = client.get("/agents")
     assert unauthorized.status_code == 401
@@ -183,6 +188,7 @@ def test_problem_details_and_openapi_contract(monkeypatch) -> None:
 
 
 def test_api_key_scope_agent_boundary_and_idempotent_run(monkeypatch) -> None:
+    """验证 API key 的 scope 与员工边界，以及相同幂等键只创建一个任务。"""
     client, engine, admin_token = _client(monkeypatch)
     tenant_key = _tenant_key(client, admin_token, ["agents:read", "runs:create", "runs:read"])
     headers = {"Authorization": f"Bearer {tenant_key}", "Idempotency-Key": "run-order-1"}
@@ -224,14 +230,18 @@ def test_api_key_scope_agent_boundary_and_idempotent_run(monkeypatch) -> None:
 
 
 def test_streaming_run_endpoint_emits_reply_deltas(monkeypatch) -> None:
+    """验证流式运行端点以 SSE 下发增量与完成事件。"""
     client, engine, admin_token = _client(monkeypatch)
     tenant_key = _tenant_key(client, admin_token, ["agents:read", "runs:create", "runs:read"])
 
     class FakeStreamingLoop:
+        """最小的流式 AgentLoop 替身，按轮次写入事件与回复。"""
         def __init__(self, db):
+            """保存数据库会话，供写入事件与消息使用。"""
             self.db = db
 
         def handle_turn_stream(self, request):
+            """写出增量、结束事件与助手消息，并产出完成事件。"""
             session = self.db.get(ChatSession, request.session_id)
             self.db.add(
                 AgentEvent(
@@ -291,6 +301,7 @@ def test_streaming_run_endpoint_emits_reply_deltas(monkeypatch) -> None:
 
 
 def test_public_run_trace_maps_harness_actions_and_failures() -> None:
+    """验证内部 trace 事件名映射到公开的运行事件名。"""
     from app.public_api.runs import _TRACE_EVENT_MAP
 
     assert _TRACE_EVENT_MAP["harness_action_created"] == "run.action.started"
@@ -299,6 +310,7 @@ def test_public_run_trace_maps_harness_actions_and_failures() -> None:
 
 
 def test_successful_job_clears_stale_restart_error(monkeypatch) -> None:
+    """验证任务成功后会清空重启遗留的错误与可重试标记。"""
     _client_value, engine, _token = _client(monkeypatch)
     with Session(engine) as db:
         client = APIClient(
@@ -347,6 +359,7 @@ def test_successful_job_clears_stale_restart_error(monkeypatch) -> None:
 
 
 def test_failed_run_job_releases_session_and_emits_terminal_event(monkeypatch) -> None:
+    """验证运行任务失败时释放会话并写入终止事件。"""
     _client_value, engine, _token = _client(monkeypatch)
     with Session(engine) as db:
         api_client = APIClient(
@@ -388,6 +401,7 @@ def test_failed_run_job_releases_session_and_emits_terminal_event(monkeypatch) -
         db.commit()
 
     def fail_run(_db, _job):
+        """模拟 provider 不可用，使任务执行抛出异常。"""
         raise RuntimeError("provider unavailable")
 
     monkeypatch.setitem(public_jobs._handlers, "run", fail_run)
@@ -410,6 +424,7 @@ def test_failed_run_job_releases_session_and_emits_terminal_event(monkeypatch) -
 
 
 def test_recovery_repairs_terminal_run_session(monkeypatch) -> None:
+    """验证启动恢复会把中断运行的会话修回可用状态并写入事件。"""
     _client_value, engine, _token = _client(monkeypatch)
     with Session(engine) as db:
         api_client = APIClient(
@@ -471,6 +486,7 @@ def test_recovery_repairs_terminal_run_session(monkeypatch) -> None:
 
 
 def test_sop_changes_remain_isolated_until_publish(monkeypatch) -> None:
+    """验证 SOP 草稿修改不影响已发布技能，发布后才生效。"""
     client, engine, admin_token = _client(monkeypatch)
     key = _tenant_key(client, admin_token, ["sops:read", "sops:write", "sops:publish"])
     headers = {"Authorization": f"Bearer {key}", "Idempotency-Key": "sop-create-1"}
@@ -527,6 +543,7 @@ def test_sop_changes_remain_isolated_until_publish(monkeypatch) -> None:
 
 
 def test_rfc6902_supports_array_append_move_copy_and_test() -> None:
+    """验证 RFC6902 的 test/add/copy/move 操作，且不改动源对象。"""
     source = {"nodes": [{"id": "a"}], "meta": {"owner": "x"}}
     patched = apply_json_patch(
         source,
@@ -549,6 +566,7 @@ def test_rfc6902_supports_array_append_move_copy_and_test() -> None:
 
 
 def test_resource_wrappers_derive_tenant_and_mask_tool_secrets(monkeypatch) -> None:
+    """验证资源接口从凭据推导租户，并对外脱敏工具密钥。"""
     client, _engine, admin_token = _client(monkeypatch)
     key = _tenant_key(
         client,
@@ -622,6 +640,7 @@ def test_resource_wrappers_derive_tenant_and_mask_tool_secrets(monkeypatch) -> N
 
 
 def test_run_handler_relays_live_public_trace_and_returns_citations(monkeypatch) -> None:
+    """验证运行处理器只转发本轮公开事件并返回知识引用。"""
     _client_value, engine, _token = _client(monkeypatch)
     with Session(engine) as db:
         client = APIClient(
@@ -655,10 +674,13 @@ def test_run_handler_relays_live_public_trace_and_returns_citations(monkeypatch)
         db.commit()
 
     class FakeLoop:
+        """最小的 AgentLoop 替身，写入计划、回复与含干扰项的事件。"""
         def __init__(self, db):
+            """保存数据库会话，供写入事件与消息使用。"""
             self.db = db
 
         def handle_turn(self, request):
+            """写入计划事件与带引用的助手消息，返回轮次响应。"""
             session = self.db.get(ChatSession, request.session_id)
             self.db.add(
                 AgentEvent(
@@ -693,6 +715,7 @@ def test_run_handler_relays_live_public_trace_and_returns_citations(monkeypatch)
             )
 
         def handle_turn_stream(self, request):
+            """追加增量与结束事件，并混入其他轮次数据以校验过滤。"""
             response = self.handle_turn(request)
             self.db.add(
                 AgentEvent(
@@ -751,6 +774,7 @@ def test_run_handler_relays_live_public_trace_and_returns_citations(monkeypatch)
 
 
 def test_employee_settings_manage_runtime_keys(monkeypatch) -> None:
+    """验证员工运行密钥的 scope、脱敏、轮换与吊销行为。"""
     _client_value, engine, _token = _client(monkeypatch)
     with Session(engine) as db:
         admin = db.get(User, "user_api_admin")
@@ -791,6 +815,7 @@ def test_employee_settings_manage_runtime_keys(monkeypatch) -> None:
 
 
 def test_account_master_key_follows_user_visible_agents(monkeypatch) -> None:
+    """验证账号主密钥按实时可见性访问员工、画廊与管理权限。"""
     client, engine, _admin_token = _client(monkeypatch)
     with Session(engine) as db:
         admin = db.get(User, "user_api_admin")
@@ -940,6 +965,7 @@ def test_account_master_key_follows_user_visible_agents(monkeypatch) -> None:
 
 
 def test_gallery_directory_supports_search_and_cursor_pagination(monkeypatch) -> None:
+    """验证画廊目录支持关键词搜索、游标分页与非法游标报错。"""
     client, engine, _admin_token = _client(monkeypatch)
     with Session(engine) as db:
         admin = db.get(User, "user_api_admin")
@@ -1025,6 +1051,7 @@ def test_gallery_directory_supports_search_and_cursor_pagination(monkeypatch) ->
 
 
 def test_admin_account_master_key_sees_all_visible_tenant_agents(monkeypatch) -> None:
+    """验证管理员账号密钥可看到租户内可见员工，但不含隐藏员工。"""
     client, engine, _admin_token = _client(monkeypatch)
     with Session(engine) as db:
         admin = db.get(User, "user_api_admin")
@@ -1061,6 +1088,7 @@ def test_admin_account_master_key_sees_all_visible_tenant_agents(monkeypatch) ->
 
 
 def test_public_api_rejects_new_full_access_employee_keys(monkeypatch) -> None:
+    """验证公开 API 拒绝为员工密钥签发全量账号 scope。"""
     client, _engine, admin_token = _client(monkeypatch)
     api_client = client.post(
         "/api-clients",
@@ -1081,9 +1109,11 @@ def test_public_api_rejects_new_full_access_employee_keys(monkeypatch) -> None:
 
 
 def test_internal_job_remains_durably_queued_when_executor_is_stopping(monkeypatch) -> None:
+    """验证执行器停机时内部任务仍落库为 queued。"""
     _client_instance, engine, _admin_token = _client(monkeypatch)
 
     def reject_submission(*args, **kwargs):  # noqa: ANN002, ANN003
+        """模拟执行器关闭，提交异步任务时直接抛异常。"""
         raise RuntimeError("executor is shutting down")
 
     monkeypatch.setattr(public_jobs, "enqueue_async_job", reject_submission)
@@ -1102,6 +1132,7 @@ def test_internal_job_remains_durably_queued_when_executor_is_stopping(monkeypat
 
 
 def _knowledge_write_key(client: TestClient, admin_token: str) -> dict[str, str]:
+    """创建带知识库读写 scope 的认证头。"""
     key = _tenant_key(
         client, admin_token, ["knowledge:read", "knowledge:write"]
     )
@@ -1109,6 +1140,7 @@ def _knowledge_write_key(client: TestClient, admin_token: str) -> dict[str, str]
 
 
 def _create_kb(client: TestClient, auth: dict[str, str], name: str = "Policy") -> str:
+    """通过接口创建知识库并返回其 ID。"""
     created = client.post(
         "/agents/agent_api/knowledge-bases",
         headers=auth,
@@ -1121,6 +1153,7 @@ def _create_kb(client: TestClient, auth: dict[str, str], name: str = "Policy") -
 def _seed_concept(
     engine, kb_id: str, *, concept_id: str, content: str, title: str
 ) -> None:
+    """向知识库当前版本直接写入一条概念记录。"""
     with Session(engine) as db:
         branch = db.exec(
             select(AgentKnowledgeBranch).where(
@@ -1153,6 +1186,7 @@ def _seed_concept(
 
 
 def test_public_knowledge_base_detail_and_concept_get(monkeypatch) -> None:
+    """验证知识库详情与单个概念查询返回预期字段，且不泄露 tenant_id。"""
     client, engine, admin_token = _client(monkeypatch)
     auth = _knowledge_write_key(client, admin_token)
     kb_id = _create_kb(client, auth)
@@ -1181,6 +1215,7 @@ def test_public_knowledge_base_detail_and_concept_get(monkeypatch) -> None:
 
 
 def test_public_knowledge_concept_upsert_writes_versioned_concept(monkeypatch) -> None:
+    """验证概念 upsert 写入带 frontmatter 的版本化文档。"""
     client, engine, admin_token = _client(monkeypatch)
     auth = _knowledge_write_key(client, admin_token)
     kb_id = _create_kb(client, auth)
@@ -1210,6 +1245,7 @@ def test_public_knowledge_concept_upsert_writes_versioned_concept(monkeypatch) -
 
 
 def test_public_knowledge_okf_export_and_lint(monkeypatch) -> None:
+    """验证 OKF 导出返回 zip 包，lint 返回状态与问题列表。"""
     client, _engine, admin_token = _client(monkeypatch)
     auth = _knowledge_write_key(client, admin_token)
     kb_id = _create_kb(client, auth)
@@ -1231,6 +1267,7 @@ def test_public_knowledge_okf_export_and_lint(monkeypatch) -> None:
 
 
 def test_public_knowledge_delete_hides_agent_branch(monkeypatch) -> None:
+    """验证员工侧删除知识库只做软隐藏，不影响知识库本体。"""
     client, engine, admin_token = _client(monkeypatch)
     auth = _knowledge_write_key(client, admin_token)
     kb_id = _create_kb(client, auth)
@@ -1267,6 +1304,7 @@ def test_public_knowledge_delete_hides_agent_branch(monkeypatch) -> None:
 
 
 def test_public_knowledge_sync_from_overall(monkeypatch) -> None:
+    """验证从整体员工同步知识库会建立已同步的分支。"""
     client, engine, admin_token = _client(monkeypatch)
     auth = _knowledge_write_key(client, admin_token)
     with Session(engine) as db:
@@ -1335,6 +1373,7 @@ def test_public_knowledge_sync_from_overall(monkeypatch) -> None:
 
 
 def test_public_knowledge_write_scopes_enforced(monkeypatch) -> None:
+    """验证只读 scope 无法执行知识库写操作。"""
     client, _engine, admin_token = _client(monkeypatch)
     kb_id = _create_kb(client, _knowledge_write_key(client, admin_token))
     read_auth = {
@@ -1360,6 +1399,7 @@ def test_public_knowledge_write_scopes_enforced(monkeypatch) -> None:
 
 
 def test_public_knowledge_agent_key_boundary(monkeypatch) -> None:
+    """验证绑定员工的密钥不能越权访问其他员工的知识库。"""
     client, _engine, admin_token = _client(monkeypatch)
     api_client = client.post(
         "/api-clients",

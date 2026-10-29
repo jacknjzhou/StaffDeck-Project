@@ -58,10 +58,14 @@ GENERAL_SKILL_EVOLUTION_PROMPT = """
 
 
 class EvolutionService:
+    """反馈驱动的自进化流程：定位目标 → 生成候选 → 静态评估 → 审核发布/回滚。"""
+
     def __init__(self, db: Session):
+        """绑定数据库会话；后续读写都复用该会话，不自行开启事务边界。"""
         self.db = db
 
     def list(self, tenant_id: str, agent_id: str) -> list[EvolutionProposal]:
+        """按创建时间倒序列出某租户下某 Agent 的全部自进化候选。"""
         return list(
             self.db.exec(
                 select(EvolutionProposal)
@@ -79,6 +83,10 @@ class EvolutionService:
         request: EvolutionAnalyzeRequest,
         current_user: User,
     ) -> EvolutionProposal:
+        """从差评反馈定位改进目标，生成 SOP 或通用技能候选并落库。
+
+        返回的候选已完成静态评估，状态为 ready_for_review 或 evaluation_failed。
+        """
         resource_type, resource, evidence = self._resolve_target(agent_id, request)
         model = self._default_model(request.tenant_id)
         if resource_type == "sop":
@@ -94,6 +102,7 @@ class EvolutionService:
         return proposal
 
     def evaluate(self, row: EvolutionProposal) -> EvolutionProposal:
+        """对候选做静态校验（结构、SOP 嵌套、有无实质改动）并写回评估结果与状态。"""
         errors: list[dict[str, str]] = []
         checks: list[dict[str, Any]] = []
         if row.resource_type == "sop":
@@ -145,6 +154,11 @@ class EvolutionService:
         return row
 
     def approve(self, row: EvolutionProposal, current_user: User) -> EvolutionProposal:
+        """审核通过并发布候选：SOP 写回 Agent 分支，通用技能原地更新或另建私有副本。
+
+        发布前重跑一次静态校验，未通过抛 422；发布前快照存入
+        published_snapshot_json，供 rollback 还原。
+        """
         if row.status not in {"ready_for_review", "evaluation_failed"}:
             raise _evolution_http_error(
                 409,
@@ -255,6 +269,7 @@ class EvolutionService:
         return row
 
     def reject(self, row: EvolutionProposal, current_user: User, reason: str) -> EvolutionProposal:
+        """驳回候选并把理由记入 evaluation_json；已发布的候选只能走回滚。"""
         if row.status == "published":
             raise _evolution_http_error(
                 409,
@@ -274,6 +289,10 @@ class EvolutionService:
         return row
 
     def rollback(self, row: EvolutionProposal, current_user: User) -> EvolutionProposal:
+        """回滚已发布的候选，把资源还原到发布前快照。
+
+        通用技能若发布时另建了私有副本，回滚改为归档该副本并停用其绑定。
+        """
         if row.status != "published" or not row.published_snapshot_json:
             raise _evolution_http_error(
                 409,
@@ -330,6 +349,11 @@ class EvolutionService:
     def _resolve_target(
         self, agent_id: str, request: EvolutionAnalyzeRequest
     ) -> tuple[str, Skill | GeneralSkill, list[dict[str, Any]]]:
+        """根据请求与差评反馈定位改进目标，返回 (资源类型, 资源对象, 证据列表)。
+
+        未显式指定 resource_id 时按反馈条数与 AgentEvent 引用推断；定位不到时
+        抛 404，由路由层原样透出。
+        """
         session_ids = list(
             self.db.exec(
                 select(ChatSession.id).where(
@@ -406,6 +430,11 @@ class EvolutionService:
         request: EvolutionAnalyzeRequest,
         feedback_rows: list[MessageFeedback],
     ) -> GeneralSkill | None:
+        """在 Agent 已激活的通用技能里定位改进目标；无法命中时返回 None。
+
+        指定 resource_id 时按 id 或 slug 精确匹配；否则用差评所在会话的
+        AgentEvent 中出现的 ``general_skill.<slug>`` 引用推断。
+        """
         bindings = list(
             self.db.exec(
                 select(AgentResourceBinding).where(
@@ -452,6 +481,7 @@ class EvolutionService:
         )
 
     def _evidence(self, rows: list[MessageFeedback]) -> list[dict[str, Any]]:
+        """把差评反馈整理成最多 12 条证据（含回复摘录），按更新时间倒序。"""
         evidence: list[dict[str, Any]] = []
         for row in sorted(rows, key=lambda item: item.updated_at, reverse=True)[:12]:
             message = self.db.get(Message, row.message_id)
@@ -477,6 +507,10 @@ class EvolutionService:
         request: EvolutionAnalyzeRequest,
         model: ModelConfig,
     ) -> EvolutionProposal:
+        """让 SkillEditor 依据反馈重写 SOP，生成候选与 JSON diff 后做静态评估。
+
+        候选不在这里入库，由调用方补上创建人后统一提交。
+        """
         current = skill_card_from_persisted(skill.content_json)
         instruction = self._rewrite_instruction(evidence, request.instruction)
         result = SkillEditor().rewrite(
@@ -521,6 +555,7 @@ class EvolutionService:
         request: EvolutionAnalyzeRequest,
         model: ModelConfig,
     ) -> EvolutionProposal:
+        """让模型按反馈生成通用技能的最小 SKILL.md 修改，组装候选并静态评估。"""
         raw = LLMClient(model).generate_json(
             GENERAL_SKILL_EVOLUTION_PROMPT,
             {
@@ -562,6 +597,7 @@ class EvolutionService:
         return self._evaluate_without_commit(row)
 
     def _evaluate_without_commit(self, row: EvolutionProposal) -> EvolutionProposal:
+        """对尚未入库的候选做静态校验，只填充 evaluation_json 与 status。"""
         # Reuse the same validation semantics without making the unsaved row queryable.
         errors: list[dict[str, str]] = []
         if row.resource_type == "sop":
@@ -586,6 +622,7 @@ class EvolutionService:
     def _rewrite_instruction(
         self, evidence: list[dict[str, Any]], extra_instruction: str | None
     ) -> str:
+        """把反馈证据与管理员补充要求拼成 SOP 重写指令，并限定改动范围。"""
         evidence_text = "\n".join(
             f"- [{item['bucket']}] {item['summary'] or item['reason'] or item['reply_excerpt']}"
             for item in evidence
@@ -599,6 +636,7 @@ class EvolutionService:
         )
 
     def _default_model(self, tenant_id: str) -> ModelConfig:
+        """取租户下默认且启用的模型配置；缺失时抛 409 EVOLUTION_MODEL_NOT_CONFIGURED。"""
         row = self.db.exec(
             select(ModelConfig).where(
                 ModelConfig.tenant_id == tenant_id,
@@ -615,6 +653,7 @@ class EvolutionService:
         return resolve_model_config_for_runtime(self.db, tenant_id, row.id)
 
     def _private_skill_slug(self, tenant_id: str, source_slug: str, agent_id: str) -> str:
+        """为自进化生成的私有通用技能副本构造租户内唯一的 slug。"""
         base = f"{source_slug}-evolved-{agent_id[-6:]}"[:120].strip("-")
         candidate = base
         suffix = 2
@@ -630,6 +669,7 @@ class EvolutionService:
 
     @staticmethod
     def _general_skill_snapshot(skill: GeneralSkill) -> dict[str, Any]:
+        """抽取通用技能的可回滚字段快照（正文、描述、元数据）。"""
         return {
             "skill_markdown": skill.skill_markdown,
             "description": skill.description,
@@ -638,6 +678,7 @@ class EvolutionService:
 
 
 def _hypothesis(evidence: list[dict[str, Any]], fallback: str) -> str:
+    """取第一条非空反馈摘要作为根因假设，全为空时回退到 fallback。"""
     for item in evidence:
         text = str(item.get("summary") or item.get("reason") or "").strip()
         if text:
@@ -646,6 +687,7 @@ def _hypothesis(evidence: list[dict[str, Any]], fallback: str) -> str:
 
 
 def _evolution_http_error(status_code: int, code: str, message: str) -> HTTPException:
+    """构造带结构化 detail（code/message）的 HTTPException，供路由层直接抛出。"""
     return HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message},
@@ -653,6 +695,7 @@ def _evolution_http_error(status_code: int, code: str, message: str) -> HTTPExce
 
 
 def _risk_for_sop_diff(diff: list[dict[str, Any]]) -> str:
+    """按 diff 触碰的路径粗判 SOP 改动风险：动拓扑或能力引用即 high，只改节点为 medium。"""
     paths = [str(item.get("path") or "") for item in diff]
     if any(path.startswith(("/edges", "/nodes")) and path.count("/") <= 2 for path in paths):
         return "high"
@@ -664,6 +707,7 @@ def _risk_for_sop_diff(diff: list[dict[str, Any]]) -> str:
 
 
 def _json_diff(before: Any, after: Any, path: str = "") -> list[dict[str, Any]]:
+    """递归比较两段 JSON，按 JSON Pointer 路径返回 add/remove/replace 变更列表。"""
     if before == after:
         return []
     if isinstance(before, dict) and isinstance(after, dict):
@@ -692,4 +736,5 @@ def _json_diff(before: Any, after: Any, path: str = "") -> list[dict[str, Any]]:
 
 
 def _escape_pointer(value: str) -> str:
+    """按 RFC 6901 转义 JSON Pointer 键名里的 ``~`` 与 ``/``。"""
     return value.replace("~", "~0").replace("/", "~1")

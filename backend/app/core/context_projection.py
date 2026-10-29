@@ -17,6 +17,7 @@ def compact_knowledge_context(
     *,
     max_items: int = KNOWLEDGE_HISTORY_LIMIT,
 ) -> list[dict[str, Any]]:
+    """压缩检索历史:只保留最近 max_items 条知识结果,并投影掉大字段。"""
     if not isinstance(items, list):
         return []
     selected = [item for item in items if isinstance(item, dict)][-max(1, max_items) :]
@@ -25,6 +26,10 @@ def compact_knowledge_context(
 
 
 def compact_step_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """投影单步结果:把 knowledge_results 换成精简后的 retrieved_knowledge。
+
+    返回新字典,不修改入参,其余字段原样保留。
+    """
     projected = dict(payload)
     projected.pop("knowledge_results", None)
     projected["retrieved_knowledge"] = compact_knowledge_context(
@@ -38,6 +43,11 @@ def compact_conversation_context(
     *,
     token_budget: int | None = None,
 ) -> dict[str, object]:
+    """按 token 预算压缩对话上下文,超出预算时重建消息列表。
+
+    预算依次取 token_budget、metadata.token_budget、CONTROL_CONTEXT_TOKEN_BUDGET;
+    上下文非法时返回空上下文,未超预算则原样返回。
+    """
     metadata = context.get("metadata") if isinstance(context, dict) else None
     configured_budget = (
         int(metadata.get("token_budget") or 0)
@@ -69,6 +79,7 @@ def compact_current_step(
     content: dict[str, Any] | None,
     step_id: str | None,
 ) -> dict[str, Any] | None:
+    """投影当前步骤节点:按 step_id 匹配,缺省回落到 start_node_id;未命中返回 None。"""
     if not isinstance(content, dict):
         return None
     resolved_step_id = step_id or _optional_text(content.get("start_node_id"))
@@ -92,6 +103,10 @@ def compact_step_skill_context(
     name: str | None = None,
     description: str | None = None,
 ) -> dict[str, Any] | None:
+    """投影步骤技能上下文:当前步骤,以及沿出边可达的下一步骤与迁移条件。
+
+    step_id 缺省时取 start_node_id;当前步骤缺失时对应字段省略。
+    """
     if not isinstance(content, dict):
         return None
     current_step = compact_current_step(content, step_id)
@@ -127,6 +142,7 @@ def compact_step_skill_context(
 
 
 def compact_router_decision(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """投影路由决策:只保留决策、目标任务/步骤与意图等必要字段,全空时返回 None。"""
     if not isinstance(payload, dict):
         return None
     projected = _without_empty(
@@ -151,6 +167,7 @@ def compact_router_decision(payload: dict[str, Any] | None) -> dict[str, Any] | 
 def compact_step_router_decision(
     payload: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
+    """步骤级路由决策的精简投影:仅 decision 与截断到 300 字的 user_intent。"""
     if not isinstance(payload, dict):
         return None
     projected = _without_empty(
@@ -163,6 +180,7 @@ def compact_step_router_decision(
 
 
 def compact_response_step_result(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """回复步骤结果投影:保留回复、下一步与转人工等字段,全空时返回 None。"""
     projected = _without_empty(
         {
             key: payload.get(key)
@@ -173,6 +191,7 @@ def compact_response_step_result(payload: dict[str, Any]) -> dict[str, Any] | No
 
 
 def compact_citation_hints(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """投影引用提示:只保留展示用的标签、类型、标题与来源路径,丢弃空值。"""
     return [
         {
             key: item.get(key)
@@ -191,6 +210,7 @@ def compact_citation_hints(citations: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def compact_memory_context(items: list[dict[str, Any]] | None) -> str:
+    """把记忆条目渲染成以 "- " 开头的多行文本,单条截断到 1000 字并去重。"""
     if not isinstance(items, list):
         return ""
     lines: list[str] = []
@@ -204,6 +224,7 @@ def compact_memory_context(items: list[dict[str, Any]] | None) -> str:
 
 
 def compact_pending_tasks(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """投影待办任务:保留任务定位、槽位与意图摘要,丢弃全空条目。"""
     if not isinstance(items, list):
         return []
     tasks: list[dict[str, Any]] = []
@@ -234,6 +255,7 @@ def compact_deferred_intents(
     *,
     selected_task_id: str | None = None,
 ) -> list[str]:
+    """提取仍待处理的意图摘要,排除当前选中任务与非 pending 条目,并去重。"""
     if not isinstance(items, list):
         return []
     intents: list[str] = []
@@ -256,6 +278,7 @@ def compact_deferred_intents(
 
 
 def compact_awaiting_input(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """投影等待用户补充信息的上下文:技能/步骤、期望字段与问题摘要。"""
     if not isinstance(value, dict):
         return None
     projected = _without_empty(
@@ -270,6 +293,7 @@ def compact_awaiting_input(value: dict[str, Any] | None) -> dict[str, Any] | Non
 
 
 def _compact_knowledge_result(item: dict[str, Any]) -> dict[str, Any]:
+    """压缩单条知识检索结果:查询词截断到 500 字,命中内容交给 _compact_retrieved_knowledge。"""
     query = item.get("query")
     if isinstance(query, dict):
         query = query.get("query")
@@ -282,6 +306,10 @@ def _compact_knowledge_result(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_retrieved_knowledge(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """把知识来源候选压成带标签的精简条目,按身份去重并限制返回条数。
+
+    同组或含多个分块的结果放宽内容长度上限;字段全空的条目直接丢弃。
+    """
     candidates = []
     for value in knowledge_source_candidates(item):
         related_chunks = value.get("related_chunk_ids")
@@ -325,6 +353,7 @@ def _compact_retrieved_knowledge(item: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _skill_nodes(content: dict[str, Any]) -> list[dict[str, Any]]:
+    """取技能定义中的节点列表(优先 nodes,回落 steps),只保留字典项。"""
     value = content.get("nodes")
     if not isinstance(value, list):
         value = content.get("steps")
@@ -332,6 +361,7 @@ def _skill_nodes(content: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _project_node(node: dict[str, Any]) -> dict[str, Any]:
+    """把技能节点投影为提示词所需字段集合,并去掉空值。"""
     projected = {"node_id": node.get("node_id") or node.get("step_id")}
     projected.update(
         {
@@ -354,6 +384,7 @@ def _project_node(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_step_agent_node(node: dict[str, Any]) -> dict[str, Any]:
+    """投影步骤代理节点:节点标识、类型、指令、期望用户信息与可用能力。"""
     if not isinstance(node, dict):
         return {}
     return _without_empty(
@@ -370,6 +401,7 @@ def _project_step_agent_node(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_transition(edge: dict[str, Any]) -> dict[str, Any]:
+    """投影边上的迁移信息:仅保留条件与展示标签。"""
     return _without_empty(
         {
             key: edge.get(key)
@@ -382,6 +414,10 @@ def _project_transition(edge: dict[str, Any]) -> dict[str, Any]:
 
 
 def _short_text(value: object, limit: int) -> str:
+    """把任意值压成单行文本并截断到 limit 字符,超长时在空白处断开并补省略号。
+
+    若断点处正好是邮箱地址,则在该词结束后再截断,避免把邮箱切碎。
+    """
     text = " ".join(str(value or "").split())
     if len(text) <= limit:
         return text
@@ -397,11 +433,13 @@ def _short_text(value: object, limit: int) -> str:
 
 
 def _optional_text(value: object) -> str | None:
+    """把值转成去空白后的字符串;结果为空时返回 None。"""
     text = str(value or "").strip()
     return text or None
 
 
 def _without_empty(value: dict[str, Any]) -> dict[str, Any]:
+    """去掉 None、空串、空列表与空字典字段,其余键值原样保留。"""
     return {
         key: item
         for key, item in value.items()

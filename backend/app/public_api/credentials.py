@@ -25,6 +25,7 @@ from app.public_api.schemas import (
 router = APIRouter(tags=["credentials"])
 
 def _scope_allowed(granted: set[str], requested: str) -> bool:
+    """判断 client 已授予的 scope 集合能否覆盖某个请求的 scope（支持 * 与 x:* 通配）。"""
     return (
         "*" in granted
         or requested in granted
@@ -33,6 +34,7 @@ def _scope_allowed(granted: set[str], requested: str) -> bool:
 
 
 def _require_credentials_write(principal: PublicPrincipal) -> None:
+    """要求调用方具备 credentials:write 且持有租户级管理 key，否则抛对应 403 错误。"""
     if not principal.bootstrap_user and not principal.can("credentials:write"):
         raise PublicAPIError(403, "INSUFFICIENT_SCOPE", "credentials:write is required.")
     if not principal.bootstrap_user and principal.agent_id:
@@ -40,6 +42,7 @@ def _require_credentials_write(principal: PublicPrincipal) -> None:
 
 
 def _client_read(row: APIClient) -> APIClientRead:
+    """把 APIClient 行转成对外模型，JSON 列还原为 scopes 与 metadata。"""
     return APIClientRead(
         id=row.id,
         name=row.name,
@@ -53,6 +56,7 @@ def _client_read(row: APIClient) -> APIClientRead:
 
 
 def _credential_read(row: APICredential) -> APICredentialRead:
+    """把凭据行转成对外模型；key 只暴露前缀并截断为不可用于鉴权的形式。"""
     return APICredentialRead(
         id=row.id,
         client_id=row.client_id,
@@ -73,6 +77,7 @@ def list_api_clients(
     principal: PublicPrincipal = Depends(get_public_or_admin_principal),
     db: Session = Depends(get_session),
 ) -> list[APIClientRead]:
+    """列出当前租户的 API client，按创建时间倒序；仅租户管理 key 可访问。"""
     _require_credentials_write(principal)
     rows = db.exec(
         select(APIClient)
@@ -88,6 +93,7 @@ def create_api_client(
     principal: PublicPrincipal = Depends(get_public_or_admin_principal),
     db: Session = Depends(get_session),
 ) -> APIClientRead:
+    """创建 API client；同租户内名称必须唯一，重复时返回 409 API_CLIENT_EXISTS。"""
     _require_credentials_write(principal)
     existing = db.exec(
         select(APIClient).where(
@@ -118,6 +124,7 @@ def update_api_client(
     principal: PublicPrincipal = Depends(get_public_or_admin_principal),
     db: Session = Depends(get_session),
 ) -> APIClientRead:
+    """按需更新 API client 的名称、描述、scope、状态与 metadata；跨租户视为不存在。"""
     _require_credentials_write(principal)
     row = db.get(APIClient, client_id)
     if not row or row.tenant_id != principal.tenant_id:
@@ -146,6 +153,7 @@ def list_api_credentials(
     principal: PublicPrincipal = Depends(get_public_or_admin_principal),
     db: Session = Depends(get_session),
 ) -> list[APICredentialRead]:
+    """列出指定 client 下的全部凭据，不含明文 key，仅暴露前缀与状态。"""
     _require_credentials_write(principal)
     client = db.get(APIClient, client_id)
     if not client or client.tenant_id != principal.tenant_id:
@@ -169,6 +177,11 @@ def create_api_credential(
     principal: PublicPrincipal = Depends(get_public_or_admin_principal),
     db: Session = Depends(get_session),
 ) -> APICredentialCreated:
+    """签发新凭据并唯一一次返回明文 api_key。
+
+    凭据 scope 不得超出所属 client 的授权，否则报 SCOPE_ESCALATION；
+    绑定 agent 时只允许 AGENT_KEY_ALLOWED_SCOPES 内的子集。
+    """
     _require_credentials_write(principal)
     client = db.get(APIClient, client_id)
     if not client or client.tenant_id != principal.tenant_id:
@@ -207,6 +220,7 @@ def rotate_api_credential(
     principal: PublicPrincipal = Depends(get_public_or_admin_principal),
     db: Session = Depends(get_session),
 ) -> APICredentialCreated:
+    """轮换凭据：重新生成 key 并置为 active、清空吊销时间，同时返回新的明文 key。"""
     _require_credentials_write(principal)
     row = db.get(APICredential, credential_id)
     if not row or row.tenant_id != principal.tenant_id:
@@ -229,6 +243,7 @@ def revoke_api_credential(
     principal: PublicPrincipal = Depends(get_public_or_admin_principal),
     db: Session = Depends(get_session),
 ) -> APICredentialRead:
+    """吊销凭据：状态置为 revoked 并记录吊销时间，鉴权随即失效。"""
     _require_credentials_write(principal)
     row = db.get(APICredential, credential_id)
     if not row or row.tenant_id != principal.tenant_id:

@@ -5,6 +5,7 @@ from app.core.conversation_context import (
 
 
 def test_conversation_context_keeps_full_history_under_budget() -> None:
+    """验证未超出 token 预算时完整保留全部历史，且不触发压缩。"""
     messages = [
         {"role": "user", "content": "你好"},
         {"role": "assistant", "content": "您好"},
@@ -22,6 +23,7 @@ def test_conversation_context_keeps_full_history_under_budget() -> None:
 
 
 def test_conversation_context_compacts_only_after_budget_is_exceeded() -> None:
+    """验证超出预算后压缩历史，注入长期与近期摘要并把估算 token 控制在预算内。"""
     messages = [
         {"role": "user", "content": f"old user message {index} " + "x" * 80}
         if index % 2 == 0
@@ -42,6 +44,7 @@ def test_conversation_context_compacts_only_after_budget_is_exceeded() -> None:
 
 
 def test_context_rotates_medium_history_into_long_history_on_next_threshold() -> None:
+    """验证再次达到阈值时中期摘要滚入长期摘要，并累计压缩次数与当前轮时间。"""
     messages = [
         {
             "id": f"message_{index}",
@@ -54,6 +57,7 @@ def test_context_rotates_medium_history_into_long_history_on_next_threshold() ->
     summaries: list[tuple[str, str]] = []
 
     def summarize(label: str, source: str, _budget: int) -> str:
+        """记录摘要调用的标签与来源，并返回带标签的伪摘要。"""
         summaries.append((label, source))
         return f"{label}摘要：{source[:120]}"
 
@@ -97,6 +101,7 @@ def test_context_rotates_medium_history_into_long_history_on_next_threshold() ->
 
 
 def test_conversation_context_uses_runtime_compaction_settings() -> None:
+    """验证运行时压缩配置（触发比例、轮次上限、角色过滤、前缀与预算）全部生效。"""
     messages = [
         {
             "id": f"message_{index}",
@@ -108,6 +113,7 @@ def test_conversation_context_uses_runtime_compaction_settings() -> None:
     summary_budgets: list[int] = []
 
     def summarize(_label: str, source: str, budget: int) -> str:
+        """记录每次摘要的 token 预算，并原样返回来源文本。"""
         summary_budgets.append(budget)
         return source
 
@@ -143,6 +149,7 @@ def test_conversation_context_uses_runtime_compaction_settings() -> None:
 
 
 def test_conversation_context_compacts_assistant_only_history() -> None:
+    """验证历史只含 assistant 消息时同样压缩，并保留最近两轮原文。"""
     context = build_conversation_context(
         [
             {

@@ -31,6 +31,7 @@ from app.db.models import (
 
 
 def _test_engine():
+    """创建内存 SQLite 测试引擎(StaticPool)并建表,供各用例相互隔离地使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -70,6 +71,7 @@ def _seed_binding(engine, *, mounts: list[tuple[str, str, bool]] | None = None) 
 
 
 def _load_binding(engine, binding_id: str) -> ChannelBinding:
+    """读取绑定后立即脱离会话,便于在会话外把绑定对象传给待测函数。"""
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         db.expunge(binding)
@@ -77,6 +79,7 @@ def _load_binding(engine, binding_id: str) -> ChannelBinding:
 
 
 def _p2p_message(event_id: str, text: str) -> dict:
+    """构造一条私聊微信消息体,只包含路由逻辑关心的字段。"""
     return {
         "message_id": event_id,
         "from_user_id": "user_ab12cd34@im.wechat",
@@ -91,6 +94,7 @@ def _p2p_message(event_id: str, text: str) -> dict:
 
 
 def _group_message(event_id: str, text: str, group_id: str = "room_123456") -> dict:
+    """在私聊消息基础上补 group_id 与群会话标识,构造群聊消息体。"""
     msg = _p2p_message(event_id, text)
     msg["group_id"] = group_id
     msg["session_id"] = group_id
@@ -98,12 +102,15 @@ def _group_message(event_id: str, text: str, group_id: str = "room_123456") -> d
 
 
 class RecordingAgentLoop:
+    """记录调用并落库问答消息的假 AgentLoop,用于断言消息被路由到哪个员工会话。"""
     calls: list = []
 
     def __init__(self, db, *, event_sink=None):
+        """保存注入的数据库会话,并忽略事件回调参数。"""
         self.db = db
 
     def handle_turn(self, request):
+        """记录本轮请求并向库中写入用户、助手两条消息,模拟一轮完整对话。"""
         type(self).calls.append(request)
         self.db.add(
             Message(
@@ -130,6 +137,7 @@ class RecordingAgentLoop:
 
 @pytest.fixture(autouse=True)
 def _fake_agent_loop(monkeypatch):
+    """用例级自动 fixture:清空调用记录、用录制实现替换 AgentLoop,并屏蔽「正在输入」上报。"""
     RecordingAgentLoop.calls = []
     monkeypatch.setattr(agent_loop_module, "AgentLoop", RecordingAgentLoop)
     monkeypatch.setattr(intake_module, "_send_wechat_typing", lambda *args, **kwargs: None)
@@ -140,6 +148,7 @@ def _fake_agent_loop(monkeypatch):
 
 
 def test_parse_command_non_command() -> None:
+    """验证非斜杠开头的普通文本(含空串、空白与句中斜杠)不解析为指令。"""
     assert parse_command("你好") is None
     assert parse_command("") is None
     assert parse_command("  ") is None
@@ -147,12 +156,14 @@ def test_parse_command_non_command() -> None:
 
 
 def test_parse_command_list() -> None:
+    """验证 /员工、/list 及大小写与首尾空白变体都解析为列表指令。"""
     assert parse_command("/员工").kind == "list"
     assert parse_command("/list").kind == "list"
     assert parse_command("  /LIST  ").kind == "list"
 
 
 def test_parse_command_current_and_help() -> None:
+    """验证当前、帮助及全角问号等别名映射到正确的指令类型。"""
     assert parse_command("/当前").kind == "current"
     assert parse_command("/帮助").kind == "help"
     assert parse_command("/?").kind == "help"
@@ -160,6 +171,7 @@ def test_parse_command_current_and_help() -> None:
 
 
 def test_parse_command_switch() -> None:
+    """验证 /切换 带参数、直接以员工名调用、空参数三种切换形态。"""
     cmd = parse_command("/切换 财务")
     assert cmd.kind == "switch" and cmd.query == "财务"
     direct = parse_command("/财务")
@@ -169,6 +181,7 @@ def test_parse_command_switch() -> None:
 
 
 def test_parse_command_unknown_slash_goes_help() -> None:
+    """验证未知斜杠指令与单个斜杠都回退为帮助指令。"""
     assert parse_command("/foo bar").kind == "help"
     assert parse_command("/").kind == "help"
 
@@ -177,6 +190,7 @@ def test_parse_command_unknown_slash_goes_help() -> None:
 
 
 def test_mounted_agents_legacy_fallback() -> None:
+    """验证无挂载行的存量绑定回退为 binding.agent_id 对应的单个默认员工。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)  # 无挂载行
     with Session(engine) as db:
@@ -187,6 +201,7 @@ def test_mounted_agents_legacy_fallback() -> None:
 
 
 def test_mounted_agents_ordering() -> None:
+    """验证挂载集按 sort_order 返回,顺序不因是否默认而改变。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, mounts=[("agent_cw", "财务", False), ("agent_xz", "行政", True)])
     with Session(engine) as db:
@@ -228,6 +243,7 @@ def test_mounted_agents_all_deleted_falls_back_to_binding_default() -> None:
 
 
 def test_resolve_current_agent_creates_pointer_at_default() -> None:
+    """验证会话无指针时按默认员工建指针,且不报告指针被重置。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, mounts=[("agent_xz", "行政", True), ("agent_cw", "财务", False)])
     with Session(engine) as db:
@@ -241,6 +257,7 @@ def test_resolve_current_agent_creates_pointer_at_default() -> None:
 
 
 def test_resolve_current_agent_resets_when_unmounted() -> None:
+    """验证指针指向已下线员工时回退默认员工,并返回重置标记。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, mounts=[("agent_xz", "行政", True), ("agent_cw", "财务", False)])
     with Session(engine) as db:
@@ -263,6 +280,7 @@ def test_resolve_current_agent_resets_when_unmounted() -> None:
 
 
 def _command_setup(engine):
+    """准备带两个挂载员工的绑定对象并脱离会话,供指令执行用例复用。"""
     binding_id = _seed_binding(
         engine, mounts=[("agent_xz", "行政", True), ("agent_cw", "财务", False)]
     )
@@ -273,6 +291,7 @@ def _command_setup(engine):
 
 
 def test_run_command_list_marks_default_and_current() -> None:
+    """验证列表回复按挂载顺序编号,并标出默认与当前员工。"""
     engine = _test_engine()
     binding = _command_setup(engine)
     with Session(engine) as db:
@@ -284,6 +303,7 @@ def test_run_command_list_marks_default_and_current() -> None:
 
 
 def test_run_command_switch_and_current() -> None:
+    """验证切换会改写指针、当前指令回显名称,重复切换提示已是当前员工。"""
     engine = _test_engine()
     binding = _command_setup(engine)
     with Session(engine) as db:
@@ -301,6 +321,7 @@ def test_run_command_switch_and_current() -> None:
 
 
 def test_run_command_switch_unknown_and_empty() -> None:
+    """验证切换到不存在的员工给出未找到提示,缺参数时返回用法说明。"""
     engine = _test_engine()
     binding = _command_setup(engine)
     with Session(engine) as db:
@@ -311,6 +332,7 @@ def test_run_command_switch_unknown_and_empty() -> None:
 
 
 def test_run_command_help() -> None:
+    """验证帮助指令返回统一的 HELP_TEXT 文案。"""
     engine = _test_engine()
     binding = _command_setup(engine)
     with Session(engine) as db:
@@ -322,6 +344,7 @@ def test_run_command_help() -> None:
     [("wechat", "微信"), ("wecom", "企业微信"), ("feishu", "飞书")],
 )
 def test_help_text_uses_actual_channel_name(channel: str, label: str) -> None:
+    """验证帮助文案按渠道替换为微信、企业微信、飞书等真实渠道名。"""
     text = help_text(channel)
     assert f"把{label}账号绑定到你的 StaffDeck 账号" in text
     assert f"解除{label}账号与 StaffDeck 账号的绑定" in text
@@ -331,6 +354,7 @@ def test_help_text_uses_actual_channel_name(channel: str, label: str) -> None:
 
 
 def _notices(engine) -> list[ChannelDelivery]:
+    """取出全部 notice 类型的渠道投递记录,用于断言指令回复走了出站队列。"""
     with Session(engine) as db:
         return db.exec(
             select(ChannelDelivery).where(ChannelDelivery.kind == "notice")
@@ -338,6 +362,7 @@ def _notices(engine) -> list[ChannelDelivery]:
 
 
 def test_command_message_creates_no_session_and_notices_via_outbox() -> None:
+    """验证指令消息不建会话、不进 AgentLoop,只把回复投递到出站队列。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, mounts=[("agent_xz", "行政", True), ("agent_cw", "财务", False)])
     binding = _load_binding(engine, binding_id)
@@ -358,6 +383,7 @@ def test_command_message_creates_no_session_and_notices_via_outbox() -> None:
 
 
 def test_switch_then_next_message_routes_to_new_agent_session() -> None:
+    """验证切换后消息路由到新员工会话,切回时复用原会话且上下文独立。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, mounts=[("agent_xz", "行政", True), ("agent_cw", "财务", False)])
     binding = _load_binding(engine, binding_id)
@@ -391,6 +417,7 @@ def test_switch_then_next_message_routes_to_new_agent_session() -> None:
 
 
 def test_group_pointer_independent_from_p2p() -> None:
+    """验证群聊与私聊、以及不同群之间的当前员工指针互不影响。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, mounts=[("agent_xz", "行政", True), ("agent_cw", "财务", False)])
     binding = _load_binding(engine, binding_id)
@@ -410,6 +437,7 @@ def test_group_pointer_independent_from_p2p() -> None:
 
 
 def test_legacy_binding_routes_to_binding_default_agent() -> None:
+    """验证无挂载行的存量绑定把消息路由到 binding.agent_id 指定的员工。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)  # 无挂载行(存量 v1 绑定)
     binding = _load_binding(engine, binding_id)
@@ -419,6 +447,7 @@ def test_legacy_binding_routes_to_binding_default_agent() -> None:
 
 
 def test_pointer_reset_notice_when_agent_unmounted() -> None:
+    """验证当前员工被移出挂载集后回退默认员工,并推送已下线提示。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, mounts=[("agent_xz", "行政", True), ("agent_cw", "财务", False)])
     binding = _load_binding(engine, binding_id)
@@ -442,6 +471,7 @@ def test_pointer_reset_notice_when_agent_unmounted() -> None:
 
 
 def test_agent_names_lookup() -> None:
+    """验证批量查询员工名称时忽略不存在或已删除的员工。"""
     engine = _test_engine()
     _seed_binding(engine)
     with Session(engine) as db:
@@ -453,6 +483,7 @@ def test_agent_names_lookup() -> None:
 
 
 def test_staging_prefers_channel_binding_id() -> None:
+    """验证会话自带 channel_binding_id 时,投递记录直接绑定该绑定。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -496,6 +527,7 @@ def test_staging_prefers_channel_binding_id() -> None:
 
 
 def test_staging_fallback_without_channel_binding_id() -> None:
+    """验证会话缺 channel_binding_id 时按账号键回退查找绑定并补写回去。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -536,6 +568,7 @@ def test_staging_fallback_without_channel_binding_id() -> None:
 
 
 def test_staging_skips_when_binding_id_points_to_disabled() -> None:
+    """验证绑定已禁用时投递记录直接标记失败并写明原因。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -574,6 +607,7 @@ def test_staging_skips_when_binding_id_points_to_disabled() -> None:
 
 
 def _make_agents_client(engine):
+    """搭建只挂载企业员工路由的测试客户端,并覆盖请求级数据库会话依赖。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -584,6 +618,7 @@ def _make_agents_client(engine):
     app.include_router(agents_api.enterprise_router)
 
     def override_get_session():
+        """用测试引擎提供本次请求的数据库会话。"""
         with Session(engine) as session:
             yield session
 
@@ -689,6 +724,7 @@ def test_delete_agent_last_mount_keeps_binding_agent() -> None:
 
 
 def test_binding_agents_backfill_is_idempotent(monkeypatch, tmp_path) -> None:
+    """验证存量绑定回填挂载行的迁移只执行一次,重复调用不再插入。"""
     from sqlalchemy import text as sa_text
 
     from app.db import database
@@ -733,6 +769,7 @@ def test_binding_agents_backfill_is_idempotent(monkeypatch, tmp_path) -> None:
 
 
 def _make_api_client(engine):
+    """搭建只挂载渠道管理路由的测试客户端,并覆盖请求级数据库会话依赖。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -743,6 +780,7 @@ def _make_api_client(engine):
     app.include_router(channels_api.router)
 
     def override_get_session():
+        """用测试引擎提供本次请求的数据库会话。"""
         with Session(engine) as session:
             yield session
 
@@ -751,6 +789,7 @@ def _make_api_client(engine):
 
 
 def _seed_api_users(engine) -> dict[str, User]:
+    """写入租户、owner 与 other 两个用户及三个员工,返回可跨会话使用的用户对象。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         owner = User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x")
@@ -774,12 +813,14 @@ def _seed_api_users(engine) -> dict[str, User]:
 
 
 def _auth(user: User) -> dict[str, str]:
+    """为该用户签发访问令牌并组装 Bearer 鉴权头。"""
     from app.security.auth import create_access_token
 
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
 def test_post_binding_auto_mounts_default_agent() -> None:
+    """验证创建绑定会自动写入默认员工挂载行,并在查询接口回显员工名称。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     client = _make_api_client(engine)
@@ -806,6 +847,7 @@ def test_post_binding_auto_mounts_default_agent() -> None:
 
 
 def test_get_agents_legacy_fallback() -> None:
+    """验证存量绑定无挂载行时,查询接口按 binding.agent_id 回退返回默认员工。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     with Session(engine) as db:
@@ -830,6 +872,7 @@ def test_get_agents_legacy_fallback() -> None:
 
 
 def test_put_agents_replaces_mounts_and_normalizes_default() -> None:
+    """验证整表替换挂载集,未标或多标默认时归一为唯一默认并同步绑定员工。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     with Session(engine) as db:
@@ -885,6 +928,7 @@ def test_put_agents_replaces_mounts_and_normalizes_default() -> None:
 
 
 def test_put_agents_validations() -> None:
+    """验证非管理者 403、空列表 400、未知员工 404、重复员工 400。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     with Session(engine) as db:

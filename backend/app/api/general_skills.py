@@ -93,10 +93,12 @@ LOCAL_REFERENCE_PATTERN = re.compile(r"(?<![\w./-])(?:\./)?references/[^\s`'\"<>
 
 
 def _agent_id_or_none(agent_id: object | None) -> str | None:
+    """把可选的 agent_id 归一化：仅保留非空字符串，其余返回 None。"""
     return agent_id if isinstance(agent_id, str) and agent_id else None
 
 
 def general_skill_read(row: GeneralSkill, status_override: str | None = None) -> GeneralSkillRead:
+    """把 GeneralSkill 行转换为对外响应模型，可覆盖展示状态（如 Agent 作用域内的发布态）。"""
     return GeneralSkillRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -125,6 +127,11 @@ def import_general_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> GeneralSkillRead:
+    """按 slug 新增或更新通用技能，并维护开放画廊 / Agent 私有绑定。
+
+    Agent 私有作用域下，画廊技能或他人私有技能会被复制成新 slug 后重建，
+    原技能行保留；仅替换 markdown 时只改包内 SKILL.md，其余文件原样保留。
+    """
     ensure_tenant(db, request.tenant_id)
     files = _normalize_skill_files(request.files, request.markdown)
     markdown = _skill_markdown_from_files(files)
@@ -324,6 +331,7 @@ def import_skillhub_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> GeneralSkillRead:
+    """从开源平台来源加载技能包并创建租户内新技能，slug 冲突时自动去重。"""
     ensure_tenant(db, request.tenant_id)
     raw_files = _load_clawhub_source(request.source)
     files = _normalize_skill_files(raw_files, None)
@@ -349,6 +357,7 @@ def import_clawhub_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> GeneralSkillRead:
+    """ClawHub 旧端点别名，复用 SkillHub 导入逻辑以保持兼容。"""
     return import_skillhub_skill(request, db, current_user)
 
 
@@ -358,6 +367,7 @@ def import_general_skill_package(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> GeneralSkillRead:
+    """导入上传的 .zip 或 Markdown 技能包并创建新技能。"""
     ensure_tenant(db, request.tenant_id)
     filename = _clean_source_filename(request.filename)
     data = _decode_base64_payload(request.content_base64)
@@ -409,6 +419,10 @@ def _create_imported_general_skill(
     capability_scope: str = "general",
     current_user: object | None = None,
 ) -> GeneralSkillRead:
+    """为远端或上传的包创建技能行与绑定，返回新技能视图。
+
+    名称、slug、描述缺失时依次回退到 front matter 元数据与来源推导值。
+    """
     _validate_skill_package_references(files)
     markdown = _skill_markdown_from_files(files)
     metadata = _parse_skill_metadata(markdown)
@@ -495,6 +509,7 @@ def list_general_skills(
     db: Session = Depends(get_session),
     agent_id: str | None = Query(None),
 ) -> list[GeneralSkillRead]:
+    """列出技能：非 overall Agent 只看自己可见的绑定，其余只返回开放画廊技能。"""
     ensure_tenant(db, tenant_id)
     agent_id = _agent_id_or_none(agent_id)
     agent = get_agent(db, tenant_id, agent_id)
@@ -557,6 +572,7 @@ def get_general_skill(
     db: Session = Depends(get_session),
     agent_id: str | None = Query(None),
 ) -> GeneralSkillRead:
+    """按 slug 取单个技能，校验可见性后返回。"""
     row = _get_general_skill(db, tenant_id, slug)
     _ensure_general_skill_visible(db, tenant_id, row, agent_id)
     return general_skill_read(row)
@@ -570,6 +586,7 @@ def publish_general_skill(
     agent_id: str | None = Query(None),
     current_user: User = Depends(get_current_user),
 ) -> GeneralSkillRead:
+    """发布技能：Agent 作用域内只激活该 Agent 的绑定，开放画廊则改全局状态并重建绑定。"""
     row = _get_general_skill(db, tenant_id, slug)
     agent_id = _agent_id_or_none(agent_id)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
@@ -613,6 +630,7 @@ def archive_general_skill(
     agent_id: str | None = Query(None),
     current_user: User = Depends(get_current_user),
 ) -> GeneralSkillRead:
+    """归档技能：Agent 作用域内只停用绑定，开放画廊则把全局状态置为 archived。"""
     row = _get_general_skill(db, tenant_id, slug)
     agent_id = _agent_id_or_none(agent_id)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
@@ -642,7 +660,7 @@ def publish_general_skill_to_gallery(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> GeneralSkillRead:
-    """Promote an agent-private skill to the tenant's open gallery."""
+    """把 Agent 私有技能提升到租户开放画廊，仅技能所有者可操作。"""
     row = _get_general_skill(db, tenant_id, slug)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent is None or agent.is_overall:
@@ -679,6 +697,7 @@ def delete_general_skill(
     agent_id: str | None = Query(None),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """删除或隐藏技能：Agent 绑定与开放画廊收录都只隐藏，画廊管理员才真正删除技能行。"""
     agent_id = _agent_id_or_none(agent_id)
     row = _get_general_skill(db, tenant_id, slug)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
@@ -711,6 +730,7 @@ def run_general_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> GeneralSkillRunResponse:
+    """同步执行已发布技能：校验可见性与模型配置后返回运行结果。"""
     skill = _get_general_skill(db, request.tenant_id, slug)
     if skill.status != "published":
         raise HTTPException(status_code=400, detail="General skill is not published")
@@ -733,6 +753,10 @@ def run_general_skill_stream(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    """以 SSE 流式执行技能：read 直接返回，execute 走 Harness v2 并回放 trace。
+
+    轮询持久化 AgentEvent 推送 trace；收到终态事件或空闲超时即结束。
+    """
     skill = _get_general_skill(db, request.tenant_id, slug)
     if skill.status != "published":
         raise HTTPException(status_code=400, detail="General skill is not published")
@@ -746,6 +770,7 @@ def run_general_skill_stream(
         model_config = _get_request_model(db, request.tenant_id, request.model_config_id)
 
         def read_stream_events() -> Iterator[str]:
+            """把同步 read 结果包装成单条 complete SSE 事件流。"""
             response = _run_general_skill_operation(
                 skill_snapshot,
                 request,
@@ -783,9 +808,11 @@ def run_general_skill_stream(
     )
 
     def stream_events() -> Iterator[str]:
+        """启动后台 worker 执行对话轮次，同时轮询事件表并推送 SSE。"""
         terminal: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
 
         def worker() -> None:
+            """在独立会话中执行一轮 AgentLoop，并把终态结果放入队列。"""
             try:
                 with Session(engine) as worker_db:
                     response = AgentLoop(worker_db).handle_turn(harness_request)
@@ -886,6 +913,7 @@ def _skill_debug_events_after(
     session_id: str,
     cursor: tuple[object, str] | None,
 ) -> list[AgentEvent]:
+    """按 (created_at, id) 游标增量读取该会话的调试事件，最多 200 条。"""
     statement = select(AgentEvent).where(
         AgentEvent.tenant_id == tenant_id,
         AgentEvent.session_id == session_id,
@@ -903,6 +931,7 @@ def _skill_debug_events_after(
 
 
 def _skill_debug_trace(row: AgentEvent) -> dict[str, object]:
+    """把 AgentEvent 整理为 trace 事件负载，缺失字段回退到事件类型与文本。"""
     payload = dict(row.payload_json or {})
     phase = str(payload.get("phase") or row.event_type)
     message = str(payload.get("text") or payload.get("message") or phase)
@@ -921,6 +950,7 @@ def _harness_skill_run_response(
     response: ChatTurnResponse,
     assistant_metadata: dict[str, object],
 ) -> GeneralSkillRunResponse:
+    """把 Harness v2 的对话轮次结果转换为技能执行响应，错误码映射为 success 与 stderr。"""
     citations = assistant_metadata.get("knowledge_citations")
     artifacts = assistant_metadata.get("harness_artifacts")
     success = not bool(response.runtime_error_code)
@@ -952,6 +982,7 @@ def _run_general_skill_operation(
     user_id: str,
     event_sink: Callable[[dict[str, object]], None] | None = None,
 ) -> GeneralSkillRunResponse:
+    """按 operation 分派到 GeneralSkillReader 或 GeneralSkillRunner，并透传事件回调。"""
     if request.operation == "read":
         response = GeneralSkillReader().read(skill, request.query, model_config)
         if event_sink is not None:
@@ -969,6 +1000,7 @@ def _run_general_skill_operation(
 
 
 def _get_general_skill(db: Session, tenant_id: str, slug: str) -> GeneralSkill:
+    """按租户与 slug 取技能行，不存在时抛 404。"""
     ensure_tenant(db, tenant_id)
     row = db.exec(
         select(GeneralSkill).where(GeneralSkill.tenant_id == tenant_id, GeneralSkill.slug == slug)
@@ -981,6 +1013,7 @@ def _get_general_skill(db: Session, tenant_id: str, slug: str) -> GeneralSkill:
 def _private_skill_owned_by_agent(
     db: Session, tenant_id: str, row: GeneralSkill, agent_id: str
 ) -> bool:
+    """判断技能是否私有属于该 Agent：技能行或绑定元数据命中 owner 即成立。"""
     metadata = row.metadata_json or {}
     if metadata.get("owner_agent_id") == agent_id and metadata.get("scope") == "agent_private":
         return True
@@ -1006,6 +1039,7 @@ def _ensure_general_skill_visible(
     row: GeneralSkill,
     agent_id: str | None,
 ) -> None:
+    """校验技能对该 Agent 作用域可见（overall 看画廊收录，私有看绑定），否则抛 404。"""
     agent = get_agent(db, tenant_id, _agent_id_or_none(agent_id))
     if not agent or agent.is_overall:
         if is_open_gallery_resource(db, tenant_id, "general_skill", row):
@@ -1032,6 +1066,7 @@ def _ensure_general_skill_binding(
     general_skill_id: str,
     metadata_json: dict[str, object] | None = None,
 ) -> AgentResourceBinding:
+    """取该 Agent 的技能绑定，不存在则新建，并写入私有归属元数据。"""
     row = db.exec(
         select(AgentResourceBinding).where(
             AgentResourceBinding.tenant_id == tenant_id,
@@ -1073,6 +1108,7 @@ def _ensure_general_skill_binding(
 def _general_skill_editable_by_agent(
     db: Session, tenant_id: str, agent_id: str, row: GeneralSkill
 ) -> bool:
+    """判断 Agent 能否编辑该技能：需私有归属且未被开放画廊收录。"""
     metadata = row.metadata_json or {}
     if metadata.get("owner_agent_id") == agent_id and metadata.get("scope") == "agent_private":
         return True
@@ -1093,6 +1129,7 @@ def _general_skill_editable_by_agent(
 
 
 def _get_default_model(db: Session, tenant_id: str) -> ModelConfig:
+    """取租户默认且启用的模型配置，缺失时抛 400。"""
     model_config = db.exec(
         select(ModelConfig).where(
             ModelConfig.tenant_id == tenant_id,
@@ -1108,6 +1145,7 @@ def _get_default_model(db: Session, tenant_id: str) -> ModelConfig:
 def _get_request_model(
     db: Session, tenant_id: str, model_config_id: str | None = None
 ) -> ModelConfig:
+    """解析请求指定的模型配置；未指定时回退到租户默认模型。"""
     if not model_config_id:
         return _get_default_model(db, tenant_id)
     model_config = db.get(ModelConfig, model_config_id)
@@ -1117,14 +1155,17 @@ def _get_request_model(
 
 
 def _general_skill_snapshot(row: GeneralSkill) -> GeneralSkillRuntimeSnapshot:
+    """生成技能运行期快照，作为 reader/runner 的只读输入。"""
     return local_runtime_snapshot(row)
 
 
 def _model_runtime_config(db: Session, tenant_id: str, row: ModelConfig):
+    """解析可用于运行时的模型配置副本（含运行时字段）。"""
     return resolve_model_config_for_runtime(db, tenant_id, row.id)
 
 
 def _required_text(value: str | None, field: str) -> str:
+    """去除首尾空白并校验非空，空值时抛出带字段名的 400。"""
     cleaned = (value or "").strip()
     if not cleaned:
         raise HTTPException(status_code=400, detail=f"General skill {field} cannot be empty")
@@ -1132,6 +1173,7 @@ def _required_text(value: str | None, field: str) -> str:
 
 
 def _optional_text(value: str | None) -> str | None:
+    """去除首尾空白，空字符串归一化为 None。"""
     cleaned = (value or "").strip()
     return cleaned or None
 
@@ -1140,6 +1182,10 @@ def _normalize_skill_files(
     requested_files: list[GeneralSkillFile],
     markdown: str | None,
 ) -> list[GeneralSkillFile]:
+    """归一化技能包文件：清理路径，缺省时用 markdown 生成 SKILL.md。
+
+    当 SKILL.md 位于子目录时剥离该前缀，使返回路径相对技能根目录。
+    """
     if not requested_files:
         content = _required_text(markdown, "markdown")
         return [
@@ -1176,6 +1222,7 @@ def _replace_skill_markdown_in_package(
     row: GeneralSkill,
     markdown: str,
 ) -> list[GeneralSkillFile]:
+    """仅替换包内 SKILL.md 的正文，其余文件保持不变。"""
     existing = [
         GeneralSkillFile.model_validate(item) for item in _skill_files_or_markdown(row)
     ]
@@ -1199,6 +1246,10 @@ def _replace_skill_markdown_in_package(
 
 
 def _validate_skill_package_references(files: list[GeneralSkillFile]) -> None:
+    """校验 SKILL.md 中引用的 references/ 文件都存在于包内。
+
+    跳过通配符写法；有缺失时以 400 列出全部缺失路径。
+    """
     skill_file = _find_skill_file(files)
     if skill_file is None:
         return
@@ -1228,6 +1279,7 @@ def _skill_directories_from_values(
     values: list[str],
     files: list[GeneralSkillFile],
 ) -> list[str]:
+    """规范化并去重目录声明，同时拒绝与包内文件路径冲突的目录。"""
     file_paths = {file.path for file in files}
     directories: list[str] = []
     seen: set[str] = set()
@@ -1245,6 +1297,7 @@ def _skill_directories_from_values(
 
 
 def _skill_directories(row: GeneralSkill) -> list[str]:
+    """从技能行元数据读取目录声明；非法值静默降级为空列表。"""
     metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
     values = metadata.get("skill_directories")
     if not isinstance(values, list):
@@ -1258,6 +1311,7 @@ def _skill_directories(row: GeneralSkill) -> list[str]:
 
 
 def _clean_package_path(path: str) -> str:
+    """规范化包内相对路径，拒绝空路径和含 .. 的越界路径。"""
     cleaned = str(path or "").replace("\\", "/").strip().strip("/")
     parts = [part for part in cleaned.split("/") if part not in {"", "."}]
     if not parts or any(part == ".." for part in parts):
@@ -1266,12 +1320,14 @@ def _clean_package_path(path: str) -> str:
 
 
 def _find_skill_file(files: list[GeneralSkillFile]) -> GeneralSkillFile | None:
+    """返回包内的 SKILL.md（文件名大小写不敏感），没有则返回 None。"""
     return next(
         (file for file in files if file.path.rsplit("/", 1)[-1].lower() == "skill.md"), None
     )
 
 
 def _skill_markdown_from_files(files: list[GeneralSkillFile]) -> str:
+    """取 SKILL.md 正文，缺失或为空白时抛 400。"""
     skill_file = _find_skill_file(files)
     if not skill_file or not skill_file.content.strip():
         raise HTTPException(status_code=400, detail="General skill SKILL.md cannot be empty")
@@ -1279,6 +1335,7 @@ def _skill_markdown_from_files(files: list[GeneralSkillFile]) -> str:
 
 
 def _skill_files_or_markdown(row: GeneralSkill) -> list[dict[str, object]]:
+    """返回行的文件列表；旧数据只有 markdown 时合成为单个 SKILL.md。"""
     files = row.skill_files_json or []
     if files:
         return files
@@ -1292,6 +1349,7 @@ def _skill_files_or_markdown(row: GeneralSkill) -> list[dict[str, object]]:
 
 
 def _parse_skill_metadata(markdown: str) -> dict[str, object]:
+    """解析 SKILL.md 顶部 front matter 的简单键值元数据，无 front matter 返回空字典。"""
     lines = markdown.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
@@ -1311,6 +1369,7 @@ def _parse_skill_metadata(markdown: str) -> dict[str, object]:
 
 
 def _parse_metadata_value(value: str) -> object:
+    """把 front matter 原始值解析为字符串或方括号内的字符串列表。"""
     cleaned = value.strip().strip("'\"")
     if cleaned.startswith("[") and cleaned.endswith("]"):
         return [item.strip().strip("'\"") for item in cleaned[1:-1].split(",") if item.strip()]
@@ -1318,6 +1377,7 @@ def _parse_metadata_value(value: str) -> object:
 
 
 def _metadata_text(metadata: dict[str, object], *keys: str) -> str | None:
+    """按给定键顺序返回首个非空字符串元数据值。"""
     for key in keys:
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
@@ -1326,11 +1386,13 @@ def _metadata_text(metadata: dict[str, object], *keys: str) -> str | None:
 
 
 def _slugify(value: str) -> str:
+    """把名称转换为小写、仅含字母数字下划线与连字符的 slug，空结果回退默认值。"""
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip().lower()).strip("-_")
     return slug or "general-skill"
 
 
 def _unique_slug(db: Session, tenant_id: str, base_slug: str) -> str:
+    """在租户内生成唯一 slug，冲突时追加 -2、-3 等递增后缀。"""
     base = _slugify(base_slug)
     candidate = base
     suffix = 2
@@ -1345,6 +1407,7 @@ def _unique_slug(db: Session, tenant_id: str, base_slug: str) -> str:
 
 
 def _source_name(source: str) -> str:
+    """从导入来源（URL 或 upload: 标记）推导技能显示名。"""
     parsed = urlparse(source)
     path = parsed.path if parsed.scheme else source
     cleaned = path.rstrip("/").rsplit("/", 1)[-1].removesuffix(".zip").removesuffix(".md")
@@ -1354,6 +1417,7 @@ def _source_name(source: str) -> str:
 
 
 def _clean_source_filename(filename: str) -> str:
+    """取上传文件名的基名，空值抛 400。"""
     cleaned = str(filename or "").replace("\\", "/").strip().rsplit("/", 1)[-1]
     if not cleaned:
         raise HTTPException(status_code=400, detail="Uploaded skill package filename is required")
@@ -1361,6 +1425,7 @@ def _clean_source_filename(filename: str) -> str:
 
 
 def _decode_base64_payload(value: str) -> bytes:
+    """解码 base64 上传内容（支持 data URL 前缀），校验非空与包体积上限。"""
     cleaned = str(value or "").strip()
     if not cleaned:
         raise HTTPException(status_code=400, detail="Uploaded skill package content is required")
@@ -1380,6 +1445,10 @@ def _decode_base64_payload(value: str) -> bytes:
 
 
 def _load_clawhub_source(source: str) -> list[GeneralSkillFile]:
+    """把来源字符串分派到对应加载方式：平台 slug、GitHub 简写、zip 或 Markdown URL。
+
+    无法识别的来源抛 400。
+    """
     cleaned = _required_text(source, "source")
     clawhub_slug = _clawhub_slug_from_source(cleaned)
     if clawhub_slug:
@@ -1396,6 +1465,7 @@ def _load_clawhub_source(source: str) -> list[GeneralSkillFile]:
 
 
 def _clawhub_slug_from_source(source: str) -> str | None:
+    """从来源字符串识别开源平台 slug，非平台来源返回 None。"""
     cleaned = source.strip()
     if not cleaned:
         return None
@@ -1417,6 +1487,7 @@ def _clawhub_slug_from_source(source: str) -> str | None:
 
 
 def _valid_clawhub_slug(value: str) -> str | None:
+    """校验平台 slug 格式（去掉 .zip/.md 后缀），不合法返回 None。"""
     slug = value.strip().removesuffix(".zip").removesuffix(".md")
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{1,127}", slug):
         return slug
@@ -1424,6 +1495,7 @@ def _valid_clawhub_slug(value: str) -> str | None:
 
 
 def _clawhub_homepage_from_source(source: str) -> str | None:
+    """推导平台首页：平台域名 URL 原样返回，slug 则拼成 skillhub 链接。"""
     cleaned = source.strip()
     parsed = urlparse(cleaned)
     if parsed.scheme and parsed.netloc in REMOTE_SKILLHUB_HOSTS:
@@ -1435,10 +1507,12 @@ def _clawhub_homepage_from_source(source: str) -> str | None:
 
 
 def _clawhub_download_url(slug: str) -> str:
+    """拼出平台下载端点 URL，slug 做 URL 编码。"""
     return f"{CLAWHUB_DOWNLOAD_ENDPOINT}?slug={quote(slug, safe='')}"
 
 
 def _load_clawhub_skill_package(slug: str, source_url: str | None = None) -> list[GeneralSkillFile]:
+    """优先走平台下载端点；失败且给了源页面 URL 时回退抓取该页面。"""
     download_url = _clawhub_download_url(slug)
     try:
         return _load_remote_skill_source(download_url)
@@ -1452,10 +1526,15 @@ def _load_clawhub_skill_package(slug: str, source_url: str | None = None) -> lis
 
 
 def _looks_like_github_shorthand(value: str) -> bool:
+    """判断字符串是否形如 owner/repo[/path] 的 GitHub 简写。"""
     return bool(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/.+)?", value.strip()))
 
 
 def _load_remote_skill_source(url: str, visited: set[str] | None = None) -> list[GeneralSkillFile]:
+    """按 URL 类型加载远端技能包：zip、GitHub 目录/文件或原始 Markdown。
+
+    visited 记录已访问 URL，最多 5 次跳转，避免重定向成环。
+    """
     normalized_url = url.strip()
     parsed = urlparse(normalized_url)
     if not parsed.scheme or not parsed.netloc:
@@ -1505,6 +1584,10 @@ def _load_remote_skill_source(url: str, visited: set[str] | None = None) -> list
 
 
 def _load_github_skill_source(parsed) -> list[GeneralSkillFile]:
+    """解析 GitHub URL 并加载技能：raw 文件、blob/raw、tree 目录或仓库归档。
+
+    普通仓库地址依次尝试 main、master 分支，最后回退 zip 归档。
+    """
     parts = [part for part in parsed.path.strip("/").split("/") if part]
     if parsed.netloc == RAW_GITHUB_HOST:
         if len(parts) < 4:
@@ -1561,6 +1644,7 @@ def _load_github_skill_source(parsed) -> list[GeneralSkillFile]:
 def _download_github_directory(
     owner: str, repo: str, branch: str, subtree: str = ""
 ) -> list[GeneralSkillFile]:
+    """优先用 GitHub Contents API 拉取目录，失败时回退 zip 归档。"""
     try:
         return _download_github_directory_contents(owner, repo, branch, subtree)
     except HTTPException as api_error:
@@ -1573,11 +1657,13 @@ def _download_github_directory(
 def _download_github_directory_contents(
     owner: str, repo: str, branch: str, subtree: str = ""
 ) -> list[GeneralSkillFile]:
+    """递归下载 GitHub 目录内容，受文件数量与单文件体积上限约束。"""
     normalized_subtree = subtree.strip("/")
     files: list[GeneralSkillFile] = []
     visited_dirs: set[str] = set()
 
     def walk(path: str) -> None:
+        """递归遍历单个目录，跳过应忽略的目录与超大文件。"""
         if len(files) >= MAX_CLAWHUB_FILES:
             return
         if path in visited_dirs:
@@ -1634,6 +1720,7 @@ def _download_github_directory_contents(
 def _download_github_archive(
     owner: str, repo: str, branches: list[str], subtree: str = ""
 ) -> list[GeneralSkillFile]:
+    """按分支顺序下载仓库 zip 归档并抽取技能包，全部失败才抛错。"""
     errors: list[str] = []
     for branch in branches:
         archive_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip"
@@ -1648,6 +1735,7 @@ def _download_github_archive(
 
 
 def _download_json(url: str) -> object:
+    """下载并解析 JSON 响应，解析失败抛 400。"""
     data, _ = _download_url(url)
     try:
         return json.loads(_decode_text(data))
@@ -1658,6 +1746,7 @@ def _download_json(url: str) -> object:
 
 
 def _looks_like_markdown_source(path: str, content_type: str) -> bool:
+    """按路径后缀与 content-type 判断响应能否直接当作 Markdown 技能。"""
     lower_path = path.lower()
     lower_content_type = content_type.lower()
     return (
@@ -1669,6 +1758,7 @@ def _looks_like_markdown_source(path: str, content_type: str) -> bool:
 
 
 def _looks_like_html_response(text: str, content_type: str) -> bool:
+    """按 content-type 与正文开头判断响应是否为 HTML 页面。"""
     stripped = text.lstrip().lower()
     return (
         "text/html" in content_type
@@ -1678,6 +1768,7 @@ def _looks_like_html_response(text: str, content_type: str) -> bool:
 
 
 def _extract_skill_source_from_html(text: str, base_url: str) -> str | None:
+    """从 HTML 页面提取可下载技能包链接（raw、zip、GitHub、平台下载端点）。"""
     normalized = unescape(text).replace("\\/", "/").replace("\\u002F", "/").replace("\\u002f", "/")
     candidates: list[str] = []
     candidates.extend(re.findall(r"https?://[^\s\"'<>]+", normalized))
@@ -1712,11 +1803,13 @@ def _extract_skill_source_from_html(text: str, base_url: str) -> str | None:
 
 
 def _is_clawhub_download_url(parsed) -> bool:
+    """判断 URL 是否为平台下载端点（路径匹配且带 slug 查询参数）。"""
     path = parsed.path.lower().rstrip("/")
     return path.endswith("/api/v1/download") and "slug=" in parsed.query.lower()
 
 
 def _download_url(url: str) -> tuple[bytes, str]:
+    """下载 URL 内容并校验包体积上限，网络错误统一转换为 400。"""
     try:
         request = Request(url, headers={"User-Agent": "StaffDeck-GeneralSkillImporter/1.0"})
         with urlopen(request, timeout=REMOTE_SKILL_DOWNLOAD_TIMEOUT_SECONDS) as response:  # noqa: S310 - user-confirmed import source
@@ -1736,6 +1829,7 @@ def _download_url(url: str) -> tuple[bytes, str]:
 
 
 def _files_from_zip(data: bytes, subtree: str = "") -> list[GeneralSkillFile]:
+    """从 zip 中抽取以 SKILL.md 为根的文件，受单文件与文件总数上限约束。"""
     normalized_subtree = subtree.strip("/")
     with zipfile.ZipFile(BytesIO(data)) as archive:
         names = [
@@ -1781,6 +1875,7 @@ def _files_from_zip(data: bytes, subtree: str = "") -> list[GeneralSkillFile]:
 
 
 def _zip_relative_path(name: str, subtree: str) -> str | None:
+    """在 zip 条目路径中找出匹配 subtree 的相对路径，未命中返回 None。"""
     parts = name.split("/")
     for index in range(1, len(parts)):
         candidate = "/".join(parts[index:])
@@ -1790,6 +1885,7 @@ def _zip_relative_path(name: str, subtree: str) -> str | None:
 
 
 def _skip_package_path(path: str) -> bool:
+    """判断路径是否位于需要跳过的目录（版本库、依赖、构建产物等）。"""
     parts = path.split("/")
     return any(
         part in {"__MACOSX", ".git", "node_modules", ".venv", "dist", "build"} for part in parts
@@ -1797,6 +1893,7 @@ def _skip_package_path(path: str) -> bool:
 
 
 def _decode_text(data: bytes) -> str:
+    """按 UTF-8 解码字节，非法字节用替换字符兜底。"""
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
@@ -1804,6 +1901,7 @@ def _decode_text(data: bytes) -> str:
 
 
 def _guess_mime_type(path: str) -> str:
+    """按扩展名猜测 MIME 类型，未知类型回退 text/plain。"""
     lower = path.lower()
     if lower.endswith(".md"):
         return "text/markdown"
@@ -1813,6 +1911,7 @@ def _guess_mime_type(path: str) -> str:
 
 
 def _validate_slug(value: str) -> None:
+    """校验 slug 不含空白字符与斜杠，违规抛 400。"""
     if any(char.isspace() for char in value) or "/" in value:
         raise HTTPException(
             status_code=400, detail="General skill slug cannot contain spaces or slashes"
@@ -1820,5 +1919,6 @@ def _validate_slug(value: str) -> None:
 
 
 def _sse(event: object, data: object) -> str:
+    """把事件名与负载序列化为 SSE 帧文本。"""
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n"

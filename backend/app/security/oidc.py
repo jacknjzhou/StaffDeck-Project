@@ -25,12 +25,14 @@ def get_settings():
 
 
 def _discover(issuer: str) -> dict:
+    """拉取 issuer 的 .well-known/openid-configuration，返回含各端点地址的发现文档。"""
     resp = httpx.get(f"{issuer.rstrip('/')}/.well-known/openid-configuration", timeout=10)
     resp.raise_for_status()
     return resp.json()
 
 
 def new_state() -> str:
+    """生成一次性 state 并记下 10 分钟有效期，用于登录回调时防 CSRF 与重放。"""
     state = secrets.token_urlsafe(32)
     _pending_states[state] = time.time() + _STATE_TTL_SECONDS
     return state
@@ -43,6 +45,7 @@ def consume_state(state: str) -> bool:
 
 
 def authorization_url(discovery: dict, state: str) -> str:
+    """拼出 IdP 的授权码登录地址，参数取自配置的 client_id、redirect_uri 与固定 scope。"""
     s = get_settings()
     query = urlencode(
         {
@@ -57,6 +60,7 @@ def authorization_url(discovery: dict, state: str) -> str:
 
 
 def _exchange_code(discovery: dict, code: str) -> dict:
+    """用授权码换 token：POST 到 token_endpoint，附带 client 凭据与回调地址，非 2xx 抛错。"""
     s = get_settings()
     resp = httpx.post(
         discovery["token_endpoint"],
@@ -74,6 +78,7 @@ def _exchange_code(discovery: dict, code: str) -> dict:
 
 
 def _fetch_userinfo(discovery: dict, access_token: str) -> dict:
+    """带 Bearer token 调 userinfo_endpoint，取回 sub、email 等用户声明。"""
     resp = httpx.get(
         discovery["userinfo_endpoint"],
         headers={"Authorization": f"Bearer {access_token}"},

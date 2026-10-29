@@ -16,6 +16,7 @@ from app.security.auth import create_access_token
 
 
 def _client(monkeypatch) -> tuple[TestClient, object, str]:
+    """构建基于内存数据库并注入演示数据的公开 API 测试客户端。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -29,6 +30,7 @@ def _client(monkeypatch) -> tuple[TestClient, object, str]:
     app = create_public_api_app()
 
     def session_override():
+        """为测试注入独立数据库会话，避免访问真实数据库连接。"""
         with Session(engine) as db:
             yield db
 
@@ -38,6 +40,7 @@ def _client(monkeypatch) -> tuple[TestClient, object, str]:
 
 
 def _key(client: TestClient, token: str, scopes: list[str]) -> str:
+    """创建 API 客户端并签发带指定 scope 的 API Key，供鉴权用例复用。"""
     created = client.post(
         "/api-clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -54,6 +57,7 @@ def _key(client: TestClient, token: str, scopes: list[str]) -> str:
 
 
 def test_list_returns_every_gallery_employee_with_a_valid_contract(monkeypatch):
+    """验证画廊列表返回全部 10 个员工，且每个载荷都符合数字员工契约。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     response = client.get("/digital-employees", headers={"Authorization": f"Bearer {key}"})
@@ -68,6 +72,7 @@ def test_list_returns_every_gallery_employee_with_a_valid_contract(monkeypatch):
 
 
 def test_list_etag_returns_304_without_a_body(monkeypatch):
+    """验证 ETag 命中时返回 304 且无响应体，弱校验器与多值列表同样命中。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -92,6 +97,7 @@ def test_list_etag_returns_304_without_a_body(monkeypatch):
 
 
 def test_etag_is_stable_across_calls(monkeypatch):
+    """验证同一内容多次请求时 ETag 保持稳定。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -102,6 +108,7 @@ def test_etag_is_stable_across_calls(monkeypatch):
 
 
 def test_single_employee_endpoint_matches_the_list_entry(monkeypatch):
+    """验证单个员工端点返回的条目与列表中的对应条目完全一致。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -115,6 +122,7 @@ def test_single_employee_endpoint_matches_the_list_entry(monkeypatch):
 
 
 def test_unknown_agent_is_404(monkeypatch):
+    """验证查询不存在的员工时返回 404 与 AGENT_NOT_FOUND。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -124,6 +132,7 @@ def test_unknown_agent_is_404(monkeypatch):
 
 
 def test_unpublished_agent_disappears_from_distribution(monkeypatch):
+    """验证取消画廊发布后，该员工立即从列表与单条端点中消失。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read", "agents:write"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -151,6 +160,7 @@ def test_unpublished_agent_disappears_from_distribution(monkeypatch):
 
 
 def test_requires_agents_read_scope(monkeypatch):
+    """验证缺少 agents:read scope 的 API Key 访问画廊时返回 INSUFFICIENT_SCOPE。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["runs:read"])
     response = client.get("/digital-employees", headers={"Authorization": f"Bearer {key}"})
@@ -159,6 +169,7 @@ def test_requires_agents_read_scope(monkeypatch):
 
 
 def test_user_jwt_is_rejected(monkeypatch):
+    """验证用户 JWT 不能访问公开 API，必须使用 API Key。"""
     client, _engine, token = _client(monkeypatch)
     response = client.get("/digital-employees", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 401
@@ -166,6 +177,7 @@ def test_user_jwt_is_rejected(monkeypatch):
 
 
 def test_openapi_documents_the_distribution_endpoints(monkeypatch):
+    """验证 OpenAPI 文档包含列表与单条数字员工分发端点。"""
     client, _engine, _token = _client(monkeypatch)
     paths = client.get("/openapi.json").json()["paths"]
     assert "/digital-employees" in paths
@@ -173,11 +185,13 @@ def test_openapi_documents_the_distribution_endpoints(monkeypatch):
 
 
 def _first_employee_with_skills(client: TestClient, auth: dict) -> dict:
+    """取出首个绑定了技能的员工，供导出技能用例复用。"""
     employees = client.get("/digital-employees", headers=auth).json()["employees"]
     return next(item for item in employees if item["skills"])
 
 
 def test_export_skill_returns_importable_zip(monkeypatch):
+    """验证导出技能返回可导入的 ZIP，内含 SKILL.md 且文件名带 slug。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -197,6 +211,7 @@ def test_export_skill_returns_importable_zip(monkeypatch):
 
 
 def test_export_skill_rejects_an_unrelated_employee(monkeypatch):
+    """验证对不存在的员工导出技能时返回 AGENT_NOT_FOUND。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -210,6 +225,7 @@ def test_export_skill_rejects_an_unrelated_employee(monkeypatch):
 
 
 def test_export_skill_for_an_undistributed_skill_is_404(monkeypatch):
+    """验证导出该员工未分发的技能时返回 SKILL_NOT_FOUND。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -224,6 +240,7 @@ def test_export_skill_for_an_undistributed_skill_is_404(monkeypatch):
 
 
 def test_export_skill_is_audited(monkeypatch):
+    """验证导出技能会写入 resource_type 为 general_skill 的审计日志。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}

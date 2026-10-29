@@ -27,6 +27,12 @@ const VARIANTS: Record<
   },
 };
 
+/**
+ * 渲染单条品牌化提示气泡，按变体切换配色与图标。
+ *
+ * - 使用 role="status" 与 aria-live="polite" 保证读屏器播报。
+ * - 纯展示组件，不负责自动关闭时长与屏幕定位。
+ */
 function ToastPill({ variant, message }: { variant: ToastVariant; message: ReactNode }) {
   const { container, icon, Icon } = VARIANTS[variant];
   return (
@@ -45,14 +51,23 @@ function ToastPill({ variant, message }: { variant: ToastVariant; message: React
 }
 
 /**
- * Options accepted by the branded toasts. Presentation (icon, styling and
- * centered placement) is owned by the component, so those keys are excluded.
+ * 品牌 toast 接受的配置项。
+ *
+ * 图标、样式与居中定位由组件自身负责，因此这些键从 options 中排除。
  */
 export type AppToastOptions = Omit<
   ExternalToast,
   'icon' | 'className' | 'style' | 'unstyled' | 'descriptionClassName'
 >;
 
+/**
+ * 按变体渲染自定义 toast，并套用统一时长与居中外层容器。
+ *
+ * @param variant 展示变体，决定配色、图标与默认停留时长。
+ * @param message 提示内容，可为字符串或任意 React 节点。
+ * @param options 透传给 sonner 的额外配置，可覆盖默认时长等字段。
+ * @returns sonner 返回的 toast id，可用于后续 dismiss。
+ */
 function showVariant(variant: ToastVariant, message: ReactNode, options?: AppToastOptions) {
   return toast.custom(() => <ToastPill variant={variant} message={message} />, {
     duration: variant === 'success' ? 3200 : 4800,
@@ -62,15 +77,23 @@ function showVariant(variant: ToastVariant, message: ReactNode, options?: AppToa
   });
 }
 
+/**
+ * 把后端错误码或英文原文转换为当前界面语言的提示文案。
+ *
+ * @param message 原始提示；非字符串时原样返回。
+ * @returns 本地化后的提示，找不到映射时回退为原文。
+ */
 function localizedErrorMessage(message: ReactNode): ReactNode {
   if (typeof message !== 'string') return message;
   return apiErrorMessage(message, message);
 }
 
 /**
- * Global toast helper. `success` / `error` render the SD1 message pill;
- * `warning` / `info` / `loading` delegate to sonner so they share the same
- * centered placement configured on the app-wide <Toaster />.
+ * 全局 toast 入口。
+ *
+ * - `success` / `error` 渲染 SD1 消息气泡，`error` 会先做错误文案本地化。
+ * - `warning` / `info` / `loading` 直接委托 sonner，共享 <Toaster /> 的居中定位。
+ * - `dismiss` 关闭指定 id 的提示，省略 id 时关闭全部。
  */
 export const notify = {
   success: (message: ReactNode, options?: AppToastOptions) =>

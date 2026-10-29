@@ -150,11 +150,13 @@ const PLATFORM_ACCENT: Partial<Record<PlatformKind, PlatformResourceAccent>> = {
 };
 
 // Unit rendered after the header count, e.g. "12 员工" / "12 内容".
+/** 返回各模块的数量单位：数字员工用「员工」，其它广场内容用「内容」。 */
 function platformCountLabel(kind: PlatformKind): string {
   return kind === 'agents' ? '员工' : '内容';
 }
 
 // Bottom metric segments for a 数字员工广场 card.
+/** 生成数字员工卡片的底部指标：资料（知识库）、技能与 SOP 的数量。 */
 function employeeStats(agent: AgentProfileRead): PlatformStat[] {
   return [
     { value: agentResourceCount(agent, 'knowledge_base'), label: '资料' },
@@ -163,6 +165,7 @@ function employeeStats(agent: AgentProfileRead): PlatformStat[] {
   ];
 }
 
+/** 生成资源详情抽屉的角标：SOP 取 meta 末段，其它取首个标签，都没有时返回空串。 */
 function resourceDrawerBadge(kind: PlatformKind, item: PlatformItem): string {
   if (kind === 'skills') {
     const parts = item.meta.split(' / ');
@@ -171,6 +174,12 @@ function resourceDrawerBadge(kind: PlatformKind, item: PlatformItem): string {
   return item.tags[0] || '';
 }
 
+/**
+ * 开放广场平台页。
+ *
+ * 汇总数字员工、知识库、技能、SOP 与工具，按路由 kind 展示总览或分类详情；
+ * 支持打开详情抽屉、复制资源到当前员工，并允许管理员从广场下线或删除内容。
+ */
 export default function OpenPlatformPage({
   currentUser,
   isAdmin = false,
@@ -195,6 +204,7 @@ export default function OpenPlatformPage({
   const [confirmTarget, setConfirmTarget] = useState<{ kind: PlatformKind; item: PlatformItem } | null>(null);
 
   useEffect(() => {
+    /** 响应员工作用域变更事件，同步当前员工（团队作用域回退为本地读取）。 */
     const onScopeChange = (event: Event) => {
       const next = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
       setAgentId(next && !isTeamScope(next) ? next : readEmployeeScope());
@@ -203,6 +213,12 @@ export default function OpenPlatformPage({
     return () => window.removeEventListener('ultrarag-enterprise-agent-scope-change', onScopeChange);
   }, []);
 
+  /**
+   * 加载开放广场的全部数据：员工列表，以及「全体员工」作用域下的
+   * 知识库、技能、SOP 与工具。
+   *
+   * 失败时仅提示错误，不向外抛出。
+   */
   const loadPlatformData = useCallback(async () => {
     setLoading(true);
     try {
@@ -308,6 +324,11 @@ export default function OpenPlatformPage({
     count: platformItems[config.kind].length,
   }));
 
+  /**
+   * 确认是否存在可作为复制目标的员工；不存在时提示并返回 false。
+   *
+   * 目标与当前作用域不一致时写入本地存储并广播作用域变更事件。
+   */
   function ensureTargetEmployee(): boolean {
     if (!targetEmployee) {
       notify.warning('请先选择一个员工，再从广场复制资源。');
@@ -321,6 +342,11 @@ export default function OpenPlatformPage({
     return true;
   }
 
+  /**
+   * 将数字员工标记为当前用户已使用。
+   *
+   * 必要时调用后端记录使用行为，并同步本地状态、员工作用域与相关事件。
+   */
   async function markPlatformAgentUsed(agent: AgentProfileRead) {
     const metadata = agent.metadata || {};
     if (metadata.used_by_current_user !== true && metadata.chat_used_by_current_user !== true) {
@@ -344,6 +370,12 @@ export default function OpenPlatformPage({
     setAgentId(agent.id);
   }
 
+  /**
+   * 使用广场条目的统一入口。
+   *
+   * 数字员工直接记录使用并跳转工作台；其它资源先确保有目标员工，
+   * 再跳转到对应页面并携带 add=plaza 与 resourceId 参数。
+   */
   async function usePlatformItem(platformKind: PlatformKind, itemId?: string) {
     if (platformKind === 'agents') {
       const agent = visibleAgents.find((item) => item.id === itemId) || visibleAgents[0];
@@ -367,10 +399,12 @@ export default function OpenPlatformPage({
     if (platformKind === 'tools') navigate('/enterprise/tools?add=plaza');
   }
 
+  /** 生成用于匹配删除中状态的唯一键：分类前缀 + 删除标识（缺省用 id）。 */
   function platformItemDeleteKey(platformKind: PlatformKind, item: PlatformItem): string {
     return `${platformKind}:${item.deleteKey || item.id}`;
   }
 
+  /** 按分类拼接资源删除接口地址，存在全体员工时追加 agent_id 查询参数。 */
   function platformDeleteUrl(platformKind: PlatformKind, item: PlatformItem): string {
     const resourceKey = encodeURIComponent(item.deleteKey || item.id);
     const overallSuffix = overallAgent ? `&agent_id=${encodeURIComponent(overallAgent.id)}` : '';
@@ -381,6 +415,11 @@ export default function OpenPlatformPage({
     return `/api/enterprise/tools/${resourceKey}?tenant_id=${TENANT_ID}${overallSuffix}`;
   }
 
+  /**
+   * 执行确认后的删除：数字员工走广场下线接口，其它资源走删除接口。
+   *
+   * 成功后关闭抽屉与确认框并刷新列表，失败时提示错误。
+   */
   async function runDelete() {
     if (!confirmTarget) return;
     const { kind: platformKind, item } = confirmTarget;
@@ -413,6 +452,7 @@ export default function OpenPlatformPage({
     }
   }
 
+  /** 在同类条目中切换详情抽屉的上一项/下一项，越界时保持当前项。 */
   function navigateDetailItem(offset: -1 | 1) {
     if (!detailItem) return;
     const items = platformItems[detailItem.kind];
@@ -422,6 +462,7 @@ export default function OpenPlatformPage({
     setDetailItem({ kind: detailItem.kind, item: nextItem });
   }
 
+  /** 渲染详情抽屉：数字员工用员工抽屉，其它资源用通用资源抽屉；无选中项时返回 null。 */
   function renderItemDrawer() {
     if (!detailItem) return null;
     const config = PLATFORM_BY_KIND.get(detailItem.kind) || PLATFORM_CONFIGS[0];
@@ -493,6 +534,7 @@ export default function OpenPlatformPage({
     );
   }
 
+  /** 渲染下线/删除确认弹窗，标题、说明与确认文案随分类变化。 */
   function renderConfirm() {
     const config = confirmTarget ? PLATFORM_BY_KIND.get(confirmTarget.kind) || PLATFORM_CONFIGS[0] : null;
     return (
@@ -633,6 +675,7 @@ export default function OpenPlatformPage({
   );
 }
 
+/** 判断知识库是否为内容为空的「默认知识库」，这类条目不会出现在广场列表。 */
 function isEmptyDefaultKnowledgeBase(item: KnowledgeBaseRead): boolean {
   return item.name === '默认知识库' && item.document_count === 0 && item.bucket_count === 0 && item.chunk_count === 0;
 }

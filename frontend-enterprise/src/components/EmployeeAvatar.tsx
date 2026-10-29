@@ -12,24 +12,31 @@ type AvatarProfile = Pick<EmployeeProfile, 'avatarKind' | 'avatarImage' | 'avata
 
 type EmployeeAvatarProps = {
   agent?: AgentProfileRead | null;
-  /** Pre-resolved profile. When omitted it is derived from `agent`. */
+  /** 已解析好的头像档案；省略时由 `agent` 推导。 */
   profile?: AvatarProfile;
-  /** Square shorthand for width/height (px). Used when width/height are not provided. */
+  /** 宽高简写（px）；未单独传 width/height 时同时作用于两者。 */
   size?: number;
-  /** Explicit width in px. Falls back to `size`. */
+  /** 显式宽度（px），缺省回退到 `size`。 */
   width?: number;
-  /** Explicit height in px. Falls back to `size`. */
+  /** 显式高度（px），缺省回退到 `size`。 */
   height?: number;
-  /** Border radius override (px or any CSS length). */
+  /** 圆角覆盖值（px 或任意 CSS 长度）。 */
   radius?: number | string;
-  /** How the image fills the box. `cover` fills the frame without distortion. */
+  /** 图片填充方式，`cover` 可在不拉伸的前提下填满画框。 */
   fit?: CSSProperties['objectFit'];
-  /** Alignment of the image within the box, e.g. `center bottom`. */
+  /** 图片在画框内的对齐位置，例如 `center bottom`。 */
   objectPosition?: CSSProperties['objectPosition'];
   className?: string;
   style?: CSSProperties;
 };
 
+/**
+ * 员工头像组件：按头像档案渲染方形图片，可覆盖尺寸、圆角与裁切方式。
+ *
+ * - 传入 `profile` 时直接使用，否则由 `agent` 推导头像档案。
+ * - `width` / `height` 缺省回退到 `size`，`radius` 未传则沿用样式表圆角。
+ * - 图片统一铺满盒子并重置 transform，避免上下文样式导致拉伸或偏移。
+ */
 export default function EmployeeAvatar({
   agent,
   profile: profileOverride,

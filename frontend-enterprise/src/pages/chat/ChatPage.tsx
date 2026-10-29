@@ -12,6 +12,7 @@ import MessageList from './components/MessageList';
 import Composer from './components/Composer';
 import ChatDialogs from './components/ChatDialogs';
 
+/** 聊天主页面：通过 useChatSession 聚合会话状态，组合侧边栏、消息列表、输入框与对话框。 */
 export default function ChatPage() {
   const chat = useChatSession();
 

@@ -3,6 +3,9 @@ import { Switch as SwitchPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * 基于 Radix 的开关组件,支持 `sm` 与 `default` 两档尺寸,选中态滑块右移并由主题色填充。
+ */
 function Switch({
   className,
   size = "default",

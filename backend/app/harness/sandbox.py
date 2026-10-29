@@ -16,6 +16,8 @@ from app.harness.errors import HarnessExecutionError
 
 @dataclass(frozen=True)
 class SandboxDiagnostics:
+    """描述沙盒可用性诊断结果，供启动自检与前端提示区分降级、不可用与就绪。"""
+
     status: str
     code: str | None
     message: str
@@ -27,6 +29,7 @@ SandboxNetworkMode = Literal["all", "allowlist", "deny"]
 
 
 def parse_network_policy(value: object | None) -> SandboxNetworkMode:
+    """解析租户配置的沙盒网络策略；空值按 all 处理，非法取值抛 SANDBOX_POLICY_INVALID。"""
     if value is None or str(value).strip() == "":
         return "all"
     normalized = str(value).strip()
@@ -39,7 +42,7 @@ def parse_network_policy(value: object | None) -> SandboxNetworkMode:
 
 
 def diagnostics() -> SandboxDiagnostics:
-    """Explain whether this process can safely start the configured sandbox."""
+    """判断本进程能否安全启动已配置的沙盒，返回状态与修复建议。"""
     backend = available_backend()
     if backend is None:
         return SandboxDiagnostics(
@@ -61,6 +64,7 @@ def diagnostics() -> SandboxDiagnostics:
 
 
 def _environment_diagnostics(backend: str) -> SandboxDiagnostics:
+    """按平台校验沙盒运行前提（root 身份、user namespace、Windows 账户与 WFP）。"""
     if sys.platform.startswith("linux"):
         if backend == "srt" and os.geteuid() == 0:
             return SandboxDiagnostics(
@@ -92,6 +96,7 @@ def _environment_diagnostics(backend: str) -> SandboxDiagnostics:
 
 
 def windows_install_command() -> str:
+    """返回管理员初始化 Windows 沙盒账号的命令行；SRT 缺失时给出重装提示文案。"""
     resolved = resolve_srt()
     if resolved is None:
         return "重新运行 StaffDeck 安装程序以修复沙盒组件"
@@ -101,7 +106,7 @@ def windows_install_command() -> str:
 
 @lru_cache(maxsize=4)
 def _windows_srt_ready(node: Path, cli: Path) -> bool:
-    """Run SRT initialization once; upstream verifies user credentials and WFP."""
+    """探测一次 SRT 是否可用：上游会校验账户凭据与 WFP，结果按 (node, cli) 缓存。"""
     try:
         with tempfile.TemporaryDirectory(prefix="staffdeck-srt-probe-") as raw_dir:
             settings = Path(raw_dir) / "settings.json"
@@ -136,6 +141,7 @@ def _windows_srt_ready(node: Path, cli: Path) -> bool:
 
 
 def ensure_backend_usable(backend: str) -> None:
+    """要求指定后端可直接使用；不满足时以诊断码与修复建议抛 HarnessExecutionError。"""
     report = _environment_diagnostics(backend)
     if report.status != "ready":
         detail = report.message + (f" {report.remediation}" if report.remediation else "")
@@ -143,6 +149,7 @@ def ensure_backend_usable(backend: str) -> None:
 
 
 def _read_int(path: str) -> int | None:
+    """读取单个整型内核参数；文件缺失或内容非数字时返回 None 而不抛异常。"""
     try:
         return int(Path(path).read_text(encoding="ascii").strip())
     except (OSError, ValueError):
@@ -150,7 +157,7 @@ def _read_int(path: str) -> int | None:
 
 
 def available_backend() -> str | None:
-    """Return the strongest local process sandbox available on this host."""
+    """返回本机可用的最强进程沙盒后端（srt 或 bubblewrap），都不可用则为 None。"""
     if resolve_srt() is not None:
         return "srt"
     if sys.platform.startswith("linux") and _trusted_executable("bwrap"):
@@ -159,7 +166,7 @@ def available_backend() -> str | None:
 
 
 def resolve_srt() -> tuple[Path, Path] | None:
-    """Resolve ``(node, cli.js)`` from a reviewed bundle or the host PATH."""
+    """从受审阅的打包目录或主机 PATH 中定位 (node, cli.js) 组合，找不到返回 None。"""
     candidates: list[tuple[Path, Path]] = []
     explicit = os.environ.get("STAFFDECK_SRT_RUNTIME", "").strip()
     if explicit:
@@ -222,14 +229,17 @@ def resolve_srt() -> tuple[Path, Path] | None:
 
 
 def _node_name() -> str:
+    """返回当前平台捆绑的 Node 可执行文件名（Windows 带 .exe）。"""
     return "node.exe" if sys.platform == "win32" else "node"
 
 
 def _source_runtime_root() -> Path:
+    """返回源码部署下的 sandbox_runtime 目录，与安装包使用同一份 SRT 捆绑。"""
     return Path(__file__).resolve().parents[3] / "packaging" / "sandbox_runtime"
 
 
 def require_backend() -> str:
+    """返回可用于执行的沙盒后端；无就绪后端时抛 HarnessExecutionError 拒绝执行。"""
     report = diagnostics()
     if report.status != "ready":
         detail = report.message + (f" {report.remediation}" if report.remediation else "")
@@ -240,6 +250,7 @@ def require_backend() -> str:
 
 
 def _trusted_executable(name: str) -> bool:
+    """确认 PATH 上的可执行文件是绝对路径的普通可执行文件，避免被相对路径劫持。"""
     executable = shutil.which(name)
     if not executable:
         return False

@@ -11,6 +11,8 @@ from fastapi import HTTPException
 
 
 class ModelApiProtocol(StrEnum):
+    """上游模型 API 协议枚举，取值同时用于配置校验与 protocol_options 的分协议存储。"""
+
     OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
     OPENAI_RESPONSES = "openai_responses"
     ANTHROPIC_MESSAGES = "anthropic_messages"
@@ -21,10 +23,15 @@ LEGACY_OPENAI_PROVIDER = "openai_compatible"
 
 
 def available_model_protocols() -> list[str]:
+    """列出可选的上游 API 协议字符串，供配置接口下发前端。"""
     return [protocol.value for protocol in ModelApiProtocol]
 
 
 def resolve_api_protocol(api_protocol: str | None, provider: str | None) -> ModelApiProtocol:
+    """把显式的 api_protocol 与历史 provider 归一为唯一的协议枚举。
+
+    provider 仅兼容旧值 openai_compatible；取值非法或两者冲突时抛 422，缺省回落到 OpenAI Chat。
+    """
     mapped_provider = None
     if provider is not None:
         if provider != LEGACY_OPENAI_PROVIDER:
@@ -40,6 +47,10 @@ def resolve_api_protocol(api_protocol: str | None, provider: str | None) -> Mode
 
 
 def normalize_chat_protocol_options(value: Any) -> dict[str, Any]:
+    """校验并归一 chat 协议的 protocol_options，仅保留 thinking 的 type 与 clear_thinking。
+
+    传入 None 或未提供 thinking 时返回空字典；结构非法时抛 422 MODEL_PROTOCOL_OPTIONS_INVALID。
+    """
     if value is None:
         return {}
     if not isinstance(value, dict) or set(value) - {"thinking"}:
@@ -57,6 +68,7 @@ def normalize_chat_protocol_options(value: Any) -> dict[str, Any]:
 
 
 def current_protocol_options(protocol_options: Any, protocol: ModelApiProtocol) -> dict[str, Any]:
+    """取出指定协议下的选项副本；整体或该项不是字典时返回空字典。"""
     if not isinstance(protocol_options, dict):
         return {}
     value = protocol_options.get(protocol.value, {})
@@ -72,6 +84,10 @@ def model_config_fingerprint(
     protocol_options: dict[str, Any],
     security_revision: int,
 ) -> str:
+    """计算模型配置的 sha256 指纹，用于判断配置是否变化、是否需要重建客户端。
+
+    payload 以固定键序和紧凑分隔符序列化，base_url 先规范化，等价配置得到相同指纹。
+    """
     payload = {
         "fingerprint_version": 1,
         "api_protocol": api_protocol,
@@ -92,6 +108,11 @@ def model_config_fingerprint(
 
 
 def _normalize_base_url(value: str | None) -> str | None:
+    """规范化 base_url：NFC 归一、主机小写、去默认端口与路径末尾斜杠。
+
+    空白输入返回空串；仅接受 http/https 且不允许携带用户名密码，非法时抛 422
+    MODEL_BASE_URL_INVALID。
+    """
     if value is None:
         return None
     raw = unicodedata.normalize("NFC", value.strip())
@@ -116,4 +137,5 @@ def _normalize_base_url(value: str | None) -> str | None:
 
 
 def validate_model_base_url(value: str | None) -> None:
+    """校验模型 base_url 合法性，非法时抛 422；无返回值，仅做校验。"""
     _normalize_base_url(value)

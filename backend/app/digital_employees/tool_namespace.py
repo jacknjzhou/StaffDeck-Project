@@ -1,18 +1,15 @@
-"""Tool-name namespace shared by the distribution payload and the MCP catalog.
+"""分发载荷与 MCP 目录共用的工具名命名空间。
 
-The two surfaces must emit byte-equal names (deepchat matches its session-level
-allowlist against them), so the mapping lives here rather than being derived
-twice.
+两个出口必须产出逐字节相同的名字（deepchat 用它比对会话级白名单），
+因此映射只在这里定义一次，而不是在两处各推导一遍。
 
-Why the name is not simply ``staffdeck:{slug}``: deepchat drops every MCP tool
-whose name fails ``/^[a-zA-Z0-9_-]+$/`` (``main/mcp/toolManager.ts``), and
-OpenAI-compatible APIs reject function names outside the same set. A colon
-would make every remote tool silently disappear, and dots in real slugs
-(``expense.submit``) would go the same way.
+名字不直接采用 ``staffdeck:{slug}`` 的原因：deepchat 会丢弃名字不匹配
+``/^[a-zA-Z0-9_-]+$/`` 的 MCP 工具（``main/mcp/toolManager.ts``），
+OpenAI 兼容 API 也拒绝同一字符集之外的函数名。冒号会让所有远程工具
+静默消失，真实 slug 中的点（``expense.submit``）同理。
 
-Normalising ``.`` to ``_`` is many-to-one, so names that need normalising carry
-a short digest of the original slug. Everyday slugs that are already safe keep
-their readable form.
+把 ``.`` 归一化成 ``_`` 是多对一映射，所以需要归一化的名字会带上原始
+slug 的短摘要；本就安全且不超长的常见 slug 保留可读形式。
 """
 
 from __future__ import annotations
@@ -32,16 +29,15 @@ _DIGEST_LENGTH = 8
 
 
 def _digest(slug: str) -> str:
+    """取 slug 的 SHA-256 前 8 位十六进制摘要，作为归一化后防撞名的短后缀。"""
     return hashlib.sha256(slug.encode("utf-8")).hexdigest()[:_DIGEST_LENGTH]
 
 
 def namespaced_tool_name(slug: str) -> str:
-    """Map a tool slug onto the single name both deepchat and the model accept.
+    """把工具 slug 映射成 deepchat 与模型都能接受的唯一工具名。
 
-    Deterministic: the same slug always yields the same name, so a re-published
-    catalog is byte-identical. Tool slugs that are already safe and short keep a
-    readable form; anything else gains a digest so distinct slugs cannot collide
-    after normalisation.
+    结果是确定性的：同一 slug 永远得到同一个名字，重新发布目录逐字节一致。
+    已安全且不超长的 slug 保留可读形式，其余追加原始 slug 的摘要避免撞名。
     """
     if _SAFE_SLUG.match(slug):
         candidate = f"{TOOL_PREFIX}{slug}"
@@ -55,17 +51,17 @@ def namespaced_tool_name(slug: str) -> str:
 
 
 def _with_digest(normalized: str, original: str) -> str:
+    """拼出带摘要后缀的工具名，正文按 MODEL_TOOL_NAME_MAX 的剩余预算截断。"""
     suffix = f"_{_digest(original)}"
     budget = MODEL_TOOL_NAME_MAX - len(TOOL_PREFIX) - len(suffix)
     return f"{TOOL_PREFIX}{normalized[:budget]}{suffix}"
 
 
 def tool_name_from_namespace(name: str) -> str | None:
-    """Reverse :func:`namespaced_tool_name` when the mapping was lossless.
+    """在映射无信息损失时反解出原始工具 slug，带摘要后缀的名字返回 None。
 
-    Returns ``None`` for digested names — a digest names the original but cannot
-    reconstruct it. Callers resolving a live call must look the name up in the
-    catalog the employee was given, never re-derive the slug by string surgery.
+    摘要只能标识原始 slug 而无法还原它；解析真实调用应到员工拿到的目录里查名字，
+    不要靠字符串手术反推 slug。
     """
     if not name.startswith(TOOL_PREFIX):
         return None

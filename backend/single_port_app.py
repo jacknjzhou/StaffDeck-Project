@@ -81,6 +81,7 @@ FRONTEND_CONTENT_TYPES = {
 
 
 def _request_host_without_port(host: str) -> str:
+    """去掉 Host 头中的端口与 IPv6 方括号，只保留主机名。"""
     value = host.strip().lower()
     if value.startswith("["):
         return value.split("]", 1)[0].lstrip("[")
@@ -88,6 +89,7 @@ def _request_host_without_port(host: str) -> str:
 
 
 def _is_pilotdeck_request(host: str) -> bool:
+    """判断请求的 Host 是否属于已配置的 PilotDeck 对外域名。"""
     return bool(
         PILOTDECK_UPSTREAM
         and PILOTDECK_PUBLIC_HOSTS
@@ -96,7 +98,7 @@ def _is_pilotdeck_request(host: str) -> bool:
 
 
 def _pilotdeck_proxy_path(host: str, path: str) -> str | None:
-    """Return the upstream path for either the virtual host or /pilotdeck prefix."""
+    """返回虚拟主机或 /pilotdeck 前缀对应的上游路径，不匹配时返回 None。"""
     if _is_pilotdeck_request(host):
         return path
     if not PILOTDECK_UPSTREAM:
@@ -109,6 +111,7 @@ def _pilotdeck_proxy_path(host: str, path: str) -> str | None:
 
 
 def _pilotdeck_target_url(path: str, query: str = "", *, websocket: bool = False) -> str:
+    """拼接 PilotDeck 上游完整地址，WebSocket 场景自动换成 ws 协议。"""
     upstream = PILOTDECK_UPSTREAM
     if websocket:
         if upstream.startswith("https://"):
@@ -120,13 +123,13 @@ def _pilotdeck_target_url(path: str, query: str = "", *, websocket: bool = False
 
 
 def _pilotdeck_proxy_timeout() -> httpx.Timeout:
-    """Keep streamed responses open while bounding connect, write, and pool waits."""
+    """保持流式响应持续可读，同时限制连接、写入与连接池等待时间。"""
     return httpx.Timeout(connect=10.0, read=None, write=600.0, pool=10.0)
 
 
 @app.middleware("http")
 async def pilotdeck_host_proxy(request: Request, call_next):  # noqa: ANN001
-    """Route the PilotDeck virtual host or /pilotdeck prefix through this process."""
+    """把 PilotDeck 虚拟主机或 /pilotdeck 前缀的请求经本进程转发到上游。"""
     upstream_path = _pilotdeck_proxy_path(
         request.headers.get("host", ""),
         request.url.path,
@@ -168,6 +171,7 @@ async def pilotdeck_host_proxy(request: Request, call_next):  # noqa: ANN001
     response_headers["x-accel-buffering"] = "no"
 
     async def stream_body():
+        """逐块读取上游响应体，结束后释放响应与客户端连接。"""
         try:
             async for chunk in upstream_response.aiter_raw():
                 yield chunk
@@ -184,7 +188,7 @@ async def pilotdeck_host_proxy(request: Request, call_next):  # noqa: ANN001
 
 @app.websocket("/{pilotdeck_path:path}")
 async def pilotdeck_websocket_proxy(websocket: WebSocket, pilotdeck_path: str) -> None:
-    """Relay PilotDeck chat and shell sockets selected by Host or path prefix."""
+    """按 Host 或路径前缀转发 PilotDeck 的聊天与外壳 WebSocket 连接。"""
     public_path = f"/{pilotdeck_path}"
     upstream_path = _pilotdeck_proxy_path(
         websocket.headers.get("host", ""),
@@ -226,6 +230,7 @@ async def pilotdeck_websocket_proxy(websocket: WebSocket, pilotdeck_path: str) -
             max_size=None,
         ) as upstream:
             async def client_to_upstream() -> None:
+                """把浏览器发来的 WebSocket 消息原样转发给上游。"""
                 while True:
                     message = await websocket.receive()
                     if message["type"] == "websocket.disconnect":
@@ -236,6 +241,7 @@ async def pilotdeck_websocket_proxy(websocket: WebSocket, pilotdeck_path: str) -
                         await upstream.send(message["bytes"])
 
             async def upstream_to_client() -> None:
+                """把上游 WebSocket 消息原样回传给浏览器。"""
                 async for message in upstream:
                     if isinstance(message, bytes):
                         await websocket.send_bytes(message)
@@ -261,7 +267,7 @@ async def pilotdeck_websocket_proxy(websocket: WebSocket, pilotdeck_path: str) -
 
 
 class FrontendStaticFiles(StaticFiles):
-    """Serve Vite assets with stable MIME types across Windows machines."""
+    """为 Vite 构建产物提供跨平台稳定的 MIME 类型。"""
 
     def file_response(
         self,
@@ -270,6 +276,7 @@ class FrontendStaticFiles(StaticFiles):
         scope: Scope,
         status_code: int = 200,
     ) -> Response:
+        """按文件后缀修正 Content-Type，避免系统 MIME 探测把资源类型判错。"""
         response = super().file_response(full_path, stat_result, scope, status_code)
         suffix = Path(full_path).suffix.lower()
         media_type = FRONTEND_CONTENT_TYPES.get(suffix)
@@ -291,6 +298,7 @@ class FrontendStaticFiles(StaticFiles):
 
 
 def spa_index_response(index_path: Path) -> FileResponse:
+    """返回禁止缓存的 SPA 入口页，确保刷新后加载最新前端产物。"""
     return FileResponse(index_path, headers=SPA_INDEX_HEADERS)
 
 
@@ -300,6 +308,7 @@ def spa_index_response(index_path: Path) -> FileResponse:
     include_in_schema=False,
 )
 async def site_chat_proxy(site_path: str, request: Request) -> StreamingResponse:
+    """把 /api/site-chat 前缀的请求流式转发到站点聊天上游服务。"""
     target_url = f"{SITE_CHAT_UPSTREAM}/api/site-chat/{site_path}"
     if request.url.query:
         target_url = f"{target_url}?{request.url.query}"
@@ -335,6 +344,7 @@ async def site_chat_proxy(site_path: str, request: Request) -> StreamingResponse
     response_headers["x-accel-buffering"] = "no"
 
     async def stream_body():
+        """流式回传上游响应块，结束后释放响应与客户端连接。"""
         try:
             async for chunk in upstream_response.aiter_raw():
                 yield chunk
@@ -354,7 +364,7 @@ async def site_chat_proxy(site_path: str, request: Request) -> StreamingResponse
     include_in_schema=False,
 )
 async def llm_chat_completions_relay(request: Request) -> StreamingResponse:
-    """Relay one OpenAI-compatible endpoint without exposing an arbitrary proxy."""
+    """转发 OpenAI 兼容的 chat completions 端点，不暴露任意代理能力。"""
     return await _relay_llm_request(
         request,
         upstream=LLM_RELAY_UPSTREAM,
@@ -367,7 +377,7 @@ async def llm_chat_completions_relay(request: Request) -> StreamingResponse:
     include_in_schema=False,
 )
 async def anthropic_messages_relay(request: Request) -> StreamingResponse:
-    """Relay the fixed Anthropic-compatible messages endpoint."""
+    """转发固定的 Anthropic 兼容 messages 端点。"""
     return await _relay_llm_request(
         request,
         upstream=ANTHROPIC_RELAY_UPSTREAM,
@@ -381,6 +391,7 @@ async def _relay_llm_request(
     upstream: str,
     upstream_path: str,
 ) -> StreamingResponse:
+    """校验请求体大小后，把请求流式转发到指定 LLM 上游并回传响应。"""
     if not upstream:
         raise HTTPException(status_code=404, detail="LLM relay is not enabled")
 
@@ -428,6 +439,7 @@ async def _relay_llm_request(
     response_headers["x-accel-buffering"] = "no"
 
     async def stream_body():
+        """向上游逐块拉取响应体，结束时关闭响应与客户端连接。"""
         try:
             async for chunk in upstream_response.aiter_raw():
                 yield chunk
@@ -465,12 +477,14 @@ app.mount(
 
 @app.get("/", include_in_schema=False)
 def root_redirect() -> RedirectResponse:
+    """把站点根路径重定向到聊天控制台入口。"""
     return RedirectResponse(url="/chat/")
 
 
 @app.get("/pilotdeck", include_in_schema=False)
 @app.get("/pilotdeck/", include_in_schema=False)
 def pilotdeck_redirect() -> RedirectResponse:
+    """已启用 PilotDeck 时把 /pilotdeck 重定向到其对外地址。"""
     if not PILOTDECK_PUBLIC_URL:
         raise HTTPException(status_code=404, detail="PilotDeck is not enabled")
     return RedirectResponse(url=f"{PILOTDECK_PUBLIC_URL}/")
@@ -480,6 +494,7 @@ def pilotdeck_redirect() -> RedirectResponse:
 @app.get("/favicon.png", include_in_schema=False)
 @app.get("/staffdeck-icon.png", include_in_schema=False)
 def brand_icon(request: Request) -> FileResponse:
+    """返回请求的品牌图标文件，缺失时回退到 favicon.ico。"""
     # 品牌图标：从前端 dist 根目录 serve（favicon.ico/png、apple-touch-icon）
     name = request.url.path.lstrip("/")
     target = ENTERPRISE_DIST / name
@@ -491,6 +506,7 @@ def brand_icon(request: Request) -> FileResponse:
 @app.get("/enterprise", include_in_schema=False)
 @app.get("/enterprise/{path:path}", include_in_schema=False)
 def enterprise_app(path: str = "") -> FileResponse:
+    """为 /enterprise 下的所有路径返回 SPA 入口页。"""
     return spa_index_response(ENTERPRISE_DIST / "index.html")
 
 
@@ -500,4 +516,5 @@ def enterprise_app(path: str = "") -> FileResponse:
 @app.get("/workspace", include_in_schema=False)
 @app.get("/workspace/{path:path}", include_in_schema=False)
 def chat_app(path: str = "") -> FileResponse:
+    """为 /chat、/workspace 与 /login 下的路径返回 SPA 入口页。"""
     return spa_index_response(ENTERPRISE_DIST / "index.html")

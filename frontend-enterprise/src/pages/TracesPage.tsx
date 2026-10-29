@@ -20,10 +20,16 @@ import type { TraceSummary } from '../types';
 
 const TRACES_PAGE_SIZE = 10;
 
+/**
+ * 会话 Trace 页面：展示当前租户的 Trace 摘要列表，支持客户端分页与详情查看。
+ *
+ * 挂载时自动拉取数据；列表为空时隐藏分页器，点击「查看」在右侧 Sheet 中展示原始 JSON。
+ */
 export default function TracesPage() {
   const [rows, setRows] = useState<TraceSummary[]>([]);
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
 
+  /** 加载当前租户的 Trace 摘要列表，失败时仅弹出错误提示并保留已有数据。 */
   const load = () =>
     api
       .get<TraceSummary[]>(`/api/enterprise/traces?tenant_id=${TENANT_ID}`)
@@ -36,6 +42,7 @@ export default function TracesPage() {
 
   const pagination = useClientPagination(rows, TRACES_PAGE_SIZE);
 
+  /** 按会话 ID 拉取单条 Trace 详情并写入 state，由右侧 Sheet 展示原始 JSON。 */
   async function openDetail(row: TraceSummary) {
     const result = await api.get<Record<string, unknown>>(`/api/enterprise/traces/${row.session_id}?tenant_id=${TENANT_ID}`);
     setDetail(result);

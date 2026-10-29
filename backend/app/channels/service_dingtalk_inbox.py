@@ -17,15 +17,18 @@ MAX_ENVELOPE_BYTES = 256 * 1024
 
 
 def dingtalk_account_key(client_id: str) -> str:
+    """生成渠道绑定用的外部账号键;长度前缀保证不同 client_id 不会拼出同一个键。"""
     client_id = client_id.strip()
     return f"dingtalk:app:{len(client_id)}:{client_id}"
 
 
 def dingtalk_identity_scope(client_id: str, tenant_key: str) -> str:
+    """生成身份隔离键:应用 client_id 与企业 tenant_key 各自带长度前缀拼接。"""
     return f"app:{len(client_id)}:{client_id}:tenant:{len(tenant_key)}:{tenant_key}"
 
 
 def encode_replay_envelope(inbound: ChannelInbound, *, client_id: str, tenant_key: str) -> dict[str, Any]:
+    """把入站消息连同账号信息封装成带版本号的 envelope,供重放时还原原始事件。"""
     return {
         "schema_version": DINGTALK_ENVELOPE_VERSION,
         "account": {"client_id": client_id, "tenant_key": tenant_key},
@@ -34,6 +37,11 @@ def encode_replay_envelope(inbound: ChannelInbound, *, client_id: str, tenant_ke
 
 
 def decode_replay_envelope(payload: object) -> ChannelInbound:
+    """从持久化 envelope 还原入站消息;版本、结构或渠道不合法时抛 ValueError。
+
+    字段按 ChannelInbound 的白名单校验,attachments 中的 dict 会重建为
+    ChannelInboundAttachment。
+    """
     if not isinstance(payload, dict) or payload.get("schema_version") != DINGTALK_ENVELOPE_VERSION:
         raise ValueError("unsupported_envelope_version")
     normalized = payload.get("inbound")
@@ -64,6 +72,12 @@ def stage_dingtalk_inbound(
     tenant_key: str,
     inbound: ChannelInbound,
 ) -> StageResult:
+    """校验通过后把事件写入渠道收件箱,返回落库结论(丢弃/重复/暂存/重试)。
+
+    写入前依次校验事件身份、载荷大小、绑定 revision 与账号键,以及 provider tenant
+    与 identity scope——后两者为空时按首次写入钉死,已有值不匹配即回滚并丢弃;
+    唯一键冲突判定为重复投递,其余数据库异常返回 NACK 以便上层重试。
+    """
     client_id, tenant_key = client_id.strip(), tenant_key.strip()
     if inbound.channel != "dingtalk" or not inbound.event_id or not client_id or not tenant_key:
         return StageResult(StageDisposition.SECURITY_DROP, error_code="invalid_event_identity")

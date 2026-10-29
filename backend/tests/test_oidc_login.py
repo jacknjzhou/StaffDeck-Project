@@ -42,6 +42,7 @@ def _restore_user_default_factories():
 
 
 def _test_engine():
+    """创建表结构齐备的 SQLite 内存引擎,并临时让 User 时间戳生成 tz-aware 值。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -58,6 +59,7 @@ def _test_engine():
 
 
 def _client_with_oidc(monkeypatch, *, enabled: bool = True):
+    """装配启用 OIDC 配置的独立 FastAPI 实例与测试客户端,并按需关闭 OIDC。"""
     settings = Settings(
         oidc_enabled=enabled,
         oidc_issuer="https://idp.example.com",
@@ -74,6 +76,7 @@ def _client_with_oidc(monkeypatch, *, enabled: bool = True):
     engine = _test_engine()
 
     def override_get_session():
+        """用测试内存引擎的会话替换全局依赖,避免触碰真实数据库。"""
         with Session(engine) as session:
             yield session
 
@@ -82,6 +85,7 @@ def _client_with_oidc(monkeypatch, *, enabled: bool = True):
 
 
 def test_login_redirects_to_authorization_endpoint(monkeypatch):
+    """验证登录入口 302 跳转到发现文档中的授权端点,并带上 client_id 与 state。"""
     client, _ = _client_with_oidc(monkeypatch)
     with patch("app.security.oidc._discover", return_value=DISCOVERY_FULL):
         resp = client.get("/api/auth/oidc/login", follow_redirects=False)
@@ -92,12 +96,14 @@ def test_login_redirects_to_authorization_endpoint(monkeypatch):
 
 
 def test_login_returns_404_when_disabled(monkeypatch):
+    """验证 OIDC 未启用时登录入口返回 404,不暴露授权跳转。"""
     client, _ = _client_with_oidc(monkeypatch, enabled=False)
     resp = client.get("/api/auth/oidc/login", follow_redirects=False)
     assert resp.status_code == 404
 
 
 def test_callback_creates_user_and_returns_token(monkeypatch):
+    """验证回调按邮箱创建 OIDC 用户并携带令牌跳转,且同一 state 不可重放。"""
     client, engine = _client_with_oidc(monkeypatch)
     # 经 new_state() 生成合法 state,真实走 consume_state 校验(一次性)
     from app.security import oidc as oidc_mod
@@ -132,6 +138,7 @@ def test_callback_creates_user_and_returns_token(monkeypatch):
 
 
 def test_callback_rejects_unknown_state(monkeypatch):
+    """验证回调收到伪造或未知 state 时返回 400,不建立会话。"""
     client, _ = _client_with_oidc(monkeypatch)
     resp = client.get(
         "/api/auth/oidc/callback?code=c&state=forged", follow_redirects=False

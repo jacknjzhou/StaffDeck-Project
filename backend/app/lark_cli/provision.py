@@ -40,14 +40,16 @@ _PREPARE_LOCK = threading.RLock()
 
 
 class LarkCliProvisionError(Exception):
-    pass
+    """lark-cli 无法供给时抛出，覆盖路径缺失、缺少 node/npm 与安装步骤失败。"""
 
 
 def install_root() -> Path:
+    """返回受管 lark-cli 运行时的安装根目录。"""
     return paths.user_data_dir() / "lark_cli" / "runtime"
 
 
 def _managed_binary_path() -> Path:
+    """返回受管安装副本里 lark-cli 可执行文件的路径（Windows 上带 .exe 后缀）。"""
     name = "lark-cli.exe" if sys.platform == "win32" else "lark-cli"
     return install_root() / "node_modules" / "@larksuite" / "cli" / "bin" / name
 
@@ -80,6 +82,10 @@ def ensure_lark_cli() -> Path:
 
 
 def _install_managed_copy() -> None:
+    """用 npm 装好锁定版本的官方包，再显式执行其安装脚本下载平台二进制。
+
+    需要 PATH 中存在 node/npm；任一步失败或超时都会抛 LarkCliProvisionError。
+    """
     npm = shutil.which("npm")
     node = shutil.which("node")
     if not npm or not node:
@@ -112,6 +118,10 @@ def _install_managed_copy() -> None:
 
 
 def _run_step(argv: list[str], *, cwd: Path, step: str) -> None:
+    """执行一个安装步骤命令，把超时、启动失败与非零退出统一转成 LarkCliProvisionError。
+
+    异常信息带上 step 名称；非零退出时保留输出末尾 2_000 字符作为排查线索。
+    """
     try:
         completed = subprocess.run(
             argv,
@@ -134,6 +144,7 @@ def _run_step(argv: list[str], *, cwd: Path, step: str) -> None:
 
 @contextmanager
 def _provision_file_lock() -> Iterator[None]:
+    """以跨进程文件锁串行化安装流程，离开上下文时释放锁并关闭文件句柄。"""
     lock_path = paths.user_data_dir() / "lark-cli-provision.lock"
     handle = lock_path.open("a+b")
     try:
@@ -145,6 +156,7 @@ def _provision_file_lock() -> Iterator[None]:
 
 
 def _lock_file(handle: BinaryIO) -> None:
+    """对已打开的锁文件加排他锁：Windows 用 msvcrt，其它平台用 fcntl.flock。"""
     if sys.platform == "win32":
         import msvcrt
 
@@ -161,6 +173,7 @@ def _lock_file(handle: BinaryIO) -> None:
 
 
 def _unlock_file(handle: BinaryIO) -> None:
+    """释放 _lock_file 加上的排他锁，Windows 与 POSIX 各走自己的实现。"""
     if sys.platform == "win32":
         import msvcrt
 

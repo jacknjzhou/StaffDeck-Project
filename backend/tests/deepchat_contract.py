@@ -13,10 +13,10 @@ _VALIDATOR = Draft202012Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf
 
 
 def validate_digital_employee(payload: dict[str, Any]) -> None:
-    """Assert a StaffDeck payload satisfies deepchat's zod contract.
+    """校验 StaffDeck 载荷满足 deepchat 的 zod 契约。
 
-    Raises AssertionError with the JSON pointer of the first violation, so a
-    length regression names the offending field instead of the whole employee.
+    失败时抛 AssertionError 并附带首个违规字段的 JSON 指针；这样长度类回归
+    能直接指出问题字段，而不是把整个员工对象抛给人看。
     """
     errors = sorted(_VALIDATOR.iter_errors(payload), key=lambda error: list(error.path))
     if not errors:

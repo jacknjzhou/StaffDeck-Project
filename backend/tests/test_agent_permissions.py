@@ -57,6 +57,7 @@ from app.tools.tool_schema import ToolCreateRequest, ToolUpdateRequest
 
 
 def test_only_creator_or_admin_can_update_and_delete_agent() -> None:
+    """验证仅创建者或管理员可以修改、删除员工，其他人得到 403。"""
     with _test_session() as db:
         owner, other, admin = _seed_users(db)
         agent = AgentProfile(
@@ -100,6 +101,7 @@ def test_only_creator_or_admin_can_update_and_delete_agent() -> None:
 
 
 def test_non_admin_cannot_manage_overall_agent() -> None:
+    """验证整体员工只有管理员可维护，普通用户修改得到 403。"""
     with _test_session() as db:
         owner, other, admin = _seed_users(db)
         overall = AgentProfile(
@@ -131,6 +133,7 @@ def test_non_admin_cannot_manage_overall_agent() -> None:
 
 
 def test_agents_always_inherit_tenant_default_model_and_legacy_bindings_are_removed() -> None:
+    """验证员工始终继承租户默认模型，旧模型绑定在更新时被清空。"""
     with _test_session() as db:
         owner, _other, admin = _seed_users(db)
         agent = AgentProfile(
@@ -211,6 +214,7 @@ def test_agents_always_inherit_tenant_default_model_and_legacy_bindings_are_remo
 
 
 def test_startup_seed_removes_legacy_agent_model_bindings() -> None:
+    """验证启动期数据播种会清理遗留的员工模型绑定。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -256,6 +260,7 @@ def test_startup_seed_removes_legacy_agent_model_bindings() -> None:
 
 
 def test_resource_binding_requires_agent_manager() -> None:
+    """验证资源绑定只有员工管理者可写，普通成员得到 403。"""
     with _test_session() as db:
         owner, other, _admin = _seed_users(db)
         agent = AgentProfile(
@@ -290,6 +295,7 @@ def test_resource_binding_requires_agent_manager() -> None:
 
 
 def test_list_agents_filters_to_visible_agents_for_non_admin() -> None:
+    """验证非管理员的列表只含整体、自有和广场员工。"""
     with _test_session() as db:
         owner, other, admin = _seed_users(db)
         db.add(
@@ -353,6 +359,7 @@ def test_list_agents_filters_to_visible_agents_for_non_admin() -> None:
 
 
 def test_gallery_agent_is_visible_but_not_manageable_by_non_owner() -> None:
+    """验证广场员工对他人可见但不可管理，也不能在其名下创建工具。"""
     with _test_session() as db:
         owner, other, admin = _seed_users(db)
         gallery_agent = AgentProfile(
@@ -402,6 +409,7 @@ def test_gallery_agent_is_visible_but_not_manageable_by_non_owner() -> None:
 
 
 def test_only_admin_can_unpublish_gallery_agent_without_deleting_it() -> None:
+    """验证只有管理员可下架广场员工，且下架不删除员工与资源绑定。"""
     with _test_session() as db:
         owner, other, admin = _seed_users(db)
         gallery_agent = AgentProfile(
@@ -470,6 +478,7 @@ def test_only_admin_can_unpublish_gallery_agent_without_deleting_it() -> None:
 
 
 def test_agent_ownership_uses_immutable_user_id_not_username_metadata() -> None:
+    """验证归属判断只用不可变的用户 ID，伪造用户名不能获得权限。"""
     with _test_session() as db:
         owner, other, _admin = _seed_users(db)
         agent = AgentProfile(
@@ -492,6 +501,7 @@ def test_agent_ownership_uses_immutable_user_id_not_username_metadata() -> None:
 
 
 def test_agent_scope_viewer_allows_owned_and_gallery_but_blocks_private_agents() -> None:
+    """验证查看权限覆盖自有与广场员工，私有员工和跨租户被拒绝。"""
     with _test_session() as db:
         owner, other, admin = _seed_users(db)
         private = AgentProfile(
@@ -526,6 +536,7 @@ def test_agent_scope_viewer_allows_owned_and_gallery_but_blocks_private_agents()
 
 
 def test_tenant_settings_require_an_administrator() -> None:
+    """验证租户设置仅管理员可用，普通用户和跨租户访问得到 403。"""
     with _test_session() as db:
         owner, _, admin = _seed_users(db)
         assert ensure_tenant_admin("tenant_demo", admin) is admin
@@ -538,6 +549,7 @@ def test_tenant_settings_require_an_administrator() -> None:
 
 
 def test_chat_agents_exclude_unused_gallery_agents_until_current_user_marks_used() -> None:
+    """验证对话列表默认不含未使用的广场员工，标记使用后才出现。"""
     with _test_session() as db:
         owner, other, admin = _seed_users(db)
         owned = AgentProfile(
@@ -611,6 +623,7 @@ def test_chat_agents_exclude_unused_gallery_agents_until_current_user_marks_used
 
 
 def test_create_agent_records_creator_and_blocks_non_admin_overall() -> None:
+    """验证创建员工记录创建者且不可篡改，普通用户不能创建整体员工。"""
     with _test_session() as db:
         owner, other, admin = _seed_users(db)
 
@@ -705,6 +718,7 @@ def test_create_agent_records_creator_and_blocks_non_admin_overall() -> None:
 
 
 def test_private_tool_edit_does_not_mutate_open_gallery_tool() -> None:
+    """验证编辑私有工具不会改动开放广场原工具，而是派生新副本。"""
     with _test_session() as db:
         owner, _other, _admin = _seed_users(db)
         db.add(
@@ -793,6 +807,7 @@ def test_private_tool_edit_does_not_mutate_open_gallery_tool() -> None:
 
 
 def test_tool_name_cannot_be_modified_after_create() -> None:
+    """验证工具创建后不允许改名，请求返回 400。"""
     with _test_session() as db:
         _owner, _other, admin = _seed_users(db)
         db.add(
@@ -835,6 +850,7 @@ def test_tool_name_cannot_be_modified_after_create() -> None:
 
 
 def test_private_general_skill_edit_does_not_mutate_open_gallery_skill() -> None:
+    """验证编辑私有通用技能不会改动开放广场原技能，而是派生子副本。"""
     with _test_session() as db:
         owner, _other, _admin = _seed_users(db)
         db.add(
@@ -918,6 +934,7 @@ def test_private_general_skill_edit_does_not_mutate_open_gallery_skill() -> None
 
 
 def test_copy_agent_deep_copies_private_general_skill_package() -> None:
+    """验证复制员工会深拷贝私有通用技能包及其全部文件。"""
     with _test_session() as db:
         _owner, _other, admin = _seed_users(db)
         source = AgentProfile(
@@ -992,6 +1009,7 @@ def test_copy_agent_deep_copies_private_general_skill_package() -> None:
 
 
 def test_editing_shared_private_general_skill_forks_instead_of_mutating_source() -> None:
+    """验证编辑共享私有技能时派生新技能，源技能保持不变。"""
     with _test_session() as db:
         _owner, _other, admin = _seed_users(db)
         source = AgentProfile(
@@ -1073,6 +1091,7 @@ def test_editing_shared_private_general_skill_forks_instead_of_mutating_source()
 
 
 def _seed_users(db: Session) -> tuple[User, User, User]:
+    """写入租户与所有者、其他成员、管理员三个用户并返回。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     owner = User(
         id="user_owner",
@@ -1104,6 +1123,7 @@ def _seed_users(db: Session) -> tuple[User, User, User]:
 
 
 def _test_session() -> Session:
+    """打开一个已建表的内存 SQLite 会话，供权限用例复用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

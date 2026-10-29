@@ -33,6 +33,7 @@ from app.db.models import (
 
 
 def _test_engine():
+    """创建共享内存 SQLite 引擎并建表，供单个用例独占使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -43,14 +44,17 @@ def _test_engine():
 
 
 class FakeLLMClient:
+    """可编排脚本与异常的假 LLM 客户端，记录每次分类调用的入参。"""
     calls: list[dict] = []
     script: object = json.dumps({"agent_id": "stay", "confidence": 0.9, "reason": "意图不明"})
     error: Exception | None = None
 
     def __init__(self, model_config):
+        """保存模型配置，保持与真实客户端一致的构造签名。"""
         self.model_config = model_config
 
     def generate_text(self, system_prompt, user_payload, response_format=None):
+        """记录系统提示词、载荷与格式要求，再按预设脚本返回或抛错。"""
         type(self).calls.append(
             {"system": system_prompt, "payload": user_payload, "format": response_format}
         )
@@ -61,6 +65,7 @@ class FakeLLMClient:
 
 @pytest.fixture(autouse=True)
 def _fake_llm(monkeypatch):
+    """在每个用例前重置假客户端状态，并替换路由模块的模型解析。"""
     FakeLLMClient.calls = []
     FakeLLMClient.script = json.dumps({"agent_id": "stay", "confidence": 0.9, "reason": "意图不明"})
     FakeLLMClient.error = None
@@ -85,6 +90,7 @@ CANDIDATES = [
 
 
 def test_classify_hit_switches() -> None:
+    """验证分类命中其他员工时返回切换决策，并把员工描述注入分类载荷。"""
     engine = _test_engine()
     with Session(engine) as db:
         FakeLLMClient.script = json.dumps(
@@ -102,6 +108,7 @@ def test_classify_hit_switches() -> None:
 
 
 def test_classify_stay_variants() -> None:
+    """验证模型选择未知员工或当前员工时都保持不切换。"""
     engine = _test_engine()
     with Session(engine) as db:
         decision = classify_intent(db, "tenant_demo", CANDIDATES, "agent_xz", "会议室还有吗")
@@ -114,6 +121,7 @@ def test_classify_stay_variants() -> None:
 
 
 def test_classify_low_confidence_falls_back() -> None:
+    """验证置信度低于 0.75 阈值时回退到当前员工。"""
     engine = _test_engine()
     with Session(engine) as db:
         FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.5, "reason": "不太确定"})
@@ -124,6 +132,7 @@ def test_classify_low_confidence_falls_back() -> None:
 
 
 def test_classify_bad_json_and_llm_error_fall_back() -> None:
+    """验证非 JSON、非对象、未知员工与模型异常都安全回退为不切换。"""
     engine = _test_engine()
     with Session(engine) as db:
         FakeLLMClient.script = "这不是 JSON"
@@ -140,6 +149,7 @@ def test_classify_bad_json_and_llm_error_fall_back() -> None:
 
 
 def test_classify_without_model_config_stays(monkeypatch) -> None:
+    """验证未解析到模型配置时直接保持当前员工，不发起调用。"""
     engine = _test_engine()
     monkeypatch.setattr(autoroute_module, "model_for_agent", lambda db, tenant_id, agent_id, role: None)
     with Session(engine) as db:
@@ -153,6 +163,7 @@ def test_classify_without_model_config_stays(monkeypatch) -> None:
 
 
 def _seed_binding(engine, *, auto_route=None, single_mount=False) -> str:
+    """初始化租户、双员工与微信绑定，按参数写入开关并返回绑定 ID。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -209,6 +220,7 @@ def _seed_binding(engine, *, auto_route=None, single_mount=False) -> str:
 
 
 def _load_binding(engine, binding_id: str) -> ChannelBinding:
+    """在新会话中读取渠道绑定并脱离会话，避免后续访问失效。"""
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         db.expunge(binding)
@@ -216,6 +228,7 @@ def _load_binding(engine, binding_id: str) -> ChannelBinding:
 
 
 def test_sticky_rules_skip_classification() -> None:
+    """验证交接中或手动保护窗内直接跳过分类，完全不调用模型。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     with Session(engine) as db:
@@ -257,6 +270,7 @@ def test_sticky_rules_skip_classification() -> None:
 
 
 def test_sop_active_uses_higher_threshold() -> None:
+    """验证 SOP 进行中按 0.9 阈值切换，且原 SOP 会话保持可续。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     with Session(engine) as db:
@@ -299,6 +313,7 @@ def test_sop_active_uses_higher_threshold() -> None:
 
 
 def test_no_sop_uses_normal_threshold() -> None:
+    """验证无 SOP 时按 0.75 常规阈值正常切换员工。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.8, "reason": "财务问题"})
@@ -311,6 +326,7 @@ def test_no_sop_uses_normal_threshold() -> None:
 
 
 def test_parse_command_current_alias() -> None:
+    """验证 /目前 与 /当前 都被解析为查询当前员工的指令。"""
     from app.channels.service_routing import parse_command
 
     assert parse_command("/目前").kind == "current"
@@ -318,6 +334,7 @@ def test_parse_command_current_alias() -> None:
 
 
 def test_auto_route_disabled_and_single_mount_skip() -> None:
+    """验证自动路由关闭或仅挂载单个员工时跳过分类。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, auto_route=False)
     with Session(engine) as db:
@@ -334,6 +351,7 @@ def test_auto_route_disabled_and_single_mount_skip() -> None:
 
 
 def test_auto_route_hit_updates_pointer() -> None:
+    """验证自动路由命中后当前员工指针更新为目标员工。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     FakeLLMClient.script = json.dumps({"agent_id": "agent_cw", "confidence": 0.9, "reason": "财务问题"})
@@ -346,6 +364,7 @@ def test_auto_route_hit_updates_pointer() -> None:
 
 
 def test_auto_route_does_not_overwrite_manual_switch_during_classification(monkeypatch) -> None:
+    """验证分类期间发生手动切换时自动路由放弃覆盖并记录原因。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     with Session(engine) as db:
@@ -354,6 +373,7 @@ def test_auto_route_does_not_overwrite_manual_switch_during_classification(monke
         db.commit()
 
         def classify_after_manual_switch(*_args, **_kwargs):
+            """模拟分类耗时期间用户手动切换员工，并返回高置信度的切走决策。"""
             set_current_agent(
                 db,
                 binding,
@@ -383,6 +403,7 @@ def test_auto_route_does_not_overwrite_manual_switch_during_classification(monke
 
 
 def _p2p_message(event_id: str, text: str) -> dict:
+    """构造指定文本的微信单聊入站消息载荷。"""
     return {
         "message_id": event_id,
         "from_user_id": "user_ab12cd34@im.wechat",
@@ -397,18 +418,22 @@ def _p2p_message(event_id: str, text: str) -> dict:
 
 
 class RecordingAgentLoop:
+    """记录每轮请求的假 AgentLoop，避免真实推理并提交事务。"""
     calls: list = []
 
     def __init__(self, db, *, event_sink=None):
+        """保存数据库会话，供 handle_turn 提交使用。"""
         self.db = db
 
     def handle_turn(self, request):
+        """记录本轮请求并提交事务，模拟一次正常回合。"""
         type(self).calls.append(request)
         self.db.commit()
 
 
 @pytest.fixture(autouse=True)
 def _fake_agent_loop(monkeypatch):
+    """替换 AgentLoop 并屏蔽正在输入提示，隔离 intake 集成测试。"""
     RecordingAgentLoop.calls = []
     monkeypatch.setattr(agent_loop_module, "AgentLoop", RecordingAgentLoop)
     monkeypatch.setattr(intake_module, "_send_wechat_typing", lambda *args, **kwargs: None)
@@ -416,6 +441,7 @@ def _fake_agent_loop(monkeypatch):
 
 
 def test_intake_auto_route_switches_with_notice_and_event() -> None:
+    """验证自动切人时发送转接提示并落一条决策事件。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -445,6 +471,7 @@ def test_intake_auto_route_switches_with_notice_and_event() -> None:
 
 
 def test_intake_sop_event_carries_effective_threshold() -> None:
+    """验证 SOP 进行中未达阈值不切换，决策事件仍记录生效阈值 0.9。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     with Session(engine) as db:
@@ -485,6 +512,7 @@ def test_intake_sop_event_carries_effective_threshold() -> None:
 
 
 def test_intake_auto_route_stay_no_notice() -> None:
+    """验证保持原员工时不发转接提示，只记录不切换的决策事件。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -504,6 +532,7 @@ def test_intake_auto_route_stay_no_notice() -> None:
 
 
 def test_intake_new_conversation_initial_dispatch() -> None:
+    """验证全新会话首条消息即可按分类结果分发到非默认员工。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -517,6 +546,7 @@ def test_intake_new_conversation_initial_dispatch() -> None:
 
 
 def test_manual_switch_writes_pin_window_and_blocks_auto_route() -> None:
+    """验证手动切换写入 10 分钟保护窗，窗内屏蔽自动路由，过期后恢复判定。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -547,6 +577,7 @@ def test_manual_switch_writes_pin_window_and_blocks_auto_route() -> None:
 
 
 def test_intake_auto_route_disabled_uses_default() -> None:
+    """验证自动路由关闭时使用默认员工处理，且不产生决策事件。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine, auto_route=False)
     binding = _load_binding(engine, binding_id)
@@ -563,6 +594,7 @@ def test_intake_auto_route_disabled_uses_default() -> None:
 
 
 def test_intake_classification_failure_still_runs_turn() -> None:
+    """验证分类异常时回退当前员工，消息仍正常进入 AgentLoop。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -585,6 +617,7 @@ def test_intake_classification_failure_still_runs_turn() -> None:
 
 
 def test_intake_bad_json_error_in_decision_event() -> None:
+    """验证模型返回坏 JSON 时在决策事件中记录可辨识的解析失败摘要。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -603,6 +636,7 @@ def test_intake_bad_json_error_in_decision_event() -> None:
 
 
 def test_normal_decision_event_error_empty() -> None:
+    """验证正常决策事件中的 error 字段为空。"""
     engine = _test_engine()
     binding_id = _seed_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -620,6 +654,7 @@ def test_normal_decision_event_error_empty() -> None:
 
 
 def _make_api_client(engine):
+    """构建仅挂载渠道路由的测试客户端，并覆盖数据库会话依赖。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -630,6 +665,7 @@ def _make_api_client(engine):
     app.include_router(channels_api.router)
 
     def override_get_session():
+        """为每次请求提供绑定测试引擎的数据库会话。"""
         with Session(engine) as session:
             yield session
 
@@ -638,6 +674,7 @@ def _make_api_client(engine):
 
 
 def _seed_api_users(engine) -> dict[str, User]:
+    """写入租户、所有者与员工档案，返回可用于鉴权的用户字典。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         owner = User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x")
@@ -657,12 +694,14 @@ def _seed_api_users(engine) -> dict[str, User]:
 
 
 def _auth(user: User) -> dict[str, str]:
+    """用给定用户生成 Bearer 鉴权请求头。"""
     from app.security.auth import create_access_token
 
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
 def test_put_auto_route_read_write() -> None:
+    """验证 auto_route 默认开启、可显式关闭写回配置，且不传时保持原值。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     with Session(engine) as db:

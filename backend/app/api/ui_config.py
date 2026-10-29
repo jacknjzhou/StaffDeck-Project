@@ -28,6 +28,8 @@ chat_router = APIRouter(prefix="/api/chat/ui-config", tags=["chat:ui-config"])
 
 
 class UIConfigRead(BaseModel):
+    """UI 配置读取视图：界面开关、上下文预算、沙盒状态与文件存储路径。"""
+
     tenant_id: str
     show_thinking_trace: bool
     show_skill_trace: bool
@@ -61,6 +63,8 @@ class UIConfigRead(BaseModel):
 
 
 class UIConfigUpdateRequest(BaseModel):
+    """UI 配置更新请求体：带字段取值范围与跨字段一致性校验。"""
+
     tenant_id: str
     show_thinking_trace: bool = True
     show_skill_trace: bool = True
@@ -94,6 +98,7 @@ class UIConfigUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_context_budgets(self) -> UIConfigUpdateRequest:
+        """校验摘要预算不超上下文预算，并去重角色、去除摘要前缀首尾空白。"""
         summary_budget = (
             self.context_long_summary_token_budget
             + self.context_medium_summary_token_budget
@@ -109,6 +114,7 @@ class UIConfigUpdateRequest(BaseModel):
 
 
 def ui_config_read(row: UIConfig, *, restart_scheduled: bool = False) -> UIConfigRead:
+    """把 UIConfig 持久化行转成 API 视图，开启沙盒时附带诊断与 Windows 初始化指引。"""
     report = diagnostics() if row.sandbox_enabled else None
     windows_setup_required = (
         row.sandbox_enabled
@@ -181,6 +187,7 @@ def ui_config_read(row: UIConfig, *, restart_scheduled: bool = False) -> UIConfi
 
 
 def get_or_create_ui_config(db: Session, tenant_id: str) -> UIConfig:
+    """取租户 UI 配置，不存在时创建默认行并提交。"""
     ensure_tenant(db, tenant_id)
     row = db.get(UIConfig, tenant_id)
     if not row:
@@ -195,6 +202,7 @@ def get_or_create_ui_config(db: Session, tenant_id: str) -> UIConfig:
 def get_enterprise_ui_config(
     tenant_id: str = Query(...), db: Session = Depends(get_session)
 ) -> UIConfigRead:
+    """企业端读取当前租户的 UI 配置。"""
     return ui_config_read(get_or_create_ui_config(db, tenant_id))
 
 
@@ -204,6 +212,7 @@ def update_enterprise_ui_config(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> UIConfigRead:
+    """管理员更新租户 UI 配置；沙盒开关发生变化时安排重启使设置生效。"""
     ensure_tenant_admin(request.tenant_id, current_user)
     row = get_or_create_ui_config(db, request.tenant_id)
     sandbox_changed = bool(row.sandbox_enabled) != request.sandbox_enabled
@@ -240,12 +249,17 @@ def get_chat_ui_config(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> UIConfigRead:
+    """聊天端读取本租户 UI 配置，跨租户请求返回 403。"""
     if tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
     return ui_config_read(get_or_create_ui_config(db, tenant_id))
 
 
 def _validate_storage_path(value: str) -> str | None:
+    """校验并规范化文件存储目录：空值返回 None。
+
+    要求绝对路径、不是文件系统根目录、可创建且可写，不满足时抛 422。
+    """
     normalized = str(value or "").strip()
     if not normalized:
         return None
@@ -265,6 +279,10 @@ def _validate_storage_path(value: str) -> str | None:
 
 
 def _effective_storage_path(row: UIConfig) -> str:
+    """返回实际生效的 harness 存储路径：关闭沙盒时用自定义目录，否则用用户数据目录。
+
+    目录不可写时返回空串，保证诊断与读取接口无副作用（例如单元测试环境）。
+    """
     if not row.sandbox_enabled and row.harness_storage_path:
         return str(Path(row.harness_storage_path).expanduser().resolve())
     try:
@@ -280,7 +298,7 @@ _restart_scheduled = False
 
 
 def _schedule_application_restart(delay_seconds: float = 1.0) -> None:
-    """Exit after the response is flushed; the service supervisor restarts StaffDeck."""
+    """响应返回后结束进程，由服务监督进程重启 StaffDeck；重复调用只排一次。"""
 
     global _restart_scheduled
     with _restart_lock:
@@ -289,6 +307,7 @@ def _schedule_application_restart(delay_seconds: float = 1.0) -> None:
         _restart_scheduled = True
 
     def restart() -> None:
+        """向本进程发送 SIGTERM 触发退出，交由监督进程拉起新实例。"""
         os.kill(os.getpid(), signal.SIGTERM)
 
     timer = threading.Timer(delay_seconds, restart)

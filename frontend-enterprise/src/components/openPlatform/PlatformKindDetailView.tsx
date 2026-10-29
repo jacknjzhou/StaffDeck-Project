@@ -69,6 +69,7 @@ export type PlatformKindDetailViewProps = {
   userName?: string;
 };
 
+/** 列表加载中的占位骨架屏，按员工卡片与资源卡片区分高度。 */
 function DetailSkeleton({ kind }: { kind: PlatformDetailKind }) {
   const cardHeight = kind === 'agents' ? 'h-[140px]' : 'h-[112px]';
   return (
@@ -87,8 +88,9 @@ function DetailSkeleton({ kind }: { kind: PlatformDetailKind }) {
 }
 
 /**
- * Full-list view for a single 开放广场 module (/enterprise/platform/:kind).
- * Mirrors the main platform page card system inside the standard enterprise page shell.
+ * 开放广场单个模块的完整列表页（/enterprise/platform/:kind）。
+ *
+ * 复用主广场页的卡片体系，置于企业端标准页面外壳内，支持搜索、刷新与从广场下线。
  */
 export default function PlatformKindDetailView({
   kind,

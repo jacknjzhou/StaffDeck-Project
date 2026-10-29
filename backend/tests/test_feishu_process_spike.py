@@ -33,7 +33,9 @@ UNSTOPPABLE_RUNTIME = "feishu_connector_worker:run_unstoppable_contract_runtime"
 
 
 class _LocalFeishuServer:
+    """本进程内的假飞书网关：提供端点上报 HTTP 服务与 WebSocket 帧通道。"""
     def __init__(self) -> None:
+        """初始化事件循环、连接列表与重连参数等可变状态。"""
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.started = threading.Event()
@@ -48,13 +50,16 @@ class _LocalFeishuServer:
         self.reconnect_nonce = 0
 
     def _run(self) -> None:
+        """在后台线程中启动 WebSocket 服务并常驻运行事件循环。"""
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self._start_ws())
         self.started.set()
         self.loop.run_forever()
 
     async def _start_ws(self) -> None:
+        """在随机端口启动 WebSocket 服务并记录连接器应使用的地址。"""
         async def handler(connection) -> None:
+            """记录新建立的连接，并在其关闭前保持挂起。"""
             self.connections.append(connection)
             try:
                 await connection.wait_closed()
@@ -66,12 +71,15 @@ class _LocalFeishuServer:
         self.ws_url = f"ws://127.0.0.1:{port}/ws?device_id=device-1&service_id=1"
 
     def start(self) -> None:
+        """启动服务线程，并起一个返回端点地址与重连参数的 HTTP 服务。"""
         self.thread.start()
         assert self.started.wait(timeout=3.0)
         owner = self
 
         class EndpointHandler(BaseHTTPRequestHandler):
+            """应答连接器端点上报请求的假 HTTP 处理器。"""
             def do_POST(self) -> None:  # noqa: N802
+                """回填当前 server 的 ws 地址与重连配置。"""
                 length = int(self.headers.get("Content-Length", "0"))
                 self.rfile.read(length)
                 payload = json.dumps(
@@ -96,6 +104,7 @@ class _LocalFeishuServer:
                 self.wfile.write(payload)
 
             def log_message(self, _format: str, *_args) -> None:
+                """静默 HTTP 访问日志，避免测试输出噪声。"""
                 return
 
         self.http_server = ThreadingHTTPServer(("127.0.0.1", 0), EndpointHandler)
@@ -104,6 +113,7 @@ class _LocalFeishuServer:
         self.http_thread.start()
 
     def wait_for_connections(self, count: int, timeout: float = 5.0) -> None:
+        """轮询等待至少 count 个活跃连接，超时抛错。"""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             active = self.active_connection_count()
@@ -113,7 +123,9 @@ class _LocalFeishuServer:
         raise TimeoutError(f"expected {count} active WebSocket connections")
 
     def active_connection_count(self) -> int:
+        """在服务循环中统计未关闭的连接数。"""
         async def count() -> int:
+            """统计状态不是 CLOSED 的连接。"""
             return sum(not connection.state.name == "CLOSED" for connection in self.connections)
 
         return asyncio.run_coroutine_threadsafe(count(), self.loop).result(timeout=2.0)
@@ -124,7 +136,9 @@ class _LocalFeishuServer:
         timeout: float = 4.0,
         observe_response=None,
     ) -> tuple[Frame, float]:
+        """发送单帧并等待同 message_id 的应答，返回应答帧与耗时。"""
         async def exchange() -> tuple[Frame, float]:
+            """在活动连接上发送帧并循环接收直到匹配应答。"""
             active = [connection for connection in self.connections if connection.state.name != "CLOSED"]
             if not active:
                 raise RuntimeError("no active Feishu WebSocket")
@@ -149,7 +163,9 @@ class _LocalFeishuServer:
         return asyncio.run_coroutine_threadsafe(exchange(), self.loop).result(timeout=timeout + 1)
 
     def round_trip_many(self, frames: list[Frame], timeout: float = 4.0) -> dict[str, Frame]:
+        """连续发送多帧并按 message_id 收齐各自的应答。"""
         async def exchange() -> dict[str, Frame]:
+            """一次发出全部帧，再收集全部期望的应答。"""
             active = [connection for connection in self.connections if connection.state.name != "CLOSED"]
             if not active:
                 raise RuntimeError("no active Feishu WebSocket")
@@ -173,7 +189,9 @@ class _LocalFeishuServer:
         return asyncio.run_coroutine_threadsafe(exchange(), self.loop).result(timeout=timeout + 1)
 
     def close_latest_connection(self) -> None:
+        """主动关闭最近一条连接，用于触发重连场景。"""
         async def close() -> None:
+            """关闭当前最后一条未关闭的连接。"""
             active = [connection for connection in self.connections if connection.state.name != "CLOSED"]
             if active:
                 await active[-1].close()
@@ -181,17 +199,21 @@ class _LocalFeishuServer:
         asyncio.run_coroutine_threadsafe(close(), self.loop).result(timeout=2.0)
 
     def total_connection_count(self) -> int:
+        """返回累计建立的连接数。"""
         async def count() -> int:
+            """读取连接列表长度。"""
             return len(self.connections)
 
         return asyncio.run_coroutine_threadsafe(count(), self.loop).result(timeout=2.0)
 
     def stop(self) -> None:
+        """关闭 HTTP 与 WebSocket 服务并停止事件循环线程。"""
         if self.http_server:
             self.http_server.shutdown()
             self.http_server.server_close()
 
         async def close_ws() -> None:
+            """关闭全部连接与 WebSocket 服务后退出循环。"""
             for connection in list(self.connections):
                 await connection.close()
             self.ws_server.close()
@@ -206,6 +228,7 @@ class _LocalFeishuServer:
 
 @pytest.fixture
 def local_feishu_server():
+    """提供已启动的本地飞书网关，测试结束后自动清理。"""
     server = _LocalFeishuServer()
     server.start()
     try:
@@ -215,12 +238,14 @@ def local_feishu_server():
 
 
 def _create_inbox(database: Path) -> None:
+    """创建带 message_id 主键的 inbox 表，作为幂等落库观测点。"""
     with sqlite3.connect(database) as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("CREATE TABLE inbox (message_id TEXT PRIMARY KEY)")
 
 
 def _inbox_count(database: Path) -> int:
+    """统计 inbox 表行数，用于断言落库次数。"""
     with sqlite3.connect(database) as db:
         return int(db.execute("SELECT COUNT(*) FROM inbox").fetchone()[0])
 
@@ -236,6 +261,7 @@ def _write_contract_config(
     ack_write_delay: float = 0.0,
     auto_reconnect: bool = False,
 ) -> Path:
+    """按子进程 nonce 写入契约运行配置，注入故障点与延迟参数。"""
     record = supervisor._records[binding_id]
     config_dir = root / "feishu-spike"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +282,7 @@ def _write_contract_config(
 
 
 def _event_frame(message_id: str = "om_1") -> Frame:
+    """构造一条 im.message.receive_v1 事件帧，可指定消息 ID。"""
     payload = {
         "schema": "2.0",
         "header": {
@@ -305,10 +332,12 @@ def _event_frame(message_id: str = "om_1") -> Frame:
 
 
 def _header(frame: Frame, key: str) -> str | None:
+    """读取帧头部指定 key 的值，不存在时返回 None。"""
     return next((item.value for item in frame.headers if item.key == key), None)
 
 
 def _wait_for_path(path: Path, timeout: float = 3.0) -> None:
+    """轮询等待故障标记文件出现，超时抛错。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if path.exists():
@@ -318,6 +347,7 @@ def _wait_for_path(path: Path, timeout: float = 3.0) -> None:
 
 
 def _wait_for_process_exit(supervisor: FeishuProcessSupervisor, binding_id: str) -> int:
+    """轮询 poll 直到连接器进程退出并返回退出码。"""
     deadline = time.monotonic() + 4.0
     record = supervisor._records[binding_id]
     while time.monotonic() < deadline:
@@ -329,6 +359,7 @@ def _wait_for_process_exit(supervisor: FeishuProcessSupervisor, binding_id: str)
 
 
 def _parent_that_exits_without_cleanup(data_dir: str, report_connection) -> None:
+    """子进程模拟父进程崩溃退出，不清理其连接器子进程。"""
     os_environ = __import__("os").environ
     os_environ["ULTRARAG_DATA_DIR"] = data_dir
     supervisor = FeishuProcessSupervisor(
@@ -347,6 +378,7 @@ def _reconfigure_parent_for_crash_window(
     window: str,
     report_connection,
 ) -> None:
+    """子进程在指定窗口处停住后被杀，用于验证重配置恢复。"""
     os_module = __import__("os")
     os_module.environ["ULTRARAG_DATA_DIR"] = data_dir
     database = Path(data_dir) / "reconfigure-crash.db"
@@ -363,6 +395,7 @@ def _reconfigure_parent_for_crash_window(
             time.sleep(1.0)
 
     def commit_revision() -> bool:
+        """在 CAS 窗口处停住，或提交 revision 更新。"""
         if window == "after_exit_before_cas":
             report_connection.send("ready")
             while True:
@@ -374,6 +407,7 @@ def _reconfigure_parent_for_crash_window(
 
     if window == "after_cas_before_spawn":
         def block_new_spawn(_binding_id: str, _revision: int):
+            """在新进程派生窗口处停住，等待父进程被终止。"""
             report_connection.send("ready")
             while True:
                 time.sleep(1.0)
@@ -390,6 +424,7 @@ def _reconfigure_parent_for_crash_window(
 
 
 def _pid_alive(pid: int) -> bool:
+    """通过信号 0 探测进程是否仍存活。"""
     try:
         __import__("os").kill(pid, 0)
         return True
@@ -400,6 +435,7 @@ def _pid_alive(pid: int) -> bool:
 def test_real_sdk_wire_ack_is_after_visible_commit(
     tmp_path: Path, monkeypatch, local_feishu_server: _LocalFeishuServer
 ) -> None:
+    """验证线 ACK 返回时事件已提交可见，且应答头字段被正确回填。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "inbox.db"
     _create_inbox(database)
@@ -438,6 +474,7 @@ def test_real_sdk_wire_ack_is_after_visible_commit(
 def test_watchdog_kill_before_commit_rolls_back(
     tmp_path: Path, monkeypatch, local_feishu_server: _LocalFeishuServer
 ) -> None:
+    """验证提交前触发看门狗杀进程时事务回滚，inbox 不落库。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "before.db"
     _create_inbox(database)
@@ -459,6 +496,7 @@ def test_watchdog_kill_before_commit_rolls_back(
     outcome: dict[str, Exception | None] = {"error": None}
 
     def send() -> None:
+        """后台发送事件并记录连接被关闭导致的异常。"""
         try:
             local_feishu_server.round_trip(_event_frame("om_before"), timeout=2.0)
         except Exception as exc:  # connection closure is the expected wire outcome
@@ -479,6 +517,7 @@ def test_watchdog_kill_before_commit_rolls_back(
 def test_commit_before_ack_kill_replay_remains_single_row(
     tmp_path: Path, monkeypatch, local_feishu_server: _LocalFeishuServer
 ) -> None:
+    """验证提交后 ACK 前被杀时，重放同一事件仍只落一行。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "after.db"
     _create_inbox(database)
@@ -500,6 +539,7 @@ def test_commit_before_ack_kill_replay_remains_single_row(
     sender_error: list[Exception] = []
 
     def send_first_attempt() -> None:
+        """首次投递在 ACK 前被中断，记录预期异常。"""
         try:
             local_feishu_server.round_trip(_event_frame("om_after"), timeout=2.0)
         except Exception as exc:
@@ -536,6 +576,7 @@ def test_commit_before_ack_kill_replay_remains_single_row(
 def test_kill_from_sqlite_commit_trace_preserves_integrity(
     tmp_path: Path, monkeypatch, local_feishu_server: _LocalFeishuServer
 ) -> None:
+    """验证进入提交时被杀，数据库完整性仍通过且行数为 0 或 1。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "commit-entered.db"
     _create_inbox(database)
@@ -557,6 +598,7 @@ def test_kill_from_sqlite_commit_trace_preserves_integrity(
     sender_error: list[Exception] = []
 
     def send() -> None:
+        """后台发送事件并记录中断异常。"""
         try:
             local_feishu_server.round_trip(_event_frame("om_commit"), timeout=2.0)
         except Exception as exc:
@@ -577,6 +619,7 @@ def test_kill_from_sqlite_commit_trace_preserves_integrity(
 def test_watchdog_covers_stalled_wire_ack_write(
     tmp_path: Path, monkeypatch, local_feishu_server: _LocalFeishuServer
 ) -> None:
+    """验证 ACK 写入卡住时看门狗仍能杀掉进程，事件已落库。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "ack-stall.db"
     _create_inbox(database)
@@ -598,6 +641,7 @@ def test_watchdog_covers_stalled_wire_ack_write(
     sender_error: list[Exception] = []
 
     def send() -> None:
+        """后台发送事件并记录超时导致的异常。"""
         try:
             local_feishu_server.round_trip(_event_frame("om_ack_stall"), timeout=2.0)
         except Exception as exc:
@@ -615,6 +659,7 @@ def test_watchdog_covers_stalled_wire_ack_write(
 def test_multiple_inflight_frames_keep_independent_watchdog_tokens(
     tmp_path: Path, monkeypatch, local_feishu_server: _LocalFeishuServer
 ) -> None:
+    """验证多帧并发时各自持有独立看门狗令牌并能及时释放。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "multi-frame.db"
     _create_inbox(database)
@@ -653,6 +698,7 @@ def test_multiple_inflight_frames_keep_independent_watchdog_tokens(
 def test_sdk_reconnect_sleep_can_be_stopped_without_connection_reviving(
     tmp_path: Path, monkeypatch, local_feishu_server: _LocalFeishuServer
 ) -> None:
+    """验证重连休眠期间停止绑定可正常退出，且连接不会复活。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     local_feishu_server.reconnect_count = -1
     local_feishu_server.reconnect_interval = 1
@@ -688,6 +734,7 @@ def test_sdk_reconnect_sleep_can_be_stopped_without_connection_reviving(
 def test_two_real_connectors_isolate_shared_sqlite_write_contention(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证两个连接器共享 SQLite 时写锁争用被隔离，互不拖垮。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     server_a = _LocalFeishuServer()
     server_b = _LocalFeishuServer()
@@ -725,6 +772,7 @@ def test_two_real_connectors_isolate_shared_sqlite_write_contention(
         server_b.wait_for_connections(1)
 
         def hold_a_write_lock() -> None:
+            """让绑定 A 停在写后提交前以占住写锁。"""
             try:
                 server_a.round_trip(_event_frame("om_a_lock"), timeout=2.0)
             except Exception as exc:
@@ -753,6 +801,7 @@ def test_two_real_connectors_isolate_shared_sqlite_write_contention(
 
 
 def test_binding_lock_rejects_second_connector(tmp_path: Path, monkeypatch) -> None:
+    """验证同一绑定的第二个连接器会被进程锁拒绝。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "lock.db"
     first = FeishuProcessSupervisor(runtime_path=IDLE_RUNTIME, database_path=database)
@@ -771,11 +820,13 @@ def test_binding_lock_rejects_second_connector(tmp_path: Path, monkeypatch) -> N
 
 
 def test_binding_lock_treats_inaccessible_lock_as_busy(tmp_path: Path, monkeypatch) -> None:
+    """验证锁文件不可访问时按占用处理，而非误判为可获取。"""
     path = tmp_path / "connector.lock"
     lock = BindingProcessLock(path)
     original_open = Path.open
 
     def inaccessible_open(self, *args, **kwargs):
+        """对目标锁路径模拟 PermissionError。"""
         if self == path:
             raise PermissionError("simulated inaccessible lock")
         return original_open(self, *args, **kwargs)
@@ -787,6 +838,7 @@ def test_binding_lock_treats_inaccessible_lock_as_busy(tmp_path: Path, monkeypat
 def test_same_binding_in_different_databases_does_not_false_conflict(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证不同数据库下同名绑定不会误报锁冲突。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     first = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME, database_path=tmp_path / "tenant-a.db"
@@ -810,6 +862,7 @@ def test_same_binding_in_different_databases_does_not_false_conflict(
 def test_stale_generation_ipc_cannot_override_current_state(
     tmp_path: Path, monkeypatch, wrong_field: str
 ) -> None:
+    """验证过期代际的 IPC 事件无法改写当前连接状态。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME, database_path=tmp_path / "generation.db"
@@ -839,6 +892,7 @@ def test_stale_generation_ipc_cannot_override_current_state(
 
 
 def test_child_owned_lock_is_released_after_parent_pipe_closes(tmp_path: Path, monkeypatch) -> None:
+    """验证父管道关闭后子进程退出并释放绑定锁。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "orphan.db"
     supervisor = FeishuProcessSupervisor(runtime_path=IDLE_RUNTIME, database_path=database)
@@ -860,6 +914,7 @@ def test_child_owned_lock_is_released_after_parent_pipe_closes(tmp_path: Path, m
 def test_graceful_stop_reports_stopped_zero_exit_and_no_monitor_leak(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证优雅停止上报 STOPPED、退出码为 0 且监控线程不泄漏。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME,
@@ -878,6 +933,7 @@ def test_graceful_stop_reports_stopped_zero_exit_and_no_monitor_leak(
 def test_parent_process_death_releases_orphan_before_replacement_starts(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证父进程异常死亡后遗留子进程先被清理，替换实例才能启动。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     context = multiprocessing.get_context("spawn")
     parent_connection, child_connection = context.Pipe(duplex=False)
@@ -911,6 +967,7 @@ def test_parent_process_death_releases_orphan_before_replacement_starts(
 def test_parent_watchdog_escalates_from_ignored_terminate_to_kill(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证忽略 terminate 的子进程会被父看门狗升级为 kill。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=PARENT_WATCHDOG_RUNTIME,
@@ -934,6 +991,7 @@ def test_parent_watchdog_escalates_from_ignored_terminate_to_kill(
 def test_repeated_watchdog_crashes_enter_and_can_reset_circuit_breaker(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证看门狗反复崩溃触发熔断，冷却后可由 reset_backoff 恢复。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=PARENT_WATCHDOG_RUNTIME,
@@ -960,6 +1018,7 @@ def test_repeated_watchdog_crashes_enter_and_can_reset_circuit_breaker(
 def test_global_stop_kills_unresponsive_children_with_one_shared_deadline(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证全局停止在单个共享截止时间内杀掉所有无响应子进程。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=UNSTOPPABLE_RUNTIME,
@@ -983,6 +1042,7 @@ def test_global_stop_kills_unresponsive_children_with_one_shared_deadline(
 def test_repeated_start_stop_leaves_no_supervisor_threads_or_children(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证反复启停后不残留监督线程或子进程。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     before_children = {process.pid for process in multiprocessing.active_children()}
     for index in range(3):
@@ -1015,6 +1075,7 @@ def test_repeated_start_stop_leaves_no_supervisor_threads_or_children(
 def test_global_stop_waits_for_process_start_operation_to_reap_child(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证全局停止等待进行中的启动操作完成并回收子进程。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME,
@@ -1025,6 +1086,7 @@ def test_global_stop_waits_for_process_start_operation_to_reap_child(
     original_start = BaseProcess.start
 
     def blocking_start(process) -> None:
+        """阻塞进程启动以复现启动与停止的竞态。"""
         entered_start.set()
         assert release_start.wait(timeout=2.0)
         original_start(process)
@@ -1034,6 +1096,7 @@ def test_global_stop_waits_for_process_start_operation_to_reap_child(
     stop_results: list[bool] = []
 
     def start_binding() -> None:
+        """后台启动绑定并收集错误。"""
         try:
             supervisor.start_binding("binding-start-stop-race", 1)
         except Exception as exc:
@@ -1058,6 +1121,7 @@ def test_global_stop_waits_for_process_start_operation_to_reap_child(
 def test_closing_start_hands_unresponsive_started_child_to_global_stop(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证关闭中的启动失败后，已派生的无响应子进程被交还全局停止回收。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=UNSTOPPABLE_RUNTIME,
@@ -1071,12 +1135,14 @@ def test_closing_start_hands_unresponsive_started_child_to_global_stop(
     closing_attempts = 0
 
     def blocking_start(process) -> None:
+        """阻塞进程启动并记录已启动的 pid。"""
         entered_start.set()
         assert release_start.wait(timeout=2.0)
         original_start(process)
         started_pids.append(process.pid)
 
     def first_closing_attempt_fails(records, deadline):
+        """让启动线程的首次关闭尝试失败，模拟子进程无人接管。"""
         nonlocal closing_attempts
         closing_attempts += 1
         if closing_attempts == 1 and threading.current_thread().name == "start-owner-thread":
@@ -1089,6 +1155,7 @@ def test_closing_start_hands_unresponsive_started_child_to_global_stop(
     stop_results: list[bool] = []
 
     def start_binding() -> None:
+        """后台启动绑定并收集错误。"""
         try:
             supervisor.start_binding("binding-unowned-race", 1)
         except Exception as exc:
@@ -1113,6 +1180,7 @@ def test_closing_start_hands_unresponsive_started_child_to_global_stop(
 def test_global_stop_waits_for_inflight_stop_binding_operation(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证全局停止会等待进行中的 stop_binding，避免并发二次停止。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME,
@@ -1125,6 +1193,7 @@ def test_global_stop_waits_for_inflight_stop_binding_operation(
     original_stop_records = supervisor._stop_records
 
     def blocking_stop_records(records, deadline):
+        """在停止绑定线程中阻塞回收，制造并发窗口。"""
         if threading.current_thread().name == "binding-stop-thread":
             entered_stop.set()
             assert release_stop.wait(timeout=2.0)
@@ -1159,6 +1228,7 @@ def test_global_stop_waits_for_inflight_stop_binding_operation(
 def test_replace_binding_stops_old_generation_before_revision_commit(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证替换绑定时先停旧代并释放锁，再提交新 revision。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME,
@@ -1170,6 +1240,7 @@ def test_replace_binding_stops_old_generation_before_revision_commit(
     commit_observations: list[tuple[int | None, bool]] = []
 
     def commit_revision() -> bool:
+        """提交前探测旧进程已退出且绑定锁已释放。"""
         lock = BindingProcessLock(Path(old.spec.binding_lock_path))
         lock_free = lock.acquire()
         if lock_free:
@@ -1206,6 +1277,7 @@ def test_replace_binding_stops_old_generation_before_revision_commit(
 def test_concurrent_starts_reserve_process_capacity_before_spawn(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证并发启动先预占进程名额，超限时在派生之前拒绝。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME,
@@ -1217,6 +1289,7 @@ def test_concurrent_starts_reserve_process_capacity_before_spawn(
     original_spawn = supervisor._spawn_reserved_binding
 
     def blocking_spawn(binding_id: str, revision: int):
+        """阻塞首个绑定的派生，制造容量竞争窗口。"""
         if binding_id == "binding-capacity-a":
             entered_spawn.set()
             assert release_spawn.wait(timeout=2.0)
@@ -1242,6 +1315,7 @@ def test_concurrent_starts_reserve_process_capacity_before_spawn(
 def test_forget_binding_waits_for_unpublished_start_and_cannot_split_owner_lock(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证 forget 等待未发布的启动，且不会把所有者锁拆开。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME,
@@ -1252,6 +1326,7 @@ def test_forget_binding_waits_for_unpublished_start_and_cannot_split_owner_lock(
     original_spawn = supervisor._spawn_reserved_binding
 
     def blocking_spawn(binding_id: str, revision: int):
+        """阻塞派生以让 forget 与启动并发。"""
         entered_spawn.set()
         assert release_spawn.wait(timeout=2.0)
         return original_spawn(binding_id, revision)
@@ -1264,6 +1339,7 @@ def test_forget_binding_waits_for_unpublished_start_and_cannot_split_owner_lock(
     )
 
     def forget() -> None:
+        """后台调用 forget_binding 并收集错误。"""
         try:
             supervisor.forget_binding("binding-forget-race")
         except Exception as exc:
@@ -1293,6 +1369,7 @@ def test_forget_binding_waits_for_unpublished_start_and_cannot_split_owner_lock(
 def test_stop_does_not_mark_closed_until_binding_locks_are_free(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """验证绑定锁未释放前 stop 不标记已关闭，重试后才成功。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     supervisor = FeishuProcessSupervisor(
         runtime_path=IDLE_RUNTIME,
@@ -1304,6 +1381,7 @@ def test_stop_does_not_mark_closed_until_binding_locks_are_free(
     checks = 0
 
     def first_check_blocked(path: Path) -> bool:
+        """首次锁检查返回未释放，之后回落到真实检查。"""
         nonlocal checks
         checks += 1
         if checks == 1:
@@ -1329,6 +1407,7 @@ def test_reconfigure_parent_crash_windows_recover_database_generation(
     window: str,
     expected_revision: int,
 ) -> None:
+    """验证重配置父进程在三个崩溃窗口被杀后，数据库代际可恢复。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     database = tmp_path / "reconfigure-crash.db"
     with sqlite3.connect(database) as db:

@@ -506,6 +506,7 @@ type HandoffAssigneeUser = {
   channel_identities?: Array<{ channel: string; display_name?: string; external_user_id?: string }>;
 };
 
+/** 构造转接处理人下拉选项：内部成员按网页端投递，已绑定飞书/企微身份的成员额外生成带渠道标注的选项。 */
 export function handoffAssigneeUserOptions(tenantUsers: HandoffAssigneeUser[]): SelectOption[] {
   // 内部成员一律可选(网页端投递);已绑定支持渠道身份的成员追加"姓名（渠道）"选项,
   // 选中后运行时按该渠道转接。其他渠道身份不生成选项(通知未实现),
@@ -586,15 +587,18 @@ type DistillPageProps = {
   onLogout?: () => void;
 };
 
+/** 把草稿的 skill_id 锁定为当前加载的技能 ID；无需改动时原样返回入参对象。 */
 function lockSkillIdForDraft(draft: SkillCard, lockedSkillId: string): SkillCard {
   if (!lockedSkillId || draft.skill_id === lockedSkillId) return draft;
   return { ...cloneSkill(draft), skill_id: lockedSkillId };
 }
 
+/** lockSkillIdForDraft 的空值安全版本：草稿为 null 时直接返回 null。 */
 function lockNullableSkillIdForDraft(draft: SkillCard | null, lockedSkillId: string): SkillCard | null {
   return draft ? lockSkillIdForDraft(draft, lockedSkillId) : null;
 }
 
+/** 同步锁定待确认变更中前后两份草稿的 skill_id，避免切换技能后变更落到旧 ID。 */
 function lockPendingChangeSkillId(change: PendingChange | null, lockedSkillId: string): PendingChange | null {
   if (!change || !lockedSkillId) return change;
   return {
@@ -604,6 +608,13 @@ function lockPendingChangeSkillId(change: PendingChange | null, lockedSkillId: s
   };
 }
 
+/**
+ * 技能蒸馏工作台页面：左侧对话生成或改写 SOP 草稿，右侧预览源码与流程图。
+ *
+ * - 首次进入按 URL 的 skill_id / mode 读取会话缓存或加载服务端技能。
+ * - 对话触发生成与局部改写，流式事件实时更新草稿并暂存待确认变更。
+ * - active 为真时给 body 添加 skill-distill-fixed 类以固定整页布局。
+ */
 export default function DistillPage({ active = true, searchParamsOverride, currentUser, onLogout }: DistillPageProps = {}) {
   const navigate = useNavigate();
   const [routerSearchParams] = useSearchParams();
@@ -678,6 +689,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
   const [hydratedCacheKey, setHydratedCacheKey] = useState('');
 
   useEffect(() => {
+    /** 监听全局员工/团队范围切换事件，切换到具体员工时更新当前 agent。 */
     const onScopeChange = (event: Event) => {
       const next = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
       setSelectedAgentId(next && !isTeamScope(next) ? next : readEmployeeScope());
@@ -863,6 +875,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     };
   }, [active]);
 
+  /** 并行拉取工具、通用技能、知识库与 SOP 列表，并用请求序号丢弃过期响应。 */
   const refreshCapabilityCatalog = useCallback(async () => {
     if (!active) return;
     const requestId = capabilityCatalogRequestRef.current + 1;
@@ -976,6 +989,12 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setPendingChange((current) => lockPendingChangeSkillId(current, lockedSkillId));
   }, [lockedSkillId]);
 
+  /**
+   * 发送输入框内容：没有草稿时走首次生成，已有草稿时改写选中区域。
+   *
+   * - 发送前先应用待确认的改写结果，随后清空输入框与附件。
+   * - 附件正文与输入拼成 outgoingText 一并提交给模型。
+   */
   async function send() {
     const text = buildOutgoingText(input, readyAttachments);
     if (!text || loading || uploadingFile) return;
@@ -994,6 +1013,13 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     await rewriteSelectedTarget(text, confirmedDraft);
   }
 
+  /**
+   * 根据用户首条描述流式生成 SOP 草稿。
+   *
+   * - 先写入预览种子草稿，再逐块解析模型输出并实时刷新右侧预览。
+   * - 完成后写入提示、告警与工具建议，并自动探测建议的工具。
+   * - 失败时保留当前草稿并记录失败详情。
+   */
   async function createDraftFromText(text: string) {
     const payload = parseInitialSkillPrompt(text);
     setLoading(true);
@@ -1107,6 +1133,12 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /**
+   * 对选中区域发起局部改写，完成后暂存待确认变更。
+   *
+   * - 未传 targetPathsOverride 时使用当前选中路径，未选中则改写全部路径。
+   * - 流式拼接助手消息，complete 后播放差异动画并等待用户确认。
+   */
   async function rewriteSelectedTarget(
     text: string,
     currentDraft: SkillCard | null = draft,
@@ -1236,6 +1268,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 打开保存草稿弹窗：先应用待确认变更，并按已有版本号预填下一个版本。 */
   function openSaveReview(options: { clearAfterSave?: boolean } = {}) {
     const targetDraft = lockNullableSkillIdForDraft(pendingChange?.nextDraft || draft, lockedSkillId);
     if (!targetDraft) return;
@@ -1252,6 +1285,12 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setSaveReviewOpen(true);
   }
 
+  /**
+   * 保存当前草稿为新版本或新技能，成功后同步已保存快照。
+   *
+   * - 技能 ID 冲突（409）时自动改名重试，并在提示中告知新 ID。
+   * - clearAfterSave 为真时保存完成后清空当前改写工作区。
+   */
   async function saveDraft() {
     if (!saveReviewDraft) return;
     if (!hasSkillContentChanges(saveReviewDraft, lastSavedDraft)) {
@@ -1312,6 +1351,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 停止当前生成或改写：请求服务端取消任务并中断本地流。 */
   function stopStream() {
     const jobId = activeJob?.jobId;
     manualStopRef.current = true;
@@ -1325,6 +1365,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setStreamStatus('已停止');
   }
 
+  /** 记录流式事件中的 job_id、序号与状态，供断线后按 after_seq 续传。 */
   function trackActiveJobEvent(item: { event: string; data: Record<string, unknown> }, baseJob: ActiveDistillJob) {
     const jobId = typeof item.data.job_id === 'string' ? item.data.job_id : baseJob.jobId;
     if (!jobId) return;
@@ -1339,6 +1380,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }));
   }
 
+  /** 处理续传流事件：复用正常流的消息追加、完成与失败分支。 */
   function handleResumedJobEvent(job: ActiveDistillJob, item: { event: string; data: Record<string, unknown> }) {
     trackActiveJobEvent(item, job);
     if (item.event === 'status') {
@@ -1374,6 +1416,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 续传场景下应用蒸馏任务完成结果：写入草稿、告警与工具建议。 */
   function completeResumedDistillJob(job: ActiveDistillJob, data: Record<string, unknown>) {
     const rawDraftSkill = data.draft_skill as SkillCard | undefined;
     if (!rawDraftSkill) return;
@@ -1403,6 +1446,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 续传场景下应用改写任务完成结果：生成待确认变更并播放差异动画。 */
   function completeResumedRewriteJob(job: ActiveDistillJob, data: Record<string, unknown>) {
     const rawNextDraft = data.draft_skill as SkillCard | undefined;
     if (!rawNextDraft) return;
@@ -1438,6 +1482,12 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /**
+   * 上传并解析单个附件文档，把提取到的正文写入附件列表。
+   *
+   * - 仅允许 .md/.txt/.doc/.docx，不支持的类型直接提示错误。
+   * - 解析请求可被 cancelAttachment 或清空工作区中断。
+   */
   async function stageFileUpload(file: File) {
     if (loading) return;
     const suffix = file.name.toLowerCase().split('.').pop() || '';
@@ -1479,18 +1529,21 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 批量上传文件，逐个异步解析，不阻塞其余附件。 */
   function uploadFiles(files: File[]) {
     files.forEach((file) => {
       void stageFileUpload(file);
     });
   }
 
+  /** 取消指定附件的解析请求并从附件列表移除。 */
   function cancelAttachment(id: string) {
     uploadControllersRef.current[id]?.abort();
     delete uploadControllersRef.current[id];
     setAttachments((current) => current.filter((item) => item.id !== id));
   }
 
+  /** 粘贴文件时拦截默认行为，改为走附件上传流程。 */
   function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.files || []);
     if (files.length === 0) return;
@@ -1498,22 +1551,26 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     uploadFiles(files);
   }
 
+  /** 拖拽进入时累加深度，仅在拖入文件时显示上传提示。 */
   function handleDragEnter(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     dragDepthRef.current += 1;
     if (event.dataTransfer.types.includes('Files')) setDragActive(true);
   }
 
+  /** 拖拽悬停时阻止默认行为，允许文件落入对话卡片。 */
   function handleDragOver(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
   }
 
+  /** 拖拽离开时递减深度，深度归零才取消高亮。 */
   function handleDragLeave(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
     if (dragDepthRef.current === 0) setDragActive(false);
   }
 
+  /** 释放文件时结束拖拽状态并上传全部文件。 */
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     dragDepthRef.current = 0;
@@ -1521,12 +1578,19 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     uploadFiles(Array.from(event.dataTransfer.files || []));
   }
 
+  /** 打开工具建议详情弹窗，并用样例参数初始化 JSON 编辑框。 */
   function openToolDetail(messageId: string, suggestion: ToolSuggestionItem) {
     setToolDetailMessageId(messageId);
     setToolDetail(suggestion);
     setProbeArgsText(JSON.stringify(suggestion.sample_arguments || {}, null, 2));
   }
 
+  /**
+   * 自动探测新工具建议：逐个调用接口测试并写入学习记录。
+   *
+   * - 已有工具只记录匹配结果，不发起探测。
+   * - 探测结果决定后续是否允许确认新增。
+   */
   async function autoProbeToolSuggestions(messageId: string, suggestions: ToolSuggestionItem[]) {
     const extractedSuggestions = suggestions.filter((suggestion) => suggestion.resolution_status !== 'incomplete');
     const pendingSuggestions = suggestions.filter(
@@ -1572,6 +1636,13 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setStreamStatus('工具测试完成');
   }
 
+  /**
+   * 对单个工具建议执行接口探测，并把结果写回该建议。
+   *
+   * - 仅处理 new_candidate 且不在探测中的建议，否则返回 null。
+   * - 缺少样例参数时直接返回失败结果，不发起请求。
+   * - silent 为真时不弹 toast，供批量自动探测复用。
+   */
   async function probeToolSuggestion(
     messageId: string,
     suggestion: ToolSuggestionItem,
@@ -1627,6 +1698,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 校验详情弹窗中的 JSON 样例参数，合法时写回对应工具建议。 */
   function applyProbeArgumentsFromDetail() {
     if (!toolDetail || !toolDetailMessageId) return;
     const parsed = parseJsonObject(probeArgsText);
@@ -1639,6 +1711,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     notify.success('样例参数已更新');
   }
 
+  /** 用详情弹窗中填写的样例参数触发一次工具探测。 */
   function probeToolDetail() {
     if (!toolDetail || !toolDetailMessageId) return;
     const parsed = parseJsonObject(probeArgsText);
@@ -1649,6 +1722,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     void probeToolSuggestion(toolDetailMessageId, { ...toolDetail, sample_arguments: parsed }, { sampleArguments: parsed });
   }
 
+  /** 确认新增单个工具建议；所有建议处理完后统一写入 SOP 草稿。 */
   async function confirmToolSuggestion(messageId: string, suggestion: ToolSuggestionItem) {
     if (loading) return;
     if (toolSuggestionResolution(suggestion) !== 'new_candidate') {
@@ -1669,6 +1743,12 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     await commitToolSuggestionSelections(messageId, nextSuggestions);
   }
 
+  /**
+   * 落库已接受的工具建议，并把工具调用动作合并进当前草稿。
+   *
+   * - 已存在的工具（409）复用现有记录，不重复创建。
+   * - 本轮确认的变更会记录到消息操作历史，供后续回退。
+   */
   async function commitToolSuggestionSelections(messageId: string, suggestions: ToolSuggestionItem[]) {
     const activeDraft = lockNullableSkillIdForDraft(pendingChange?.nextDraft || draft, lockedSkillId);
     const acceptedSuggestions = suggestions.filter(
@@ -1740,6 +1820,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 拒绝单个工具建议：移除草稿中对应动作，全部处理完后统一提交。 */
   function rejectToolSuggestion(messageId: string, toolName: string) {
     const nextSuggestions = nextToolSuggestionsWithPatch(messageId, toolName, { status: 'rejected' });
     setToolSuggestionStatus(messageId, toolName, 'rejected');
@@ -1749,6 +1830,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 从当前草稿与待确认变更中删除指定工具的调用动作。 */
   function removeToolActionFromDraft(toolName: string) {
     setDraft((current) => (current ? lockSkillIdForDraft(removeToolActionFromSkill(current, toolName), lockedSkillId) : current));
     setPendingChange((current) =>
@@ -1761,10 +1843,12 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     );
   }
 
+  /** 更新某条消息里指定工具建议的处理状态。 */
   function setToolSuggestionStatus(messageId: string, toolName: string, status: ToolSuggestionItem['status']) {
     setToolSuggestionPatch(messageId, toolName, { status });
   }
 
+  /** 按补丁计算指定工具建议的下一份建议列表，不改动组件状态。 */
   function nextToolSuggestionsWithPatch(
     messageId: string,
     toolName: string,
@@ -1776,6 +1860,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     );
   }
 
+  /** 把补丁写入消息中的工具建议，并同步已打开的详情弹窗。 */
   function setToolSuggestionPatch(messageId: string, toolName: string, patch: Partial<ToolSuggestionItem>) {
     setMessages((current) =>
       current.map((item) =>
@@ -1792,12 +1877,14 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setToolDetail((current) => (current?.name === toolName ? { ...current, ...patch } : current));
   }
 
+  /** 关闭保存弹窗并清理保存快照与清空标记。 */
   function closeSaveReview() {
     setSaveReviewOpen(false);
     setSaveDraftSnapshot(null);
     setClearAfterSave(false);
   }
 
+  /** 处理清空入口：有未保存变更时二次确认，否则直接进入清空确认。 */
   function handleClearClick() {
     if (loading) return;
     if (!hasUnsavedSkillChanges()) {
@@ -1812,12 +1899,18 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setClearConfirmOpen(true);
   }
 
+  /** 判断当前草稿（含待确认变更）相对已保存内容是否有未保存修改。 */
   function hasUnsavedSkillChanges() {
     const targetDraft = lockNullableSkillIdForDraft(pendingChange?.nextDraft || draft, lockedSkillId);
     if (!targetDraft) return false;
     return hasSkillContentChanges(targetDraft, lastSavedDraft);
   }
 
+  /**
+   * 清空当前改写工作区：中断进行中的任务并跳转到新的空白工作台。
+   *
+   * - 会移除当前与目标会话的本地缓存，重置全部草稿与对话状态。
+   */
   function clearDistillWorkspace() {
     clearAnimationTimers();
     abortRef.current?.abort();
@@ -1858,6 +1951,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 切换单个改写目标的选中状态。 */
   function toggleTarget(target: TargetSelection) {
     setSelectedPaths((current) => {
       if (current.includes(target.path)) {
@@ -1867,6 +1961,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     });
   }
 
+  /** 应用源码区的就地编辑，并把该路径标记为改动与高亮。 */
   function handleSourceEdit(nextDraft: SkillCard, path: string) {
     const lockedDraft = lockSkillIdForDraft(nextDraft, lockedSkillId);
     setDraft(lockedDraft);
@@ -1874,22 +1969,26 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setHighlightedPaths((current) => mergePaths(current, [path]));
   }
 
+  /** 全选或取消全选所有改写目标。 */
   function toggleAllTargets() {
     setSelectedPaths(allSelected ? [] : allPaths);
   }
 
+  /** 追加一条对话消息并返回其 ID，便于后续流式更新。 */
   function pushMessage(role: ChatItem['role'], content: string, extra: Partial<ChatItem> = {}) {
     const id = `${role}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     setMessages((current) => [...current, { id, role, content, createdAt: new Date().toISOString(), ...extra }]);
     return id;
   }
 
+  /** 按 ID 局部更新消息；content 为 undefined 时保留原内容。 */
   function updateMessage(id: string, content?: string, extra: Partial<ChatItem> = {}) {
     setMessages((current) =>
       current.map((item) => (item.id === id ? { ...item, ...(content === undefined ? {} : { content }), ...extra } : item)),
     );
   }
 
+  /** 把失败信息格式化为可展开的失败卡片，并标记思考已结束。 */
   function applyDistillFailure(
     assistantId: string,
     error: unknown,
@@ -1903,6 +2002,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     });
   }
 
+  /** 展开或收起指定消息的失败详情。 */
   function toggleFailureDetails(messageId: string) {
     setMessages((current) =>
       current.map((item) =>
@@ -1911,6 +2011,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     );
   }
 
+  /** 复制失败摘要、错误码与详细信息到剪贴板。 */
   async function copyFailureDetails(failure: DistillFailure) {
     const text = [
       `${failure.summary} · ${failure.stage}`,
@@ -1927,6 +2028,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 在指定消息的操作历史末尾追加一条操作记录。 */
   function appendOperationToMessage(id: string, operation: DistillHistoryOperation) {
     setMessages((current) =>
       current.map((item) =>
@@ -1935,6 +2037,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     );
   }
 
+  /** 把操作记录追加到最后一条对话消息上。 */
   function appendOperationToLatestMessage(operation: DistillHistoryOperation) {
     setMessages((current) => {
       const index = [...current].reverse().findIndex((item) => item.role === 'assistant' || item.role === 'user');
@@ -1946,12 +2049,14 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     });
   }
 
+  /** 向指定消息追加流式文本片段。 */
   function appendMessage(id: string, content: string) {
     setMessages((current) =>
       current.map((item) => (item.id === id ? { ...item, content: `${item.content}${content}` } : item)),
     );
   }
 
+  /** 追加学习记录明细，自动忽略空内容与相邻重复项。 */
   function appendThinkingDetail(id: string, detail: string) {
     const nextDetail = detail.trim();
     if (!nextDetail) return;
@@ -1965,17 +2070,20 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     );
   }
 
+  /** 展开或收起指定消息的学习记录。 */
   function toggleThinking(id: string) {
     setMessages((current) =>
       current.map((item) => (item.id === id ? { ...item, thinkingOpen: !item.thinkingOpen } : item)),
     );
   }
 
+  /** 收尾一次流式请求：解除当前中断器引用并结束加载态。 */
   function finishStream(controller: AbortController) {
     if (abortRef.current === controller) abortRef.current = null;
     setLoading(false);
   }
 
+  /** 为编辑历史消息创建深度拷贝快照，便于回退到发送前状态。 */
   function createHistorySnapshot(): DistillHistorySnapshot {
     return {
       draft: draft ? cloneSkill(draft) : null,
@@ -2001,6 +2109,11 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     };
   }
 
+  /**
+   * 用历史快照恢复草稿、选中路径、待确认变更与工具列表。
+   *
+   * - 恢复前会中断进行中的流式请求并清理差异动画。
+   */
   function restoreHistorySnapshot(snapshot: DistillHistorySnapshot) {
     clearAnimationTimers();
     abortRef.current?.abort();
@@ -2032,6 +2145,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setLoading(false);
   }
 
+  /** 确认待确认变更：采用新草稿并标记该条消息为已确认。 */
   function confirmPendingChange(showToast = true) {
     if (!pendingChange) return;
     clearAnimationTimers();
@@ -2043,6 +2157,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     if (showToast) notify.success('已确认改写');
   }
 
+  /** 拒绝待确认变更：回滚到改写前草稿并标记该条消息为已拒绝。 */
   function rejectPendingChange() {
     if (!pendingChange) return;
     clearAnimationTimers();
@@ -2055,11 +2170,13 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     notify.info('已拒绝改写并还原');
   }
 
+  /** 进入历史用户消息的编辑态；生成中或非用户消息不处理。 */
   function requestEditHistoryMessage(item: ChatItem, index: number) {
     if (loading || item.role !== 'user') return;
     setEditingMessage({ id: item.id, text: visibleChatContent(item) });
   }
 
+  /** 复制历史消息的可见文本到剪贴板。 */
   async function copyHistoryMessage(item: ChatItem) {
     const text = visibleChatContent(item);
     try {
@@ -2070,10 +2187,17 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /** 退出历史消息编辑态，不提交任何修改。 */
   function cancelEditingMessage() {
     setEditingMessage(null);
   }
 
+  /**
+   * 提交编辑后的历史消息：按需回退后续操作并重新生成。
+   *
+   * - 消息带快照时可能弹出二次确认，确认后重跑后续步骤。
+   * - 无快照时只替换该条消息的文本。
+   */
   function submitEditingMessage() {
     if (!editingMessage || loading) return;
     const text = editingMessage.text.trim();
@@ -2099,6 +2223,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     setRerunConfirm({ index, snapshot, rollbackOperations, text, outgoingText });
   }
 
+  /** 回退历史操作后以编辑后的文本重新执行生成或改写。 */
   async function rerunEditedMessage(
     index: number,
     snapshot: DistillHistorySnapshot,
@@ -2139,6 +2264,11 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /**
+   * 回退已落库的操作：删除新建工具、还原技能内容并清理新增版本。
+   *
+   * - 回退失败时仅忽略单条错误，随后仍按快照恢复本地状态。
+   */
   async function rollbackPersistedOperations(
     snapshot: DistillHistorySnapshot,
     operations: DistillHistoryOperation[],
@@ -2180,6 +2310,12 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     }
   }
 
+  /**
+   * 播放草稿差异动画：先标记改动路径，再逐字回放新旧文本。
+   *
+   * - markDelay 为动画启动前的标记停留时长（毫秒）。
+   * - 无改动路径时直接切换到新草稿。
+   */
   function animateDraftChange(
     previousDraft: SkillCard,
     nextDraft: SkillCard,
@@ -2225,6 +2361,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     animationTimersRef.current.push(startTimer);
   }
 
+  /** 清理全部差异动画定时器，避免卸载或切换后继续写入状态。 */
   function clearAnimationTimers() {
     animationTimersRef.current.forEach((timer) => {
       window.clearTimeout(timer);
@@ -2893,6 +3030,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
   );
 }
 
+/** 蒸馏工作台通用分节卡片：标题栏加可滚动内容区，支持透传 div 属性。 */
 function DistillSectionCard({
   className,
   bodyClassName,
@@ -2920,6 +3058,7 @@ function DistillSectionCard({
   );
 }
 
+/** 通用弹窗：统一圆角、最大高度、标题与底部操作区布局。 */
 function KDialog({
   open,
   onOpenChange,
@@ -2955,6 +3094,7 @@ function KDialog({
   );
 }
 
+/** 轻量 Tooltip 包装：title 为空时直接渲染子节点，不挂载浮层。 */
 function SimpleTooltip({ title, children }: { title?: ReactNode; children: ReactNode }) {
   if (!title) return <>{children}</>;
   return (
@@ -2967,6 +3107,7 @@ function SimpleTooltip({ title, children }: { title?: ReactNode; children: React
   );
 }
 
+/** 空状态占位组件，居中显示说明文案。 */
 function EmptyState({ description }: { description: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-[8px] py-[32px] text-center text-[13px] text-[#858b9c]">
@@ -2975,6 +3116,7 @@ function EmptyState({ description }: { description: ReactNode }) {
   );
 }
 
+/** 小型灰色标签，用于展示回退操作等短文本。 */
 function DistillTag({ children }: { children: ReactNode }) {
   return (
     <span className="inline-flex items-center rounded-[6px] bg-[#f2f3f5] px-[8px] py-px text-[12px] font-medium leading-[18px] text-[#5b6273]">
@@ -2983,9 +3125,7 @@ function DistillTag({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * Inline text input for the SOP source editor.
- */
+/** SOP 源码编辑器内的单行文本输入框。 */
 function SourceInput({
   className,
   ...rest
@@ -3005,7 +3145,7 @@ function SourceInput({
   return <Input className={cn(SOURCE_INPUT_CLASS, className)} {...rest} />;
 }
 
-/** Auto-growing textarea replacement for Ant Design's `Input.TextArea autoSize`. */
+/** 自适应高度的多行文本域，替代 Ant Design 的 `Input.TextArea autoSize`。 */
 function AutoGrowTextarea({
   className,
   minRows = 1,
@@ -3029,6 +3169,7 @@ function AutoGrowTextarea({
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
+    /** 按内容高度重新计算文本域高度与滚动策略，行高与内边距取自计算样式。 */
     const resize = () => {
       const computed = window.getComputedStyle(el);
       const lineHeight = Number.parseFloat(computed.lineHeight) || 20;
@@ -3071,7 +3212,7 @@ function AutoGrowTextarea({
   );
 }
 
-/** Native number input replacement for Ant Design's `InputNumber`. */
+/** 原生数字输入框，替代 Ant Design 的 `InputNumber`，空串会回传 null。 */
 function SourceNumberInput({
   className,
   value,
@@ -3101,9 +3242,10 @@ function SourceNumberInput({
 }
 
 /**
- * Searchable action picker (replaces Ant Design's `Select showSearch`). Renders
- * a filterable input backed by a popover list. Committing an empty value removes
- * the action, matching the previous `allowClear` behaviour.
+ * 可搜索的动作选择器，替代 Ant Design 的 `Select showSearch`。
+ *
+ * - 输入框负责过滤，候选动作在 Popover 列表中展示。
+ * - 提交空值表示删除该动作，对应原 `allowClear` 行为。
  */
 function ActionCombobox({
   value,
@@ -3186,7 +3328,7 @@ function ActionCombobox({
   );
 }
 
-/** shadcn Select styled for the SOP source editor. */
+/** 适配 SOP 源码编辑器样式的 shadcn Select。 */
 function SourceSelect({
   className,
   value,
@@ -3216,6 +3358,12 @@ function SourceSelect({
   );
 }
 
+/**
+ * SOP 源码视图：以可编辑文本形式展示基础信息、节点与流转规则。
+ *
+ * - 编辑结果通过 onEdit 回传整份草稿与改动路径，由父组件写回状态。
+ * - 选中、高亮、改写中与差异动画状态均由父组件传入。
+ */
 function SkillSource({
   skill,
   selectedPaths,
@@ -3255,6 +3403,7 @@ function SkillSource({
 }) {
   const [deleteNodeIndex, setDeleteNodeIndex] = useState<number | null>(null);
 
+  /** 修改基础信息字段，并按字段类型做列表拆分、数字与能力范围归一化。 */
   function editBasic(
     field: keyof SkillCard,
     value: string | string[] | number | null,
@@ -3273,6 +3422,12 @@ function SkillSource({
     onEdit(next, 'basic');
   }
 
+  /**
+   * 修改指定节点的单个字段，并处理改名、能力引用与节点类型联动。
+   *
+   * - 节点 ID 改名会同步更新关联边、起始节点与终止节点。
+   * - 能力引用统一写入 capability_refs，并删除遗留的旧字段。
+   */
   function editStep(index: number, field: string, value: string | string[] | boolean | Record<string, unknown>) {
     const next = cloneSkill(skill);
     const listValue = [
@@ -3344,6 +3499,7 @@ function SkillSource({
     onEdit(next, stepTargetPath(index));
   }
 
+  /** 更新某节点下第 edgeIndex 条出边，先按节点 ID 定位到全局边序号。 */
   function updateEdge(index: number, edgeIndex: number, patch: Record<string, unknown>) {
     const next = cloneSkill(skill);
     const sourceId = nodeIdAt(next, index);
@@ -3355,6 +3511,7 @@ function SkillSource({
     onEdit(next, stepTargetPath(index));
   }
 
+  /** 为指定节点新增一条出边，默认指向下一节点，优先级排在末尾。 */
   function addEdge(index: number) {
     const next = cloneSkill(skill);
     const sourceId = nodeIdAt(next, index);
@@ -3378,6 +3535,7 @@ function SkillSource({
     onEdit(next, stepTargetPath(index));
   }
 
+  /** 删除指定节点下第 edgeIndex 条出边。 */
   function deleteEdge(index: number, edgeIndex: number) {
     const next = cloneSkill(skill);
     const sourceId = nodeIdAt(next, index);
@@ -3389,6 +3547,12 @@ function SkillSource({
     onEdit(next, stepTargetPath(index));
   }
 
+  /**
+   * 在指定节点之后插入新节点，并自动串接前后的流转边。
+   *
+   * - 原有的直连边会改为指向新节点，再补一条新节点到后继的边。
+   * - 空流程插入时会把新节点同时设为起始与终止节点。
+   */
   function insertNodeBetween(index: number) {
     const next = cloneSkill(skill);
     const nodes = normalizeSkillNodes(next);
@@ -3499,6 +3663,7 @@ function SkillSource({
     onEdit(next, stepTargetPath(insertAt));
   }
 
+  /** 请求删除节点：至少保留一个节点，满足条件时打开二次确认。 */
   function confirmDeleteNode(index: number) {
     const nodes = normalizeSkillNodes(skill);
     if (nodes.length <= 1) {
@@ -3508,6 +3673,7 @@ function SkillSource({
     setDeleteNodeIndex(index);
   }
 
+  /** 执行删除节点，并清理相关边、起始节点与终止节点引用。 */
   function runDeleteNode(index: number) {
     const nodes = normalizeSkillNodes(skill);
     const node = nodes[index];
@@ -3527,6 +3693,7 @@ function SkillSource({
     onEdit(next, stepTargetPath(Math.min(index, Math.max(nextNodes.length - 1, 0))));
   }
 
+  /** 渲染删除节点确认弹窗，列出会被一并移除的连接关系。 */
   function renderDeleteNodeConfirm() {
     if (deleteNodeIndex === null) return null;
     const nodes = normalizeSkillNodes(skill);
@@ -3800,6 +3967,13 @@ function SkillSource({
   );
 }
 
+/**
+ * SOP 流程图视图：用节点画布展示草稿结构，支持选择、就地编辑与连线调整。
+ *
+ * - 节点位置可拖拽微调并以覆盖值叠加到原始布局；缩放与平移状态由本组件维护。
+ * - 选择节点或基础信息时同步父组件的改写目标，编辑结果通过 onEdit 回传。
+ * - 全屏下支持滚轮缩放、空白拖拽平移、Esc 退出与 Delete 删除选中连线。
+ */
 function SkillFlow({
   skill,
   selectedPaths,
@@ -3944,6 +4118,7 @@ function SkillFlow({
     ...handoffAssigneeUserOptions(tenantUsers),
   ];
 
+  /** 修改流程图节点的单个字段，联动处理节点改名、能力引用与节点类型切换。 */
   const editFlowNode = (
     index: number,
     field: string,
@@ -4013,6 +4188,7 @@ function SkillFlow({
     onEdit(next, stepTargetPath(index));
   };
 
+  /** 修改流程图基础信息字段，并按字段类型做列表拆分与数值归一化。 */
   const editFlowBasic = (
     field: keyof SkillCard,
     value: string | string[] | number | null,
@@ -4031,6 +4207,7 @@ function SkillFlow({
     onEdit(next, 'basic');
   };
 
+  /** 更新指定节点下第 edgeIndex 条出边。 */
   const updateFlowEdge = (index: number, edgeIndex: number, patch: Record<string, unknown>) => {
     const next = cloneSkill(skill);
     const sourceId = nodeIdAt(next, index);
@@ -4042,6 +4219,7 @@ function SkillFlow({
     onEdit(next, stepTargetPath(index));
   };
 
+  /** 为指定节点新增一条出边，默认连接到另一个节点。 */
   const addFlowEdge = (index: number) => {
     const next = cloneSkill(skill);
     const sourceId = nodeIdAt(next, index);
@@ -4061,6 +4239,7 @@ function SkillFlow({
     onEdit(next, stepTargetPath(index));
   };
 
+  /** 删除指定节点下第 edgeIndex 条出边。 */
   const deleteFlowEdge = (index: number, edgeIndex: number) => {
     const next = cloneSkill(skill);
     const sourceId = nodeIdAt(next, index);
@@ -4072,6 +4251,12 @@ function SkillFlow({
     onEdit(next, stepTargetPath(index));
   };
 
+  /**
+   * 在流程图中连接两个节点，自动去重并提示结果。
+   *
+   * - 已存在相同流转时只提示警告，不重复创建。
+   * - 新建后选中源节点，并把整份草稿回传父组件。
+   */
   const connectFlowNodes = (sourceNodeId: string, targetNodeId: string) => {
     if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return;
     const next = cloneSkill(skill);
@@ -4099,6 +4284,7 @@ function SkillFlow({
     onEdit(next, stepTargetPath(Math.max(sourceIndex, 0)));
     notify.success(`已连接到「${targetName}」，右侧流转规则已同步`);
   };
+  /** 删除流程图中指定下标的连线，并清空连线选中状态。 */
   const deleteFlowEdgeAt = (edgeIndex: number) => {
     const edge = normalizeSkillEdges(skill)[edgeIndex];
     if (!edge) return;
@@ -4111,6 +4297,7 @@ function SkillFlow({
     setSelectedEdgeId('');
     notify.success(`已删除「${nodeNameMap[sourceNodeId] || sourceNodeId} → ${nodeNameMap[targetNodeId] || targetNodeId}」流转`);
   };
+  /** 开始拖拽节点：记录起始指针与节点坐标，点击交互控件时不触发。 */
   const startNodeDrag = (
     event: ReactPointerEvent<HTMLDivElement>,
     node: SkillFlowCanvasNode,
@@ -4130,6 +4317,7 @@ function SkillFlow({
       captureTarget: event.currentTarget,
     };
   };
+  /** 拖拽节点移动：超过 4px 阈值后才更新节点位置覆盖值。 */
   const handleNodePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = nodeDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
@@ -4147,6 +4335,7 @@ function SkillFlow({
     setFlowPreset(null);
     setNodePositionOverrides((current) => ({ ...current, [drag.nodeId]: position }));
   };
+  /** 结束节点拖拽：写回节点坐标，并抑制随后触发的点击事件。 */
   const finishNodeDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = nodeDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
@@ -4163,6 +4352,12 @@ function SkillFlow({
     suppressNodeClickRef.current = drag.nodeId;
     onEdit(withSkillNodeFlowPosition(skill, drag.nodeIndex, position), stepTargetPath(drag.nodeIndex));
   };
+  /**
+   * 调整画布缩放，并在全屏与内嵌模式下分别保持视觉中心不动。
+   *
+   * - preset 用于标记适配/100% 按钮的激活态。
+   * - minimumZoom 控制允许的最小缩放比例。
+   */
   const updateZoom = (
     nextZoom: number,
     preset: 'fit' | '100' | null = null,
@@ -4196,6 +4391,7 @@ function SkillFlow({
       container.scrollTop = Math.max(0, centerY * next - container.clientHeight / 2);
     });
   };
+  /** 按视口尺寸把整张流程图缩放到可见范围，并回到起始节点位置。 */
   const fitFlowToViewport = (fullscreenMode = isFullscreen) => {
     const container = containerRef.current;
     if (!container) {
@@ -4227,6 +4423,7 @@ function SkillFlow({
       container.scrollTop = 0;
     });
   };
+  /** 以 72% 缩放把视图聚焦到起始节点。 */
   const focusFlowStart = () => {
     const container = containerRef.current;
     if (!container) return;
@@ -4238,6 +4435,7 @@ function SkillFlow({
       y: 44 - graphLayout.root.y * nextZoom,
     });
   };
+  /** 切换全屏：同步父组件状态并重排画布，退出时清理连线拖拽状态。 */
   const toggleFullscreen = () => {
     const nextFullscreen = !isFullscreen;
     setIsFullscreen(nextFullscreen);
@@ -4261,6 +4459,7 @@ function SkillFlow({
       });
     });
   };
+  /** 全屏下按住连接手柄开始拖拽连线，记录起点并捕获指针。 */
   const startConnectionDrag = (event: ReactPointerEvent<HTMLButtonElement>, sourceNodeId: string) => {
     if (!isFullscreen) return;
     event.preventDefault();
@@ -4272,11 +4471,13 @@ function SkillFlow({
     connectionPointerRef.current = { sourceNodeId, startX, startY };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
+  /** 点击连接手柄时先武装源节点，等待再点目标节点完成连接。 */
   const armConnectionClick = (event: MouseEvent<HTMLButtonElement>, sourceNodeId: string) => {
     event.preventDefault();
     event.stopPropagation();
     setArmedConnectionSourceId(sourceNodeId);
   };
+  /** 拖拽连线过程中更新预览终点，悬停到其他节点时自动吸附。 */
   const handleConnectionPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const pending = connectionPointerRef.current;
     if (!pending) return;
@@ -4297,6 +4498,7 @@ function SkillFlow({
     connectionDragRef.current = nextDrag;
     setConnectionDrag(nextDrag);
   };
+  /** 结束连线拖拽：命中目标节点时创建流转，否则切换武装状态。 */
   const handleConnectionPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     const pending = connectionPointerRef.current;
     const drag = connectionDragRef.current;
@@ -4312,6 +4514,7 @@ function SkillFlow({
     const targetNodeId = drag.targetNodeId || target?.dataset.flowNodeId || '';
     if (targetNodeId) connectFlowNodes(drag.sourceNodeId, targetNodeId);
   };
+  /** 全屏下按下画布空白区域开始平移，节点与交互控件不触发。 */
   const handlePanPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!isFullscreen || connectionDrag || event.button !== 0) return;
     const target = event.target as HTMLElement;
@@ -4325,6 +4528,7 @@ function SkillFlow({
     };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
+  /** 平移画布：按指针位移更新平移量。 */
   const handlePanPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const pan = panStateRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
@@ -4333,11 +4537,13 @@ function SkillFlow({
       y: pan.panY + event.clientY - pan.y,
     });
   };
+  /** 结束画布平移并释放指针捕获。 */
   const stopPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (panStateRef.current?.pointerId !== event.pointerId) return;
     panStateRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
+  /** 布局变化后重新计算连线预览起点，保证预览与连接手柄对齐。 */
   const scheduleConnectionPreviewReanchor = () => {
     const pending = connectionPointerRef.current;
     if (!pending) return;
@@ -4347,6 +4553,7 @@ function SkillFlow({
         if (!latestPending) return;
         const container = containerRef.current;
         const nodeElements = container?.querySelectorAll<HTMLElement>('[data-flow-node-id]');
+        /** 在已渲染的节点元素中按节点 ID 查找对应 DOM。 */
         const findNode = (nodeId: string) => Array.from(nodeElements || [])
           .find((node) => node.dataset.flowNodeId === nodeId);
         const sourceHandle = findNode(latestPending.sourceNodeId)
@@ -4379,6 +4586,11 @@ function SkillFlow({
       });
     });
   };
+  /**
+   * 全屏画布滚轮处理：Ctrl/Meta 组合为缩放，否则平移视图。
+   *
+   * - 缩放以指针位置为锚点，并同步重锚连线预览。
+   */
   const handleCanvasWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (!isFullscreen) return;
     event.preventDefault();
@@ -4412,6 +4624,7 @@ function SkillFlow({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
+    /** 记录画布可视宽度，供全屏居中等布局计算使用。 */
     const updateWidth = () => setFlowViewportWidth(container.clientWidth);
     updateWidth();
     const observer = new ResizeObserver(updateWidth);
@@ -4436,6 +4649,7 @@ function SkillFlow({
   useEffect(() => {
     if (!isFullscreen) return undefined;
     const previousOverflow = document.body.style.overflow;
+    /** 全屏键盘处理：Delete 删除选中连线，Esc 依次取消连线、武装与全屏。 */
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedEdgeId) {
         const target = event.target as HTMLElement | null;
@@ -4877,6 +5091,7 @@ function SkillFlow({
   );
 }
 
+/** 结构编辑面板中的分组区块：标题、说明与字段列表。 */
 function FlowInspectorSection({
   title,
   description,
@@ -4897,6 +5112,7 @@ function FlowInspectorSection({
   );
 }
 
+/** 流程图全屏时的基础信息编辑面板，与源码视图共用同一份草稿。 */
 function SkillFlowBasicInspector({
   skill,
   lockSkillId,
@@ -4956,6 +5172,12 @@ function SkillFlowBasicInspector({
   );
 }
 
+/**
+ * 流程图全屏时的节点编辑面板：节点定义、能力引用与流转规则。
+ *
+ * - 未选中节点时展示引导占位，不渲染编辑表单。
+ * - 编辑结果通过 onEditNode/onAddEdge 等回调回传父组件。
+ */
 function SkillFlowInspector({
   node,
   nodeIndex,
@@ -5087,6 +5309,12 @@ function SkillFlowInspector({
   );
 }
 
+/**
+ * 流程图节点卡片：展示节点摘要、能力标签与连线入口。
+ *
+ * - connecting/dropTarget 控制连线拖拽过程中的高亮反馈。
+ * - 点击卡片会同时选中该节点并切换右侧改写目标。
+ */
 function SkillFlowNodeCard({
   index,
   step,
@@ -5206,6 +5434,7 @@ function SkillFlowNodeCard({
   );
 }
 
+/** 子 SOP 节点的流程预览：展示前几个节点名与共享字段提示。 */
 function NestedSopPreview({ childSop, subSopId }: { childSop?: SkillRead; subSopId: string }) {
   const childNodes = childSop ? skillGraphSteps(childSop.content) : [];
   const visibleNodes = childNodes.slice(0, 4);
@@ -5237,6 +5466,7 @@ function NestedSopPreview({ childSop, subSopId }: { childSop?: SkillRead; subSop
   );
 }
 
+/** 流程图元信息行：左侧标签加右侧内容。 */
 function FlowMetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className={FLOW_META_ROW_CLASS}>
@@ -5246,6 +5476,7 @@ function FlowMetaRow({ label, children }: { label: string; children: ReactNode }
   );
 }
 
+/** 纯文本标签列表，空值时显示占位短横线。 */
 function PlainChipList({ values }: { values: unknown }) {
   const items = asStringList(values);
   if (items.length === 0) return <span className={cn(FLOW_CHIP_CLASS, FLOW_CHIP_MUTED_CLASS)}>-</span>;
@@ -5260,6 +5491,7 @@ function PlainChipList({ values }: { values: unknown }) {
   );
 }
 
+/** 动作标签列表，按动作逐个渲染带工具提示的 chip。 */
 function FlowActionList({
   actions,
   toolDescriptions,
@@ -5278,6 +5510,7 @@ function FlowActionList({
   );
 }
 
+/** 把草稿节点归一化为流程图使用的步骤结构，并展开兼容旧字段的能力引用。 */
 function skillGraphSteps(skill: SkillCard): Array<Record<string, unknown>> {
   if (Array.isArray(skill.nodes) && skill.nodes.length > 0) {
     return skill.nodes.map((node, index) => {
@@ -5310,6 +5543,7 @@ function skillGraphSteps(skill: SkillCard): Array<Record<string, unknown>> {
   return [];
 }
 
+/** 读取节点能力引用：兼容 capability_refs 与旧的扁平字段，并过滤失效的必选引用。 */
 function nodeCapabilityRefs(node: Record<string, unknown>) {
   const refs = isRecord(node.capability_refs) ? node.capability_refs : {};
   const generalSkillIds = asStringList(refs.general_skill_ids ?? node.general_skill_ids);
@@ -5331,6 +5565,7 @@ function nodeCapabilityRefs(node: Record<string, unknown>) {
   };
 }
 
+/** 更新某一类能力引用并自动去重，同时剔除已不在允许列表中的必选引用。 */
 function updateCapabilityRefs(
   refs: ReturnType<typeof nodeCapabilityRefs>,
   field: string,
@@ -5346,6 +5581,7 @@ function updateCapabilityRefs(
   return next;
 }
 
+/** 按源节点 ID 归集流转边，便于流程图与源码视图按节点渲染出边。 */
 function skillGraphEdgeMap(skill: SkillCard): Record<string, Array<Record<string, unknown>>> {
   const map: Record<string, Array<Record<string, unknown>>> = {};
   (Array.isArray(skill.edges) ? skill.edges : []).forEach((edge) => {
@@ -5357,6 +5593,7 @@ function skillGraphEdgeMap(skill: SkillCard): Record<string, Array<Record<string
   return map;
 }
 
+/** 归一化节点数组：过滤非对象项并补齐 node_id。 */
 function normalizeSkillNodes(skill: SkillCard): Array<Record<string, unknown>> {
   return Array.isArray(skill.nodes) ? skill.nodes.filter(isRecord).map((node, index) => ({
     ...node,
@@ -5364,6 +5601,7 @@ function normalizeSkillNodes(skill: SkillCard): Array<Record<string, unknown>> {
   })) : [];
 }
 
+/** 归一化流转边数组：过滤非对象项并补齐缺省字段与优先级。 */
 function normalizeSkillEdges(skill: SkillCard): Array<Record<string, unknown>> {
   return Array.isArray(skill.edges) ? skill.edges.filter(isRecord).map((edge, index) => ({
     source_node_id: String(edge.source_node_id || ''),
@@ -5374,11 +5612,13 @@ function normalizeSkillEdges(skill: SkillCard): Array<Record<string, unknown>> {
   })) : [];
 }
 
+/** 取指定下标节点的节点 ID，缺失时回退为 node_N。 */
 function nodeIdAt(skill: SkillCard, index: number): string {
   const node = normalizeSkillNodes(skill)[index];
   return String(node?.node_id || node?.step_id || `node_${index + 1}`);
 }
 
+/** 把某节点内的局部出边下标记为全局边下标，找不到时返回 -1。 */
 function findSourceEdgeIndex(edges: Array<Record<string, unknown>>, sourceId: string, localIndex: number): number {
   let seen = -1;
   return edges.findIndex((edge) => {
@@ -5388,11 +5628,13 @@ function findSourceEdgeIndex(edges: Array<Record<string, unknown>>, sourceId: st
   });
 }
 
+/** 读取流转边优先级，非法值回退到给定默认值。 */
 function edgePriority(edge: Record<string, unknown>, fallback = 0): number {
   const value = Number(edge.priority);
   return Number.isFinite(value) ? value : fallback;
 }
 
+/** 在现有节点集合内生成不重复的节点 ID，冲突时追加数字后缀。 */
 function uniqueNodeId(nodes: Array<Record<string, unknown>>, preferred: string): string {
   const used = new Set(nodes.map((node) => String(node.node_id || node.step_id || '')).filter(Boolean));
   const base = preferred.replace(/\s+/g, '_').replace(/[^\w.-]/g, '') || 'node';
@@ -5404,6 +5646,7 @@ function uniqueNodeId(nodes: Array<Record<string, unknown>>, preferred: string):
   return `${base}_${Date.now()}`;
 }
 
+/** 按节点 ID 生成「Node N · 名称」的展示名，缺失时回退为原始 ID。 */
 function nodeDisplayNameById(nodes: Array<Record<string, unknown>>, nodeId: string): string {
   const index = nodes.findIndex((node) => String(node.node_id || node.step_id || '') === nodeId);
   if (index < 0) return nodeId || '未指定节点';
@@ -5434,6 +5677,7 @@ type SkillFlowCanvasEdge = {
   labelY: number;
 };
 
+/** 估算文本按给定每行字符数换行后占用的行数，用于节点高度预估。 */
 function estimatedWrappedLines(value: unknown, charactersPerLine: number): number {
   const text = String(value || '').trim();
   if (!text) return 1;
@@ -5442,6 +5686,7 @@ function estimatedWrappedLines(value: unknown, charactersPerLine: number): numbe
   ), 0);
 }
 
+/** 按说明、字段与动作数量估算流程图节点卡片高度，取所有节点的最大值。 */
 function estimateSkillFlowNodeHeight(nodes: Array<Record<string, unknown>>): number {
   return Math.max(324, ...nodes.map((node) => {
     const instructionHeight = estimatedWrappedLines(node.instruction || '暂无说明', 24) * 21;
@@ -5451,6 +5696,7 @@ function estimateSkillFlowNodeHeight(nodes: Array<Record<string, unknown>>): num
   }));
 }
 
+/** 估算流程图根节点（基础信息）卡片高度。 */
 function estimateSkillFlowRootHeight(skill: SkillCard): number {
   const descriptionHeight = estimatedWrappedLines(skill.description || '暂无描述', 38) * 21;
   const infoRows = Math.ceil(asStringList(skill.required_info).length / 4) * 28;
@@ -5458,6 +5704,12 @@ function estimateSkillFlowRootHeight(skill: SkillCard): number {
   return Math.max(270, 154 + descriptionHeight + infoRows + intentRows + 72);
 }
 
+/**
+ * 计算流程图完整画布布局：节点坐标、画布尺寸、连线路径与标签位置。
+ *
+ * - 节点坐标优先取手动覆盖值，其次取草稿内坐标，最后按层级自动排布。
+ * - 回流边与遮挡边改走侧向路径，标签位置会做避让处理。
+ */
 function buildSkillFlowCanvasLayout(
   skill: SkillCard,
   nodes: Array<Record<string, unknown>>,
@@ -5616,6 +5868,11 @@ function buildSkillFlowCanvasLayout(
   return { width, height, root, nodes: positionedNodes, edges: layoutEdges };
 }
 
+/**
+ * 按可达性与流转优先级把节点分层，返回流程图的行（层）结构。
+ *
+ * - 从起始节点做广度优先遍历判断可达，不可达节点统一放到最后一层。
+ */
 function buildSkillFlowLayout(skill: SkillCard, nodes: Array<Record<string, unknown>>) {
   const byId = new Map(nodes.map((node, index) => [
     String(node.node_id || node.step_id || `node_${index + 1}`),
@@ -5701,6 +5958,7 @@ function buildSkillFlowLayout(skill: SkillCard, nodes: Array<Record<string, unkn
   return { layers };
 }
 
+/** 计算同一源节点多条出边所在水平通道的 Y 坐标，避免连线重叠。 */
 function edgeLaneY(sourceY: number, targetY: number, siblingIndex: number, siblingCount: number): number {
   const safeTop = sourceY + 58;
   const safeBottom = targetY - 58;
@@ -5713,6 +5971,7 @@ function edgeLaneY(sourceY: number, targetY: number, siblingIndex: number, sibli
   return Math.max(safeTop, Math.min(safeBottom, start + siblingIndex * maxSpread));
 }
 
+/** 生成正向流转连线的 SVG 路径，先竖直下探到通道再水平横移。 */
 function forwardFlowPath(sourceX: number, sourceY: number, targetX: number, targetY: number, laneY: number): string {
   const safeLaneY = Math.max(sourceY + 48, Math.min(targetY - 48, laneY));
   const verticalEase = Math.min(44, Math.max(22, (targetY - sourceY) * 0.18));
@@ -5732,6 +5991,7 @@ function forwardFlowPath(sourceX: number, sourceY: number, targetX: number, targ
   ].join(' ');
 }
 
+/** 生成连线拖拽预览的 SVG 路径，向下延伸或侧向绕出。 */
 function connectionPreviewPath(connection: {
   startX: number;
   startY: number;
@@ -5759,6 +6019,7 @@ function connectionPreviewPath(connection: {
   ].join(' ');
 }
 
+/** 判断两个矩形是否相交，边贴边视为相交。 */
 function rectsOverlap(
   a: { left: number; right: number; top: number; bottom: number },
   b: { left: number; right: number; top: number; bottom: number },
@@ -5766,6 +6027,7 @@ function rectsOverlap(
   return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
 }
 
+/** 判断线段（带外扩边距）是否与流程图节点卡片相交。 */
 function segmentHitsFlowNode(
   x1: number,
   y1: number,
@@ -5789,6 +6051,7 @@ function segmentHitsFlowNode(
   return rectsOverlap(segmentRect, nodeRect);
 }
 
+/** 判断正向连线路径是否会穿过其他节点，用于决定是否改走侧向。 */
 function forwardRouteHitsNode(
   source: SkillFlowCanvasNode,
   target: SkillFlowCanvasNode,
@@ -5808,6 +6071,7 @@ function forwardRouteHitsNode(
   });
 }
 
+/** 为绕行连线挑选纵向通道 X 坐标，优先选择不与节点相交的一侧。 */
 function sideForwardLaneX(
   source: SkillFlowCanvasNode,
   target: SkillFlowCanvasNode,
@@ -5847,6 +6111,7 @@ function sideForwardLaneX(
   return clear ?? candidates[0];
 }
 
+/** 生成绕开节点遮挡的正向连线路径。 */
 function sideForwardFlowPath(
   source: SkillFlowCanvasNode,
   target: SkillFlowCanvasNode,
@@ -5870,6 +6135,7 @@ function sideForwardFlowPath(
   ].join(' ');
 }
 
+/** 计算绕行连线标签的锚点位置。 */
 function sideForwardEdgeLabelPosition(
   source: SkillFlowCanvasNode,
   target: SkillFlowCanvasNode,
@@ -5887,6 +6153,7 @@ function sideForwardEdgeLabelPosition(
   };
 }
 
+/** 计算正向连线标签位置，按兄弟边与入边数量做偏移避让。 */
 function forwardEdgeLabelPosition(
   sourceX: number,
   targetX: number,
@@ -5908,6 +6175,7 @@ function forwardEdgeLabelPosition(
   return { x, y: laneY };
 }
 
+/** 计算回流连线标签位置，放在目标节点右下方。 */
 function returnEdgeLabelPosition(
   source: SkillFlowCanvasNode,
   target: SkillFlowCanvasNode,
@@ -5921,10 +6189,12 @@ function returnEdgeLabelPosition(
   };
 }
 
+/** 把数值限制在给定的 [min, max] 区间内。 */
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/** 判断标签矩形（含外扩边距）是否与节点卡片重叠。 */
 function flowLabelOverlapsNode(
   point: { x: number; y: number },
   node: Pick<SkillFlowCanvasNode, 'x' | 'y' | 'width' | 'height'>,
@@ -5944,16 +6214,19 @@ function flowLabelOverlapsNode(
   );
 }
 
+/** 在候选位置中挑选不与节点重叠的标签锚点，必要时夹取到画布内。 */
 function avoidFlowLabelOverlap(
   anchor: { x: number; y: number },
   nodes: SkillFlowCanvasNode[],
   canvasWidth: number,
   canvasHeight: number,
 ) {
+  /** 把标签锚点夹取到画布可见范围内。 */
   const clampPoint = (point: { x: number; y: number }) => ({
     x: clampNumber(point.x, 112, canvasWidth - 112),
     y: clampNumber(point.y, 34, canvasHeight - 34),
   });
+  /** 判断标签锚点是否不与任何节点重叠。 */
   const fits = (point: { x: number; y: number }) => !nodes.some((node) => flowLabelOverlapsNode(point, node));
   const base = clampPoint(anchor);
   if (fits(base)) return base;
@@ -5974,6 +6247,7 @@ function avoidFlowLabelOverlap(
   return found || clampPoint({ x: anchor.x, y: anchor.y - 76 });
 }
 
+/** 生成回流连线的 SVG 路径：从源节点底部绕到画布右侧再回到目标节点顶部。 */
 function sideReturnFlowPath(
   source: SkillFlowCanvasNode,
   target: SkillFlowCanvasNode,
@@ -5995,6 +6269,7 @@ function sideReturnFlowPath(
   ].join(' ');
 }
 
+/** 生成流转关系的完整说明（源 -> 目标：标签或条件），用于连线悬浮提示。 */
 function incomingEdgeLabel(edge: Record<string, unknown>, nodeNameMap: Record<string, string> = {}): string {
   const source = String(edge.source_node_id || '');
   const sourceName = source && nodeNameMap[source] ? nodeNameMap[source] : source;
@@ -6008,6 +6283,7 @@ function incomingEdgeLabel(edge: Record<string, unknown>, nodeNameMap: Record<st
   return detail || '流转';
 }
 
+/** 取连线的展示标签，缺失时回退到条件或来源节点名。 */
 function edgeDisplayLabel(edge: Record<string, unknown>, nodeNameMap: Record<string, string> = {}): string {
   const label = String(edge.label || '').trim();
   if (label) return label;
@@ -6018,15 +6294,18 @@ function edgeDisplayLabel(edge: Record<string, unknown>, nodeNameMap: Record<str
   return sourceName ? `来自 ${sourceName}` : '流转';
 }
 
+/** 归一化连线标签中的空白字符，保证同一源节点的标签可比较。 */
 function normalizedEdgeLabel(edge: Record<string, unknown>, nodeNameMap: Record<string, string> = {}): string {
   return edgeDisplayLabel(edge, nodeNameMap).replace(/\s+/g, ' ').trim() || '流转';
 }
 
+/** 取连线目标节点的展示名，缺失时回退为原始 ID。 */
 function edgeTargetName(edge: Record<string, unknown>, nodeNameMap: Record<string, string> = {}): string {
   const targetId = String(edge.next_node_id || '').trim();
   return targetId ? nodeNameMap[targetId] || targetId : '';
 }
 
+/** 判断同一源节点下是否存在同名兄弟连线，用于标记并行流转。 */
 function hasDuplicateSiblingEdgeLabel(
   edge: Record<string, unknown>,
   siblings: Array<Record<string, unknown>>,
@@ -6041,6 +6320,7 @@ function hasDuplicateSiblingEdgeLabel(
   )).length > 1;
 }
 
+/** 判断一组出边中是否存在重复标签，用于标记并行流转。 */
 function hasDuplicateOutgoingEdgeLabel(
   edges: Array<Record<string, unknown>>,
   nodeNameMap: Record<string, string> = {},
@@ -6054,10 +6334,12 @@ function hasDuplicateOutgoingEdgeLabel(
   return Object.values(labelCounts).some((count) => count > 1);
 }
 
+/** 生成出边数量标签，存在并行分支时额外标注「并行」。 */
 function outgoingRouteCountLabel(edges: Array<Record<string, unknown>>): string {
   return `${edges.length} 条${hasDuplicateOutgoingEdgeLabel(edges) ? '并行' : ''}流转`;
 }
 
+/** 生成流程图连线短标签：并行或同名分支会补充目标节点名。 */
 function flowEdgeDisplayLabel(
   edge: Record<string, unknown>,
   nodeNameMap: Record<string, string> = {},
@@ -6076,6 +6358,7 @@ function flowEdgeDisplayLabel(
   return label;
 }
 
+/** 生成源码视图中的流转摘要文本，包含并行标记、规则名与优先级。 */
 function sourceEdgeSummary(
   edge: Record<string, unknown>,
   nodeNameMap: Record<string, string> = {},
@@ -6093,27 +6376,32 @@ function sourceEdgeSummary(
   return `${parallelText}${prefix ? `${prefix} -> ` : ''}${targetName}${priorityText}`;
 }
 
+/** 压缩过长的连线标签，超过 24 字时截断并补省略号。 */
 function compactEdgeLabel(value: string): string {
   const text = value.replace(/\s+/g, ' ').trim();
   if (text.length <= 24) return text;
   return `${text.slice(0, 21)}...`;
 }
 
+/** 取节点类型的中文展示名，未知类型原样返回。 */
 function nodeTypeLabel(type: string): string {
   return NODE_TYPE_OPTIONS.find((item) => item.value === type)?.label || type || '节点';
 }
 
+/** 把知识范围对象展开为「键: 值」字符串数组。 */
 function knowledgeScopeLabels(value: unknown): string[] {
   if (!isRecord(value) || Object.keys(value).length === 0) return [];
   return Object.entries(value).map(([key, item]) => `${key}: ${String(item)}`);
 }
 
+/** 按最长一行内容的显示宽度生成输入框宽度样式，并限制在给定区间内。 */
 function compactInputStyle(value: string, minCh = 8, maxCh = 92): CSSProperties {
   const longestLine = String(value || '').split('\n').reduce((max, line) => Math.max(max, visualTextWidth(line)), 0);
   const width = Math.max(minCh, Math.min(maxCh, longestLine + 2));
   return { width: `min(${width}ch, 100%)` };
 }
 
+/** 计算文本的显示宽度，中日韩等全角字符按 2 个字符宽度计。 */
 function visualTextWidth(value: string): number {
   return Array.from(value).reduce((total, char) => {
     if (/[\u2e80-\u9fff\uff00-\uffef]/.test(char)) return total + 2;
@@ -6121,6 +6409,7 @@ function visualTextWidth(value: string): number {
   }, 0);
 }
 
+/** 按内容长度生成源码输入区宽度样式，多行输入使用更宽的区间。 */
 function sourceInputStyle(value: string, multiline = false): CSSProperties {
   const longestLine = String(value || '').split('\n').reduce((max, line) => Math.max(max, visualTextWidth(line)), 0);
   const minCh = multiline ? 34 : 18;
@@ -6129,12 +6418,14 @@ function sourceInputStyle(value: string, multiline = false): CSSProperties {
   return { width: `min(${width}ch, 100%)`, maxWidth: '100%' };
 }
 
+/** 生成节点说明的折叠预览文本，空白时返回占位文案，过长时截断。 */
 function previewSourceText(value: string): string {
   const text = value.replace(/\s+/g, ' ').trim();
   if (!text) return '暂无节点说明';
   return text.length > 96 ? `${text.slice(0, 96)}...` : text;
 }
 
+/** 基础信息标题的就地编辑输入框。 */
 function EditableSourceHeading({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return (
     <EditableSourceField>
@@ -6148,6 +6439,7 @@ function EditableSourceHeading({ value, onChange }: { value: string; onChange: (
   );
 }
 
+/** 节点标题的就地编辑输入框，带「Node N」前缀与占位回退。 */
 function EditableSourceStepHeading({
   index,
   value,
@@ -6174,6 +6466,11 @@ function EditableSourceStepHeading({
   );
 }
 
+/**
+ * 源码视图中「标签加文本值」的一行编辑器，支持多行与折叠。
+ *
+ * - 可折叠且内容超过 90 字时默认收起，只显示预览文本。
+ */
 function EditableSourceTextLine({
   label,
   value,
@@ -6260,6 +6557,7 @@ function EditableSourceTextLine({
   );
 }
 
+/** 源码视图中「标签加数字值」的一行编辑器，越界值会被夹取到区间内。 */
 function EditableSourceNumberLine({
   label,
   value,
@@ -6306,6 +6604,7 @@ function EditableSourceNumberLine({
   );
 }
 
+/** 源码视图中「标签加多行列表」的一行编辑器，按行拆分为数组。 */
 function EditableSourceListLine({
   label,
   values,
@@ -6338,6 +6637,7 @@ function EditableSourceListLine({
   );
 }
 
+/** 源码视图中「标签加下拉选择」的一行编辑器，未知当前值会补进选项。 */
 function EditableSourceSelectLine({
   label,
   value,
@@ -6369,6 +6669,7 @@ function EditableSourceSelectLine({
   );
 }
 
+/** 进入条件编辑器：预设下拉加自然语言输入，并展示可读化结果。 */
 function EditableConditionLine({
   value,
   onChange,
@@ -6411,6 +6712,7 @@ function EditableConditionLine({
   );
 }
 
+/** 只读的源码信息行，空值显示短横线。 */
 function SourceReadonlyLine({ label, value }: { label: string; value: string }) {
   return (
     <div className={cn(SOURCE_LINE_CLASS, "readonly")}>
@@ -6420,6 +6722,7 @@ function SourceReadonlyLine({ label, value }: { label: string; value: string }) 
   );
 }
 
+/** 只读的 JSON 信息行，空对象时不渲染。 */
 function SourceJsonLine({ label, value }: { label: string; value: unknown }) {
   if (!hasReadableSourceObject(value)) return null;
   return (
@@ -6432,6 +6735,7 @@ function SourceJsonLine({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+/** 节点重试策略编辑器：重试次数、失败处理方式与追问文案。 */
 function EditableRetryPolicyLine({
   value,
   onChange,
@@ -6451,6 +6755,7 @@ function EditableRetryPolicyLine({
     strategy ? [{ value: strategy, label: retryStrategyLabel(strategy) }] : [],
   );
 
+  /** 写回重试策略补丁并清理空值字段，避免草稿留下空配置。 */
   function commit(patch: Record<string, unknown>) {
     const next = { ...policy, ...patch };
     Object.keys(next).forEach((key) => {
@@ -6459,6 +6764,7 @@ function EditableRetryPolicyLine({
     onChange(next);
   }
 
+  /** 更新最大重试次数；非正数表示不限制，会移除该字段。 */
   function updateAttempts(nextValue: number | string | null) {
     const nextNumber = Number(nextValue);
     commit(Number.isFinite(nextNumber) && nextNumber > 0
@@ -6466,10 +6772,12 @@ function EditableRetryPolicyLine({
       : { max_attempts: undefined, max_retries: undefined });
   }
 
+  /** 更新失败后的处理方式，空值表示移除配置。 */
   function updateStrategy(nextValue?: string) {
     commit(nextValue ? { [strategyKey]: nextValue } : { on_failure: undefined, strategy: undefined });
   }
 
+  /** 更新追问文案，空白文本会移除该字段。 */
   function updateMessage(nextValue: string) {
     commit(nextValue.trim() ? { [messageKey]: nextValue } : { retry_message: undefined, message: undefined });
   }
@@ -6513,24 +6821,29 @@ function EditableRetryPolicyLine({
   );
 }
 
+/** 读取重试次数：仅接受正整数，其余返回 null。 */
 function retryPolicyNumber(value: unknown): number | null {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) && numberValue > 0 ? Math.floor(numberValue) : null;
 }
 
+/** 读取重试策略中的字符串字段，非字符串返回空串。 */
 function retryPolicyString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** 取重试策略的中文展示名，未知值原样返回。 */
 function retryStrategyLabel(value: string): string {
   return RETRY_STRATEGY_OPTIONS.find((item) => item.value === value)?.label || value;
 }
 
+/** 判断值是否为可直接展示的非空普通对象。 */
 function hasReadableSourceObject(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return Object.keys(value).length > 0;
 }
 
+/** 允许动作行编辑器，内部复用可搜索的动作列表。 */
 function EditableSourceActionLine({
   values,
   options,
@@ -6562,6 +6875,12 @@ function EditableSourceActionLine({
   );
 }
 
+/**
+ * 能力引用行编辑器：搜索、勾选并按需标记为强制执行。
+ *
+ * - 已下线或不可用的资源仍保留展示，只允许取消引用。
+ * - 变更通过 onChange / onRequiredChange 回传完整 ID 列表。
+ */
 export function EditableCapabilityReferencesLine({
   label,
   values,
@@ -6599,6 +6918,7 @@ export function EditableCapabilityReferencesLine({
     })
     .sort((left, right) => Number(selected.has(right.value)) - Number(selected.has(left.value)));
 
+  /** 勾选或取消勾选某个能力引用，新增时自动去重。 */
   function toggle(value: string, checked: boolean) {
     if (checked) {
       onChange(Array.from(new Set([...values, value])));
@@ -6607,6 +6927,7 @@ export function EditableCapabilityReferencesLine({
     onChange(values.filter((item) => item !== value));
   }
 
+  /** 把某个能力引用标记为强制或可选执行。 */
   function setRequired(value: string, checked: boolean) {
     if (checked) {
       onRequiredChange(Array.from(new Set([...requiredValues, value])));
@@ -6744,6 +7065,7 @@ export function EditableCapabilityReferencesLine({
   );
 }
 
+/** 合并能力选项：草稿中已引用但列表缺失的资源补一条不可用占位。 */
 function mergeCapabilityReferenceOptions(
   options: CapabilityReferenceOption[],
   values: string[],
@@ -6762,6 +7084,7 @@ function mergeCapabilityReferenceOptions(
   ];
 }
 
+/** 可编辑的允许动作列表：新增、重选与删除动作。 */
 function EditableActionList({
   actions,
   options,
@@ -6781,10 +7104,12 @@ function EditableActionList({
     label: actionLabel(action),
   })));
 
+  /** 把动作数组写回父组件：过滤空值并按行拼接成字符串。 */
   function writeActions(nextActions: string[]) {
     onChange(nextActions.filter(Boolean).join('\n'));
   }
 
+  /** 提交某个下标的动作：空值删除、重复提示、越界则追加。 */
   function commitAction(index: number, action: string) {
     const nextAction = action.trim();
     const next = [...actions];
@@ -6809,6 +7134,7 @@ function EditableActionList({
     setEditingIndex(null);
   }
 
+  /** 删除指定下标的动作并退出编辑态。 */
   function removeAction(index: number) {
     const next = [...actions];
     next.splice(index, 1);
@@ -6816,6 +7142,7 @@ function EditableActionList({
     if (editingIndex === index) setEditingIndex(null);
   }
 
+  /** 渲染动作搜索选择器，供指定下标的新增或重选使用。 */
   function actionSelect(index: number, value?: string) {
     return (
       <ActionCombobox
@@ -6876,6 +7203,7 @@ function EditableActionList({
   );
 }
 
+/** 流转规则编辑器：按优先级排序展示出边，并编辑目标、条件与优先级。 */
 function EditableFlowRulesLine({
   sourceNodeId,
   edges,
@@ -6984,7 +7312,9 @@ function EditableFlowRulesLine({
   );
 }
 
+/** 就地编辑字段容器：拦截鼠标与键盘事件，避免触发外层选中目标。 */
 function EditableSourceField({ children }: { children: ReactNode }) {
+  /** 阻止事件冒泡到外层可选中区块。 */
   function stop(event: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>) {
     event.stopPropagation();
   }
@@ -6996,6 +7326,7 @@ function EditableSourceField({ children }: { children: ReactNode }) {
   );
 }
 
+/** 可被选中为改写目标的可点击区块，支持点击与键盘切换。 */
 function SelectableTarget({
   className,
   target,
@@ -7007,6 +7338,7 @@ function SelectableTarget({
   onToggle: (target: TargetSelection) => void;
   children: ReactNode;
 }) {
+  /** 点击选区：存在文本选中时只阻止默认行为，否则切换目标选中态。 */
   function handleClick(event: MouseEvent<HTMLDivElement>) {
     if (hasSelectedText()) {
       event.preventDefault();
@@ -7015,6 +7347,7 @@ function SelectableTarget({
     onToggle(target);
   }
 
+  /** 回车或空格切换目标选中态。 */
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
@@ -7028,6 +7361,7 @@ function SelectableTarget({
   );
 }
 
+/** 动作差异列表：展示被删除的旧动作与新增动作的动画状态。 */
 function ActionDiffList({
   diff,
   currentActions,
@@ -7070,6 +7404,7 @@ function ActionDiffList({
   );
 }
 
+/** 只读动作列表，空列表显示短横线。 */
 function ActionList({
   actions,
   toolDescriptions,
@@ -7094,6 +7429,7 @@ function ActionList({
   );
 }
 
+/** 动作标签：展示动作中文名，工具动作附带工具状态与说明。 */
 function ActionChip({
   action,
   toolDescriptions,
@@ -7130,6 +7466,7 @@ function ActionChip({
   );
 }
 
+/** 保存弹窗的差异值：动作字段渲染增删列表，其他字段渲染文本行。 */
 function SaveReviewDiffValue({
   diff,
   toolDescriptions,
@@ -7167,6 +7504,7 @@ function SaveReviewDiffValue({
   );
 }
 
+/** 就地差异文本：按动画阶段展示删除片段或逐字回放新增片段。 */
 function InlineDiffText({
   path,
   field,
@@ -7199,14 +7537,17 @@ function InlineDiffText({
   );
 }
 
+/** 还原差异条目对应的完整旧文本。 */
 function diffFullOldValue(diff: TextDiffAnimation): string {
   return `${diff.prefix}${diff.removed}${diff.suffix}`;
 }
 
+/** 还原差异条目对应的完整新文本。 */
 function diffFullNewValue(diff: TextDiffAnimation): string {
   return `${diff.prefix}${diff.inserted}${diff.suffix}`;
 }
 
+/** 把差异文本拆成动作数组，兼容顿号、逗号与换行分隔。 */
 function actionsFromDiffText(value: string): string[] {
   const normalized = value.replace(/`/g, '').trim();
   if (!normalized || normalized === '-') return [];
@@ -7216,10 +7557,12 @@ function actionsFromDiffText(value: string): string[] {
     .filter(Boolean);
 }
 
+/** 从用户输入构造首次生成请求，标题用默认名称，正文取去空白文本。 */
 function parseInitialSkillPrompt(text: string): { title: string; raw_content: string } {
   return { title: '新SOP', raw_content: text.trim() };
 }
 
+/** 生成流式解析期间使用的种子草稿，让预览区先有骨架。 */
 function createStreamingDraftSeed(payload: { title: string; raw_content: string }): SkillCard {
   return {
     skill_id: `skill_${slugSegment(payload.title) || 'preview'}`,
@@ -7241,6 +7584,12 @@ function createStreamingDraftSeed(payload: { title: string; raw_content: string 
   };
 }
 
+/**
+ * 根据已接收的流式文本增量更新草稿预览。
+ *
+ * - 能完整解析成 JSON 时直接返回解析结果。
+ * - 解析不完整时按字段与节点片段尽力还原，并补出线性流转边。
+ */
 function previewSkillFromStream(
   streamText: string,
   previous: SkillCard,
@@ -7276,6 +7625,7 @@ function previewSkillFromStream(
   return next;
 }
 
+/** 尝试把流式文本解析为完整草稿，解析失败时返回 null。 */
 function parseCompleteStreamSkill(streamText: string): SkillCard | null {
   try {
     const parsed = JSON.parse(extractJsonCandidate(streamText)) as Record<string, unknown>;
@@ -7308,6 +7658,7 @@ function parseCompleteStreamSkill(streamText: string): SkillCard | null {
   }
 }
 
+/** 截取 draft_skill 对象起点之后的源码片段，便于逐字段预览。 */
 function extractDraftSkillSource(streamText: string): string {
   const fieldIndex = streamText.indexOf('"draft_skill"');
   if (fieldIndex < 0) return streamText;
@@ -7316,6 +7667,7 @@ function extractDraftSkillSource(streamText: string): string {
   return streamText.slice(objectStart);
 }
 
+/** 截取文本中最外层的 JSON 对象片段。 */
 function extractJsonCandidate(streamText: string): string {
   const stripped = streamText.trim();
   const start = stripped.indexOf('{');
@@ -7323,6 +7675,7 @@ function extractJsonCandidate(streamText: string): string {
   return start >= 0 && end >= start ? stripped.slice(start, end + 1) : stripped;
 }
 
+/** 预览模式下把单个字符串字段写入草稿。 */
 function applyStringPreview(skill: SkillCard, source: string, field: keyof SkillCard): void {
   const value = extractJsonStringField(source, String(field));
   if (value !== null) {
@@ -7330,6 +7683,7 @@ function applyStringPreview(skill: SkillCard, source: string, field: keyof Skill
   }
 }
 
+/** 预览模式下把单个字符串数组字段写入草稿。 */
 function applyArrayPreview(skill: SkillCard, source: string, field: keyof SkillCard): void {
   const value = extractJsonStringArrayField(source, String(field));
   if (value !== null) {
@@ -7337,6 +7691,7 @@ function applyArrayPreview(skill: SkillCard, source: string, field: keyof SkillC
   }
 }
 
+/** 从流式源码的 nodes 字段中提取并解析节点片段。 */
 function extractNodePreview(source: string): Array<Record<string, unknown>> {
   const fragments = extractObjectFragmentsFromArrayField(source, 'nodes');
   return fragments
@@ -7344,6 +7699,7 @@ function extractNodePreview(source: string): Array<Record<string, unknown>> {
     .filter((node): node is Record<string, unknown> => Boolean(node));
 }
 
+/** 解析单个节点片段：优先整体按 JSON 解析，失败则逐字段提取。 */
 function parseNodeFragment(fragment: string, index: number): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(fragment) as unknown;
@@ -7405,6 +7761,7 @@ function parseNodeFragment(fragment: string, index: number): Record<string, unkn
   };
 }
 
+/** 归一化预览节点：补齐默认值并统一能力引用结构。 */
 function normalizeNodePreview(node: Record<string, unknown>, index = 0): Record<string, unknown> {
   const nodeId = stringValue(node.node_id, `node_${index + 1}`);
   const capabilityRefs = nodeCapabilityRefs(node);
@@ -7429,6 +7786,7 @@ function normalizeNodePreview(node: Record<string, unknown>, index = 0): Record<
   };
 }
 
+/** 归一化预览边：补齐字段与优先级默认值。 */
 function normalizeEdgePreview(edge: Record<string, unknown>, index = 0): Record<string, unknown> {
   return {
     source_node_id: stringValue(edge.source_node_id, ''),
@@ -7439,12 +7797,14 @@ function normalizeEdgePreview(edge: Record<string, unknown>, index = 0): Record<
   };
 }
 
+/** 从源码中提取指定字符串字段的值，字段缺失时返回 null。 */
 function extractJsonStringField(source: string, field: string): string | null {
   const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(source);
   if (!match) return null;
   return decodeJsonString(match[1]);
 }
 
+/** 从源码中提取指定字符串数组字段，字段缺失时返回 null。 */
 function extractJsonStringArrayField(source: string, field: string): string[] | null {
   const start = findFieldValueStart(source, field);
   if (start === null) return null;
@@ -7463,6 +7823,7 @@ function extractJsonStringArrayField(source: string, field: string): string[] | 
   return extractQuotedJsonStrings(arrayText);
 }
 
+/** 从数组字段中按大括号配对截取对象片段，兼容未闭合的流式文本。 */
 function extractObjectFragmentsFromArrayField(source: string, field: string): string[] {
   const start = findFieldValueStart(source, field);
   if (start === null) return [];
@@ -7510,17 +7871,20 @@ function extractObjectFragmentsFromArrayField(source: string, field: string): st
   return fragments;
 }
 
+/** 定位字段值在源码中的起始下标，缺失时返回 null。 */
 function findFieldValueStart(source: string, field: string): number | null {
   const match = new RegExp(`"${escapeRegExp(field)}"\\s*:`).exec(source);
   return match ? match.index + match[0].length : null;
 }
 
+/** 跳过空白字符，返回下一个非空白字符下标。 */
 function skipWhitespace(source: string, start: number): number {
   let index = start;
   while (index < source.length && /\s/.test(source[index])) index += 1;
   return index;
 }
 
+/** 从起始括号开始查找配对的结束下标，找不到时返回 null。 */
 function findBalancedEnd(source: string, start: number, openChar: string, closeChar: string): number | null {
   let depth = 0;
   let inString = false;
@@ -7550,6 +7914,7 @@ function findBalancedEnd(source: string, start: number, openChar: string, closeC
   return null;
 }
 
+/** 提取源码中所有已解码的 JSON 字符串字面量。 */
 function extractQuotedJsonStrings(source: string): string[] {
   const values: string[] = [];
   const pattern = /"((?:\\.|[^"\\])*)"/g;
@@ -7561,6 +7926,7 @@ function extractQuotedJsonStrings(source: string): string[] {
   return values;
 }
 
+/** 解析 JSON 字符串转义，解析失败时原样返回。 */
 function decodeJsonString(value: string): string {
   try {
     return JSON.parse(`"${value}"`) as string;
@@ -7569,18 +7935,22 @@ function decodeJsonString(value: string): string {
   }
 }
 
+/** 读取字符串字段并去除首尾空白，空值返回默认值。 */
 function stringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
+/** 把对象的值统一转成字符串记录。 */
 function stringRecord(value: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, String(item)]));
 }
 
+/** 判断值是否为普通对象（排除数组与 null）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+/** 把文本解析为 JSON 对象，非对象或解析失败返回 null。 */
 function parseJsonObject(value: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(value);
@@ -7590,6 +7960,7 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
+/** 把文本转换为小写下划线形式的 ID 片段，最长 32 字符。 */
 function slugSegment(value: string): string {
   return value
     .toLowerCase()
@@ -7598,10 +7969,12 @@ function slugSegment(value: string): string {
     .slice(0, 32);
 }
 
+/** 转义正则元字符，供动态拼接正则使用。 */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** 用反引号包裹列表项并以逗号连接，空值显示短横线。 */
 function joinList(values: unknown): string {
   if (Array.isArray(values)) {
     const items = values.map(String).filter(Boolean);
@@ -7611,6 +7984,7 @@ function joinList(values: unknown): string {
   return '-';
 }
 
+/** 用顿号连接列表项，空值显示短横线。 */
 function joinPlain(values: unknown): string {
   if (Array.isArray(values)) {
     const items = values.map(String).filter(Boolean);
@@ -7620,12 +7994,14 @@ function joinPlain(values: unknown): string {
   return '-';
 }
 
+/** 把任意值归一化为字符串数组，空值返回空数组。 */
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
   if (typeof value === 'string' && value.trim()) return [value];
   return [];
 }
 
+/** 切换节点类型；离开 handoff 类型时清理转人工动作与处理人配置。 */
 export function applyNodeTypeChange(
   node: Record<string, unknown>,
   nextType: string,
@@ -7642,16 +8018,19 @@ export function applyNodeTypeChange(
   return node;
 }
 
+/** 按节点类型过滤动作选项：非 handoff 节点不提供转人工动作。 */
 export function filterActionOptionsForNodeType(options: SelectOption[], type: string): SelectOption[] {
   // 转人工动作只允许出现在 handoff 节点上
   if (String(type || '') === 'handoff') return options;
   return options.filter((option) => option.value !== 'handoff_human');
 }
 
+/** 判断当前页面是否存在用户选中的文本。 */
 function hasSelectedText(): boolean {
   return Boolean(window.getSelection()?.toString().trim());
 }
 
+/** 把文件内容读成 Base64 字符串，分块拼接避免参数超长。 */
 async function fileToBase64(file: File): Promise<string> {
   const buffer = await file.arrayBuffer();
   let binary = '';
@@ -7663,12 +8042,14 @@ async function fileToBase64(file: File): Promise<string> {
   return window.btoa(binary);
 }
 
+/** 去掉扩展名后的文件名作为标题，空标题回退为「新SOP」。 */
 function filenameTitle(filename: string): string {
   return filename.replace(/\.[^.]+$/, '').trim() || '新SOP';
 }
 
 const uploadContentMarker = '上传文档内容：';
 
+/** 拼接发送给后端的文本：用户输入加上已就绪附件正文。 */
 function buildOutgoingText(input: string, attachments: UploadAttachment[]): string {
   const text = input.trim();
   const attachmentText = attachments
@@ -7678,11 +8059,13 @@ function buildOutgoingText(input: string, attachments: UploadAttachment[]): stri
   return [text, attachmentText ? `上传文档内容：\n${attachmentText}` : ''].filter(Boolean).join('\n\n');
 }
 
+/** 取对话消息的可见文本，用户消息会去掉附件正文标记。 */
 function visibleChatContent(item: ChatItem): string {
   if (item.role !== 'user') return item.content;
   return stripUploadContent(item.content || item.outgoingText || '');
 }
 
+/** 编辑用户消息时重建 outgoingText，保留原有附件正文。 */
 function buildEditedOutgoingText(item: ChatItem, displayText: string): string {
   const source = item.outgoingText || item.content;
   const markerIndex = source.indexOf(uploadContentMarker);
@@ -7691,11 +8074,13 @@ function buildEditedOutgoingText(item: ChatItem, displayText: string): string {
   return [displayText.trim(), uploadContent].filter(Boolean).join('\n\n');
 }
 
+/** 去掉文本中「上传文档内容：」及其后的附件正文。 */
 function stripUploadContent(text: string): string {
   const markerIndex = text.indexOf(uploadContentMarker);
   return (markerIndex >= 0 ? text.slice(0, markerIndex) : text).trim();
 }
 
+/** 把已就绪附件转换为用户消息上的附件展示项。 */
 function buildDisplayAttachments(attachments: UploadAttachment[]): ChatAttachment[] {
   return attachments
     .filter((item) => item.status === 'ready')
@@ -7706,11 +8091,13 @@ function buildDisplayAttachments(attachments: UploadAttachment[]): ChatAttachmen
     }));
 }
 
+/** 取附件类型的展示标签（扩展名大写），无扩展名回退 FILE。 */
 function attachmentTypeLabel(filename: string): string {
   const extension = filename.split('.').pop()?.trim().toUpperCase();
   return extension || 'FILE';
 }
 
+/** 把可编辑文本按换行、逗号、顿号拆分成列表。 */
 function splitEditableList(value: string): string[] {
   return value
     .split(/\n|,|，|、/)
@@ -7718,6 +8105,7 @@ function splitEditableList(value: string): string[] {
     .filter(Boolean);
 }
 
+/** 把时间格式化为 HH:mm，非法或空值返回空串。 */
 function formatMessageTime(value?: string): string {
   if (!value) return '';
   const date = new Date(value);
@@ -7725,6 +8113,7 @@ function formatMessageTime(value?: string): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/** 复制图标。 */
 function CopyGlyph() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -7734,6 +8123,7 @@ function CopyGlyph() {
   );
 }
 
+/** 编辑（铅笔）图标。 */
 function PencilGlyph() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -7743,6 +8133,12 @@ function PencilGlyph() {
   );
 }
 
+/**
+ * 归一化后端返回的工具建议列表，补齐默认值与初始状态。
+ *
+ * - 非数组或名称为空的条目会被丢弃。
+ * - 已带探测结果的建议同步初始化探测状态。
+ */
 function normalizeToolSuggestions(value: unknown): ToolSuggestionItem[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -7777,14 +8173,17 @@ function normalizeToolSuggestions(value: unknown): ToolSuggestionItem[] {
     .filter((item) => item.name);
 }
 
+/** 归一化工具建议的解析状态，未知值按可新增候选处理。 */
 function toolSuggestionResolutionValue(value: unknown): ToolSuggestion['resolution_status'] {
   return value === 'existing' || value === 'incomplete' || value === 'new_candidate' ? value : 'new_candidate';
 }
 
+/** 读取工具建议的解析状态，缺省为可新增候选。 */
 function toolSuggestionResolution(suggestion: ToolSuggestionItem): NonNullable<ToolSuggestion['resolution_status']> {
   return suggestion.resolution_status || 'new_candidate';
 }
 
+/** 生成工具建议标题，区分已匹配工具与建议新增工具。 */
 function toolSuggestionTitle(suggestion: ToolSuggestionItem): string {
   const label = suggestion.display_name || suggestion.name;
   if (toolSuggestionResolution(suggestion) === 'existing') {
@@ -7793,6 +8192,7 @@ function toolSuggestionTitle(suggestion: ToolSuggestionItem): string {
   return `建议新增工具：${label}`;
 }
 
+/** 取工具建议解析状态的中文说明。 */
 function toolSuggestionResolutionLabel(suggestion: ToolSuggestionItem): string {
   const status = toolSuggestionResolution(suggestion);
   if (status === 'existing') return '已匹配现有工具';
@@ -7800,6 +8200,7 @@ function toolSuggestionResolutionLabel(suggestion: ToolSuggestionItem): string {
   return '可新增候选';
 }
 
+/** 取工具建议当前处理状态的中文文案。 */
 function toolSuggestionStatusText(suggestion: ToolSuggestionItem): string {
   if (suggestion.status === 'accepted') return '已确认';
   if (suggestion.status === 'created') return '已新增';
@@ -7812,6 +8213,7 @@ function toolSuggestionStatusText(suggestion: ToolSuggestionItem): string {
   return '待新增';
 }
 
+/** 取工具建议状态徽标的样式变体。 */
 function toolSuggestionStatusClass(suggestion: ToolSuggestionItem): ToolStatusBadgeVariant {
   if (suggestion.status === 'accepted' || suggestion.status === 'created' || suggestion.probe_result?.success || toolSuggestionResolution(suggestion) === 'existing') {
     return 'success';
@@ -7824,6 +8226,7 @@ function toolSuggestionStatusClass(suggestion: ToolSuggestionItem): ToolStatusBa
   return 'pending';
 }
 
+/** 判断所有可新增候选是否都已确认、创建或拒绝。 */
 function toolSuggestionSelectionsComplete(suggestions: ToolSuggestionItem[]): boolean {
   const candidates = suggestions.filter((suggestion) => toolSuggestionResolution(suggestion) === 'new_candidate');
   return candidates.length > 0 && candidates.every((suggestion) =>
@@ -7831,6 +8234,7 @@ function toolSuggestionSelectionsComplete(suggestions: ToolSuggestionItem[]): bo
   );
 }
 
+/** 合并重复的提示文案，重复项收进悬浮提示的完整标题。 */
 function compactWarningItems(
   warnings: string[],
   _toolSuggestions: ToolSuggestionItem[] | undefined,
@@ -7849,6 +8253,11 @@ function compactWarningItems(
   return items;
 }
 
+/**
+ * 从 sessionStorage 读取蒸馏会话缓存，损坏时清除并返回 null。
+ *
+ * - 缺失字段按默认值补全，上传中的附件不会恢复。
+ */
 function readDistillCache(key: string): DistillCacheSnapshot | null {
   try {
     const raw = window.sessionStorage.getItem(key);
@@ -7907,6 +8316,7 @@ function readDistillCache(key: string): DistillCacheSnapshot | null {
   }
 }
 
+/** 生成新的蒸馏工作区 ID，优先使用 crypto.randomUUID。 */
 function createDistillWorkspaceId(): string {
   if (typeof window.crypto?.randomUUID === 'function') {
     return window.crypto.randomUUID();
@@ -7914,6 +8324,7 @@ function createDistillWorkspaceId(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** 写入蒸馏会话缓存；超出存储配额时静默失败。 */
 function writeDistillCache(key: string, snapshot: DistillCacheSnapshot): void {
   try {
     window.sessionStorage.setItem(key, JSON.stringify(snapshot));
@@ -7922,6 +8333,7 @@ function writeDistillCache(key: string, snapshot: DistillCacheSnapshot): void {
   }
 }
 
+/** 删除蒸馏会话缓存，失败时忽略。 */
 function removeDistillCache(key: string): void {
   try {
     window.sessionStorage.removeItem(key);
@@ -7930,15 +8342,18 @@ function removeDistillCache(key: string): void {
   }
 }
 
+/** 判断缓存快照是否为空工作区（没有任何草稿或技能）。 */
 function isBlankDistillWorkspace(snapshot: DistillCacheSnapshot): boolean {
   return !snapshot.draft && !snapshot.loadedSkill && !snapshot.lastSavedDraft;
 }
 
+/** 归一化初始选中路径：只选中「basic」时视为未选择。 */
 function normalizeInitialSelectedPaths(paths: string[]): string[] {
   if (paths.length === 1 && paths[0] === 'basic') return [];
   return paths;
 }
 
+/** 列出草稿的全部可改写目标路径：基础信息加各节点。 */
 function allTargetPaths(skill: SkillCard): string[] {
   return [
     'basic',
@@ -7946,6 +8361,7 @@ function allTargetPaths(skill: SkillCard): string[] {
   ];
 }
 
+/** 用最新草稿校正选中路径，过滤已不存在的目标。 */
 function reconcileSelectedPaths(paths: string[], skill: SkillCard): string[] {
   if (paths.length === 0) return [];
   const available = allTargetPaths(skill);
@@ -7954,14 +8370,17 @@ function reconcileSelectedPaths(paths: string[], skill: SkillCard): string[] {
 }
 
 
+/** 合并两批路径并去重。 */
 function mergePaths(current: string[], next: string[]): string[] {
   return Array.from(new Set([...current, ...next]));
 }
 
+/** 深拷贝草稿（JSON 序列化方式）。 */
 function cloneSkill(skill: SkillCard): SkillCard {
   return JSON.parse(JSON.stringify(skill)) as SkillCard;
 }
 
+/** 归一化子流程节点：清空指令、字段、动作与能力配置。 */
 function normalizeSubflowNode<T extends Record<string, unknown>>(node: T): T {
   if (String(node.type || '') !== 'subflow') return node;
   return {
@@ -7982,6 +8401,7 @@ function normalizeSubflowNode<T extends Record<string, unknown>>(node: T): T {
   };
 }
 
+/** 归一化草稿内的全部子流程节点，返回新草稿。 */
 function normalizeSubflowNodes(skill: SkillCard): SkillCard {
   const next = cloneSkill(skill);
   next.nodes = (Array.isArray(next.nodes) ? next.nodes : []).map((node) => (
@@ -7990,6 +8410,11 @@ function normalizeSubflowNodes(skill: SkillCard): SkillCard {
   return next;
 }
 
+/**
+ * 判断把候选 SOP 设为子流程后是否会形成嵌套环。
+ *
+ * - 沿子流程引用递归查找，命中父 SOP 即判定成环。
+ */
 function wouldCreateSopNestingCycle(
   parentSkillId: string,
   candidateSkillId: string,
@@ -7997,6 +8422,7 @@ function wouldCreateSopNestingCycle(
 ): boolean {
   const byId = new Map(skills.map((item) => [item.skill_id, item]));
   const visiting = new Set<string>();
+  /** 递归判断某个 SOP 的子流程链是否回到父 SOP。 */
   const reachesParent = (skillId: string): boolean => {
     if (skillId === parentSkillId) return true;
     if (visiting.has(skillId)) return false;
@@ -8011,6 +8437,7 @@ function wouldCreateSopNestingCycle(
   return reachesParent(candidateSkillId);
 }
 
+/** 把节点能力引用收敛到 capability_refs 并删除遗留的扁平字段。 */
 function canonicalizeSkillCapabilityRefs(skill: SkillCard): SkillCard {
   const next = cloneSkill(skill);
   next.nodes = (Array.isArray(next.nodes) ? next.nodes : []).map((node) => {
@@ -8027,6 +8454,7 @@ function canonicalizeSkillCapabilityRefs(skill: SkillCard): SkillCard {
   return next;
 }
 
+/** 生成不冲突的草稿技能 ID：清洗字符后追加时间戳。 */
 function uniqueDraftSkillId(skillId: string): string {
   const normalized = (skillId || 'skill')
     .trim()
@@ -8036,18 +8464,21 @@ function uniqueDraftSkillId(skillId: string): string {
   return `${normalized}_${Date.now().toString(36)}`;
 }
 
+/** 生成用于比较的草稿副本，忽略版本号差异。 */
 function comparableSkillContent(skill: SkillCard): SkillCard {
   const next = cloneSkill(skill);
   next.version = '';
   return next;
 }
 
+/** 判断草稿内容相对已保存内容是否变化（忽略版本号）。 */
 function hasSkillContentChanges(targetDraft: SkillCard | null, baseDraft: SkillCard | null): boolean {
   if (!targetDraft) return false;
   if (!baseDraft) return true;
   return JSON.stringify(comparableSkillContent(targetDraft)) !== JSON.stringify(comparableSkillContent(baseDraft));
 }
 
+/** 从草稿所有节点中移除指定工具的调用动作。 */
 function removeToolActionFromSkill(skill: SkillCard, toolName: string): SkillCard {
   const next = cloneSkill(skill);
   const targetAction = `call_tool:${toolName}`;
@@ -8058,6 +8489,12 @@ function removeToolActionFromSkill(skill: SkillCard, toolName: string): SkillCar
   return next;
 }
 
+/**
+ * 把确认新增的工具动作合并进草稿对应节点。
+ *
+ * - 节点已引用该工具时保持不变，避免重复添加。
+ * - 没有现成引用时按改写目标或唯一的工具节点决定落点。
+ */
 function integrateToolSuggestionsIntoDraft(
   skill: SkillCard,
   suggestions: ToolSuggestionItem[],
@@ -8092,6 +8529,7 @@ function integrateToolSuggestionsIntoDraft(
   return next;
 }
 
+/** 决定工具动作写入哪些节点：优先改写目标，其次唯一的工具节点。 */
 function toolSuggestionTargetIndexes(
   nodes: Array<Record<string, unknown>>,
   _suggestion: ToolSuggestionItem,
@@ -8106,10 +8544,12 @@ function toolSuggestionTargetIndexes(
   return [];
 }
 
+/** 深拷贝服务端返回的技能详情。 */
 function cloneSkillRead(skill: SkillRead): SkillRead {
   return JSON.parse(JSON.stringify(skill)) as SkillRead;
 }
 
+/** 收集历史消息中的回退操作并按关键字段去重。 */
 function collectRollbackOperations(messages: ChatItem[]): DistillHistoryOperation[] {
   const operations = messages.flatMap((item) => item.operations || []);
   const relevant = operations.filter((operation) =>
@@ -8124,6 +8564,7 @@ function collectRollbackOperations(messages: ChatItem[]): DistillHistoryOperatio
   });
 }
 
+/** 构造空草稿骨架，保留节点数量与类型，用于差异动画的首帧对比。 */
 function blankSkillForAnimation(skill: SkillCard): SkillCard {
   const blank = cloneSkill(skill);
   blank.skill_id = '';
@@ -8165,6 +8606,7 @@ function blankSkillForAnimation(skill: SkillCard): SkillCard {
   return blank;
 }
 
+/** 计算两次草稿之间发生变化的路径（含 basic 与 graph）。 */
 function diffTargetPaths(previousDraft: SkillCard, nextDraft: SkillCard, targetPaths: string[]): string[] {
   const candidates = Array.from(new Set([
     ...targetPaths,
@@ -8175,6 +8617,7 @@ function diffTargetPaths(previousDraft: SkillCard, nextDraft: SkillCard, targetP
   return candidates.filter((path) => sectionSignature(previousDraft, path) !== sectionSignature(nextDraft, path));
 }
 
+/** 生成路径对应区块的内容签名，用于判断该区块是否变化。 */
 function sectionSignature(skill: SkillCard, path: string): string {
   if (path === 'basic') {
     return JSON.stringify({
@@ -8204,6 +8647,12 @@ function sectionSignature(skill: SkillCard, path: string): string {
   return JSON.stringify(skillGraphSteps(skill)[stepIndex] || null);
 }
 
+/**
+ * 收集指定路径上的文本差异条目，供差异动画与保存弹窗展示。
+ *
+ * - changedPaths 含 all 时扫描全部目标路径。
+ * - 无变化的字段不会生成差异条目。
+ */
 function collectTextDiffs(previousDraft: SkillCard, nextDraft: SkillCard, changedPaths: string[]): TextDiffAnimation[] {
   const diffs: TextDiffAnimation[] = [];
   const paths = changedPaths.includes('all') ? allTargetPaths(nextDraft) : changedPaths;
@@ -8257,6 +8706,11 @@ function collectTextDiffs(previousDraft: SkillCard, nextDraft: SkillCard, change
   return diffs;
 }
 
+/**
+ * 计算单字段的差异片段：截取公共前后缀，中间部分作为删除与新增。
+ *
+ * - 新旧文本完全相同时返回 null。
+ */
 function makeTextDiff(path: string, field: string, oldText: string, newText: string): TextDiffAnimation | null {
   if (oldText === newText) return null;
   let prefixLength = 0;
@@ -8285,6 +8739,7 @@ function makeTextDiff(path: string, field: string, oldText: string, newText: str
   };
 }
 
+/** 取路径与字段对应的展示文本，数组字段用反引号列表拼接。 */
 function getDisplayField(skill: SkillCard, path: string, field: string): string {
   const value =
     path === 'basic'
@@ -8295,6 +8750,7 @@ function getDisplayField(skill: SkillCard, path: string, field: string): string 
   return '';
 }
 
+/** 把差异动画的中间文本写回草稿，列表字段会被跳过。 */
 function setTextField(skill: SkillCard, path: string, field: string, value: string): void {
   if (isListField(field)) return;
   if (path === 'basic') {
@@ -8309,6 +8765,7 @@ function setTextField(skill: SkillCard, path: string, field: string, value: stri
   }
 }
 
+/** 判断字段是否为列表类型（差异动画不逐字回放这类字段）。 */
 function isListField(field: string): boolean {
   return [
     'trigger_intents',
@@ -8324,6 +8781,7 @@ function isListField(field: string): boolean {
   ].includes(field);
 }
 
+/** 按进度生成逐字回放的中间草稿，进度到 1 时直接返回目标草稿。 */
 function typedDraft(previousDraft: SkillCard, nextDraft: SkillCard, diffs: TextDiffAnimation[], progress: number): SkillCard {
   const output = cloneSkill(previousDraft);
   diffs.forEach((diff) => {
@@ -8334,6 +8792,7 @@ function typedDraft(previousDraft: SkillCard, nextDraft: SkillCard, diffs: TextD
   return output;
 }
 
+/** 递增次版本号并重置修订号，非法版本按 1.0.0 处理。 */
 function bumpSkillVersion(version: string): string {
   const parts = version.split('.').map((item) => Number.parseInt(item, 10));
   const major = Number.isFinite(parts[0]) ? parts[0] : 1;
@@ -8341,6 +8800,7 @@ function bumpSkillVersion(version: string): string {
   return `${major}.${minor + 1}.0`;
 }
 
+/** 汇总工具名称到描述的映射，并补充技能建议里提到的工具。 */
 function buildToolDescriptionMap(tools: ToolRead[], messages: ChatItem[] = []): ToolDescriptionMap {
   const descriptions = tools.reduce<ToolDescriptionMap>((acc, tool) => {
     acc[tool.name] = [tool.display_name, tool.description].filter(Boolean).join('：') || tool.name;
@@ -8356,6 +8816,7 @@ function buildToolDescriptionMap(tools: ToolRead[], messages: ChatItem[] = []): 
   return descriptions;
 }
 
+/** 汇总工具名称到处理状态的映射，并补充技能建议里的新工具。 */
 function buildToolStatusMap(tools: ToolRead[], messages: ChatItem[]): ToolStatusMap {
   const statuses = tools.reduce<ToolStatusMap>((acc, tool) => {
     acc[tool.name] = 'existing';
@@ -8377,6 +8838,7 @@ function buildToolStatusMap(tools: ToolRead[], messages: ChatItem[]): ToolStatus
   return statuses;
 }
 
+/** 由工具建议构造创建工具的请求体，优先使用探测得到的输出 Schema。 */
 function toolPayloadFromSuggestion(suggestion: ToolSuggestionItem, skillId?: string): Record<string, unknown> {
   const outputSchema = suggestion.probe_result?.success && suggestion.probe_result.inferred_output_schema
     ? suggestion.probe_result.inferred_output_schema
@@ -8401,6 +8863,7 @@ function toolPayloadFromSuggestion(suggestion: ToolSuggestionItem, skillId?: str
   };
 }
 
+/** 由工具建议构造本地工具对象，用于 ID 冲突时复用已有工具。 */
 function toolReadFromSuggestion(suggestion: ToolSuggestionItem, skillId?: string): ToolRead {
   const outputSchema = suggestion.probe_result?.success && suggestion.probe_result.inferred_output_schema
     ? suggestion.probe_result.inferred_output_schema
@@ -8428,6 +8891,7 @@ function toolReadFromSuggestion(suggestion: ToolSuggestionItem, skillId?: string
   };
 }
 
+/** 按工具名新增或更新工具列表项。 */
 function upsertToolRead(current: ToolRead[], nextTool: ToolRead): ToolRead[] {
   const exists = current.some((tool) => tool.name === nextTool.name);
   return exists
@@ -8435,6 +8899,7 @@ function upsertToolRead(current: ToolRead[], nextTool: ToolRead): ToolRead[] {
     : [...current, nextTool];
 }
 
+/** 取字段的中文展示名，未登记字段原样返回。 */
 function fieldLabel(field: string): string {
   const labels: Record<string, string> = {
     skill_id: '技能 ID',
@@ -8463,16 +8928,19 @@ function fieldLabel(field: string): string {
   return labels[field] || field;
 }
 
+/** 从 call_tool: 动作中取出工具名，非工具动作返回空串。 */
 function toolNameFromAction(action: string): string {
   return action.startsWith('call_tool:') ? action.replace(/^call_tool:/, '').trim() : '';
 }
 
+/** 取动作的展示文案，工具动作前缀为「调用工具：」。 */
 function actionLabel(action: string): string {
   const toolName = toolNameFromAction(action);
   if (toolName) return `调用工具：${toolName}`;
   return BASE_ACTION_OPTIONS.find((item) => item.value === action)?.label || action;
 }
 
+/** 汇总可用动作选项：基础动作、已有工具与流程中出现的动作去重合并。 */
 function buildActionOptions(
   toolDescriptions: ToolDescriptionMap,
   toolStatuses: ToolStatusMap,
@@ -8493,6 +8961,7 @@ function buildActionOptions(
   return mergeSelectOptions(BASE_ACTION_OPTIONS, toolOptions, currentActionOptions);
 }
 
+/** 依次合并多组选项并按 value 去重，空值忽略。 */
 function mergeSelectOptions(...groups: SelectOption[][]): SelectOption[] {
   const seen = new Set<string>();
   const output: SelectOption[] = [];
@@ -8504,6 +8973,7 @@ function mergeSelectOptions(...groups: SelectOption[][]): SelectOption[] {
   return output;
 }
 
+/** 推断条件编辑器的预设值，空条件视为总是进入，无法匹配时返回自定义。 */
 function conditionPresetValue(value: string): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed === 'always' || trimmed === 'true') return '__always__';
@@ -8513,11 +8983,13 @@ function conditionPresetValue(value: string): string {
   return '__custom__';
 }
 
+/** 由预设值生成实际保存的进入条件，总是进入保存为空串。 */
 function conditionFromPreset(value: string): string {
   if (value === '__always__') return '';
   return CONDITION_PRESET_TEXT[value] || '';
 }
 
+/** 把条件转换为自然语言描述，空值表示总是进入。 */
 function conditionNaturalText(value: string): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed === 'always' || trimmed === 'true') return '';
@@ -8527,21 +8999,25 @@ function conditionNaturalText(value: string): string {
   return trimmed;
 }
 
+/** 生成条件编辑器的可读说明文案。 */
 function conditionReadableText(value: string): string {
   const natural = conditionNaturalText(value);
   return natural ? `模型理解：${natural}。` : '模型理解：没有额外限制，流程可以从这里继续。';
 }
 
+/** 生成流转规则下方的进入条件说明。 */
 function flowRuleConditionText(value: string): string {
   const natural = conditionNaturalText(value);
   return natural ? `进入条件：${natural}。` : '进入条件：总是进入。';
 }
 
+/** 取差异路径的展示名，草稿缺失时直接返回路径。 */
 function diffTargetLabel(path: string, skill: SkillCard | null): string {
   if (!skill) return path;
   return targetLabel([path], skill);
 }
 
+/** 把若干改写路径转换为可读的区块名称。 */
 function targetLabel(paths: string[], skill: SkillCard): string {
   const labels = paths.map((path) => {
     if (path === 'basic') return '基础信息';
@@ -8557,10 +9033,12 @@ function targetLabel(paths: string[], skill: SkillCard): string {
   return labels.join('、');
 }
 
+/** 由节点下标生成改写目标路径。 */
 function stepTargetPath(index: number): string {
   return `nodes[${index}]`;
 }
 
+/** 从改写目标路径解析节点下标，非节点路径返回 null。 */
 function stepIndexFromPath(path: string): number | null {
   const match = path.match(/^nodes\[(\d+)\]$/);
   return match ? Number(match[1]) : null;

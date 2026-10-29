@@ -13,12 +13,12 @@ from app.db.models import new_id, utc_now
 
 
 def _normalize_database_url(url: str) -> str:
-    """Backward-compatible import seam for callers and migration tests."""
+    """向后兼容的导入入口:转调 normalize_database_url,供调用方与迁移测试继续按旧名引用。"""
     return normalize_database_url(url)
 
 
 def build_engine(url: str) -> Engine:
-    """Create an engine with dialect-appropriate options."""
+    """按方言创建 Engine:SQLite 关闭线程校验并放宽锁等待,其他方言启用连接预检与连接池上限。"""
     if url.startswith("sqlite"):
         connect_args = {"check_same_thread": False, "timeout": 30}
         return create_engine(url, echo=False, connect_args=connect_args)
@@ -73,6 +73,10 @@ _CAPABILITY_SCOPE_TABLES = (
 
 
 def init_db() -> None:
+    """启动时初始化数据库:建表、执行 SQLite 增量迁移并清理孤儿会话。
+
+    先导入模型以注册元数据,再建表,随后在 SQLite 上开启 WAL 并补齐历史表结构。
+    """
     import app.db.models  # noqa: F401
 
     _configure_sqlite_runtime()
@@ -116,6 +120,7 @@ def _purge_orphaned_chat_sessions() -> None:
 
 
 def _configure_sqlite_runtime() -> None:
+    """把 SQLite 切到 WAL 日志模式并设置 30 秒 busy 超时;非 SQLite 直接返回。"""
     if not database_url.startswith("sqlite"):
         return
     with engine.begin() as conn:
@@ -124,6 +129,10 @@ def _configure_sqlite_runtime() -> None:
 
 
 def _migrate_sqlite_skill_schema() -> None:
+    """SQLite 就地增量迁移总入口:逐表补列、重建约束,并按迁移标记执行一次性数据回填。
+
+    非 SQLite 直接返回;整个过程在 BEGIN IMMEDIATE 事务内完成,任一步失败即整体回滚。
+    """
     if not database_url.startswith("sqlite"):
         return
 
@@ -683,6 +692,7 @@ def _migrate_sqlite_skill_schema() -> None:
 
 @contextmanager
 def _sqlite_immediate_connection():
+    """提供 BEGIN IMMEDIATE 连接的上下文管理器:先拿写锁再交出连接,异常回滚、正常提交。"""
     conn = engine.connect()
     try:
         conn.exec_driver_sql("BEGIN IMMEDIATE")
@@ -696,6 +706,7 @@ def _sqlite_immediate_connection():
 
 
 def _migrate_default_model_output_limit(conn, tables: set[str]) -> None:
+    """把默认模型的 max_output_tokens 从 2048 修正为 8192,并以 app_data_migrations 标记保证只执行一次。"""
     if "model_configs" not in tables:
         return
 
@@ -822,6 +833,7 @@ def _migrate_user_source_backfill(conn) -> None:
 
 
 def _wecom_scope_from_config(config: object, binding_id: str) -> str:
+    """从企微绑定配置推导身份作用域:优先 corp_id、其次 bot_id,都取不到时退回 binding_id。"""
     if isinstance(config, dict):
         return str(config.get("corp_id") or config.get("bot_id") or "").strip() or binding_id
     return binding_id
@@ -1228,7 +1240,7 @@ def _migrate_channel_bindings_multi(conn, inspector, tables: set[str]) -> None:
 
 
 def _migrate_wechat_kf_accounts(conn, tables: set[str]) -> None:
-    """Add the per-客服账号 routing table for multi-account WeChat客服 bindings."""
+    """为多渠道微信客服绑定新增按客服账号路由的 wechat_kf_accounts 表,并从现有绑定回填账号行。"""
     if "wechat_kf_accounts" in tables:
         return
     conn.execute(
@@ -1296,6 +1308,7 @@ def _migrate_wechat_kf_accounts(conn, tables: set[str]) -> None:
 
 
 def _channel_account_key_from_row(channel: str, config: object) -> str | None:
+    """按渠道配置生成稳定的外部账号键:wecom 区分 corp+bot,wechat 取 ilink_bot_id,取不到返回 None。"""
     parsed = _json_object(config)
     if channel == "wecom":
         corp_id = str(parsed.get("corp_id") or "").strip()
@@ -1310,6 +1323,7 @@ def _channel_account_key_from_row(channel: str, config: object) -> str | None:
 
 
 def _migrate_channel_inbound_run_schema(conn, tables: set[str]) -> None:
+    """为 channel_inbound_events 补 processor_run_id 列与索引,便于按处理轮次追踪入站事件。"""
     if "channel_inbound_events" not in tables:
         return
     columns = {
@@ -1327,10 +1341,9 @@ def _migrate_channel_inbound_run_schema(conn, tables: set[str]) -> None:
 
 
 def _migrate_feishu_channel_schema(conn, tables: set[str]) -> None:
-    """Add the durable-inbox and provider-scope columns required by Feishu.
+    """为飞书渠道补齐可靠收件箱与提供方作用域所需的列。
 
-    Column presence is authoritative rather than the marker alone so an interrupted
-    or manually modified database is repaired on the next startup.
+    以列是否存在而非迁移标记为准,中断或手工改过的库会在下次启动继续修复。
     """
     required_tables = {
         "channel_bindings",
@@ -1416,6 +1429,7 @@ def _migrate_feishu_channel_schema(conn, tables: set[str]) -> None:
 
 
 def _migrate_channel_bind_code_constraints(conn, tables: set[str]) -> None:
+    """清理失效或冲突的绑定码后再加唯一索引:已用/过期码删除,同码多归属整组作废,同用户只留最新。"""
     if "channel_bind_codes" not in tables:
         return
     # 已使用/过期码不再参与当前码模型，先清理以释放六位码空间。
@@ -1566,6 +1580,10 @@ def _migrate_channel_account_key_schema(conn, tables: set[str]) -> None:
 
 
 def _migrate_model_api_protocols(conn, tables: set[str]) -> None:
+    """为 model_configs 补齐 API 协议、验证状态与 revision 列,并把存量 extra_body 配置迁入协议选项。
+
+    迁移标记存在但列或默认唯一索引缺失时会重新补齐,用于修复中断或手工改过的库。
+    """
     if "model_configs" not in tables:
         return
 
@@ -1681,6 +1699,7 @@ def _migrate_model_api_protocols(conn, tables: set[str]) -> None:
 
 
 def _normalize_model_default_rows(conn) -> None:
+    """收敛每租户的默认模型:重复默认只留最新一条,停用行降级为非默认,并补建默认唯一索引。"""
     duplicate_defaults = conn.execute(
         text(
             """
@@ -1731,6 +1750,7 @@ def _normalize_model_default_rows(conn) -> None:
 
 
 def _model_api_protocol_schema_complete(conn, columns: set[str]) -> bool:
+    """判断 model_configs 是否已具备协议迁移的全部列,且默认唯一索引带 is_default = 1 条件。"""
     if not _MODEL_API_PROTOCOL_COLUMNS.issubset(columns):
         return False
     index = conn.execute(
@@ -1743,6 +1763,7 @@ def _model_api_protocol_schema_complete(conn, columns: set[str]) -> bool:
 
 
 def _valid_chat_thinking_options(value: object) -> bool:
+    """校验 thinking 选项结构:仅允许 type 与 clear_thinking 两个字段,且取值合法。"""
     if not isinstance(value, dict) or set(value) - {"type", "clear_thinking"}:
         return False
     if value.get("type") not in {"enabled", "disabled"}:
@@ -1751,6 +1772,7 @@ def _valid_chat_thinking_options(value: object) -> bool:
 
 
 def _migrate_skill_content(value: object, skill_id: str) -> dict[str, object]:
+    """把技能 content_json 规整为技能图结构:兼容旧 sop_id 字段并统一写入 skill_id。"""
     if isinstance(value, str):
         try:
             content = json.loads(value)
@@ -1768,6 +1790,7 @@ def _migrate_skill_content(value: object, skill_id: str) -> dict[str, object]:
 
 
 def _normalize_existing_skill_rows(conn, legacy_id_prefix: str) -> None:
+    """就地规范化 skills 表的 skill_id 与 content_json;新 skill_id 已被其他行占用时跳过该行,避免撞唯一键。"""
     rows = conn.execute(text("SELECT id, skill_id, content_json FROM skills")).mappings().all()
     for row in rows:
         skill_id = _normalize_skill_identifier(row.get("skill_id"), legacy_id_prefix)
@@ -1797,6 +1820,7 @@ def _normalize_existing_skill_rows(conn, legacy_id_prefix: str) -> None:
 
 
 def _normalize_existing_skill_version_rows(conn, legacy_id_prefix: str) -> None:
+    """就地规范化 skill_versions 表的 skill_id 与 content_json,命名规则与主表保持一致。"""
     rows = conn.execute(text("SELECT id, skill_id, content_json FROM skill_versions")).mappings().all()
     for row in rows:
         skill_id = _normalize_skill_identifier(row.get("skill_id"), legacy_id_prefix)
@@ -1814,6 +1838,7 @@ def _normalize_existing_skill_version_rows(conn, legacy_id_prefix: str) -> None:
 
 
 def _sync_explicit_skill_tool_bindings(conn, tables: set[str]) -> None:
+    """把技能里显式 call_tool 引用的工具补进 tools.allowed_skills_json,避免存量工具失去技能可见性。"""
     if "skills" not in tables or "tools" not in tables:
         return
     skill_rows = conn.execute(
@@ -1852,6 +1877,7 @@ def _sync_explicit_skill_tool_bindings(conn, tables: set[str]) -> None:
 
 
 def _explicit_skill_tool_names(content: dict[str, object]) -> set[str]:
+    """收集技能 nodes/steps 的 allowed_actions 中 call_tool: 前缀声明的工具名。"""
     names: set[str] = set()
     for key in ("nodes", "steps"):
         items = content.get(key)
@@ -1873,6 +1899,7 @@ def _explicit_skill_tool_names(content: dict[str, object]) -> set[str]:
 
 
 def _json_string_list(value: object) -> list[str]:
+    """宽松解析字符串列表:接受 JSON 字符串或 list 并过滤空白项,非法输入返回空列表。"""
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -1884,6 +1911,7 @@ def _json_string_list(value: object) -> list[str]:
 
 
 def _ensure_skill_graph(content: dict[str, object]) -> dict[str, object]:
+    """把技能内容规整成节点/边图模型:已有 nodes 直接复用,旧 steps 列表按顺序转成节点与边。"""
     nodes = content.get("nodes")
     steps = content.get("steps")
     if isinstance(nodes, list) and nodes:
@@ -1919,7 +1947,7 @@ def _ensure_skill_graph(content: dict[str, object]) -> dict[str, object]:
 
 
 def _ensure_required_capability_refs(nodes: list[object]) -> None:
-    """Repair legacy nodes where a required capability was not also selected."""
+    """修复历史节点:把仅写在 required_* 里的能力同步进对应已选列表,避免必选资源在迁移后丢失。"""
 
     for node in nodes:
         if not isinstance(node, dict):
@@ -1944,6 +1972,7 @@ def _ensure_required_capability_refs(nodes: list[object]) -> None:
 
 
 def _step_to_node_dict(step: dict[str, object]) -> dict[str, object]:
+    """把旧版步骤字典转换成图节点,并按动作与期望收集信息推断节点类型。"""
     actions = step.get("allowed_actions") if isinstance(step.get("allowed_actions"), list) else []
     expected = step.get("expected_user_info") if isinstance(step.get("expected_user_info"), list) else []
     node_type = "collect_info" if expected else "response"
@@ -1967,6 +1996,7 @@ def _step_to_node_dict(step: dict[str, object]) -> dict[str, object]:
 
 
 def _first_node_id(nodes: object) -> str | None:
+    """取节点列表中第一个带 node_id 的节点 id;列表为空或元素格式不符时返回 None。"""
     if not isinstance(nodes, list):
         return None
     for node in nodes:
@@ -1976,6 +2006,7 @@ def _first_node_id(nodes: object) -> str | None:
 
 
 def _last_node_id(nodes: object) -> str | None:
+    """取节点列表中最后一个带 node_id 的节点 id;列表为空或元素格式不符时返回 None。"""
     if not isinstance(nodes, list):
         return None
     for node in reversed(nodes):
@@ -1985,6 +2016,7 @@ def _last_node_id(nodes: object) -> str | None:
 
 
 def _seed_skill_versions(conn) -> None:
+    """为缺少版本记录的技能补一条与主表同版本的 skill_versions 记录,已存在则跳过。"""
     rows = conn.execute(text("SELECT * FROM skills")).mappings().all()
     for row in rows:
         version = row.get("version") or "1.0.0"
@@ -2029,6 +2061,7 @@ def _seed_skill_versions(conn) -> None:
 
 
 def _normalize_skill_identifier(value: object, legacy_id_prefix: str) -> str:
+    """把旧 sop_ 前缀的技能标识改写为 skill_ 前缀;非字符串输入返回空串。"""
     if not isinstance(value, str):
         return ""
     if value.startswith(legacy_id_prefix):
@@ -2037,6 +2070,7 @@ def _normalize_skill_identifier(value: object, legacy_id_prefix: str) -> str:
 
 
 def _migrate_capability_scope_schema(conn, inspector, tables: set[str]) -> None:
+    """为能力类表补 capability_scope 列与索引,并把空值或非法值统一回填为 general。"""
     for table_name in _CAPABILITY_SCOPE_TABLES:
         if table_name not in tables:
             continue
@@ -2064,7 +2098,7 @@ def _migrate_capability_scope_schema(conn, inspector, tables: set[str]) -> None:
 
 
 def _migrate_harness_v2_schema(conn, inspector, tables: set[str]) -> None:
-    """Repair Harness v2 tables created by an older application version."""
+    """修复旧版本创建的 Harness v2 表:按列补齐租约、重试与缓存字段,并重建逻辑动作唯一索引。"""
 
     if "harness_task_frames" in tables:
         task_frame_columns = {
@@ -2237,6 +2271,7 @@ def _migrate_harness_v2_schema(conn, inspector, tables: set[str]) -> None:
 
 
 def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
+    """为每个租户补默认知识库及其 1.0.0 版本,并把知识文档、分块等历史行挂到对应版本。"""
     tenant_ids = _tenant_ids(conn, tables)
     if "knowledge_bases" in tables:
         for tenant_id in tenant_ids:
@@ -2392,6 +2427,7 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
 
 
 def _split_document_backed_knowledge_bases(conn, tables: set[str]) -> None:
+    """把含多文档的旧知识库按文档拆成独立知识库,并迁移其桶、分块、概念与摄取任务。"""
     required_tables = {"knowledge_bases", "knowledge_base_versions", "knowledge_documents"}
     if not required_tables.issubset(tables):
         return
@@ -2528,6 +2564,7 @@ def _move_document_knowledge_rows(
     knowledge_base_id: str,
     version_id: str,
 ) -> None:
+    """把单个文档及其桶、分块、概念、发现建议与摄取任务一并迁到目标知识库与版本。"""
     document_scoped_tables = (
         "knowledge_buckets",
         "knowledge_chunks",
@@ -2588,6 +2625,7 @@ def _move_document_knowledge_rows(
 
 
 def _json_object(value: object) -> dict[str, object]:
+    """宽松解析 JSON 对象:dict 直接复制,字符串解析失败或结果非对象一律返回空 dict。"""
     if isinstance(value, dict):
         return dict(value)
     if isinstance(value, str):
@@ -2601,10 +2639,12 @@ def _json_object(value: object) -> dict[str, object]:
 
 
 def _document_knowledge_base_id(document_id: str) -> str:
+    """由文档 id 生成拆分后知识库的稳定 id。"""
     return f"kb_doc_{document_id}"
 
 
 def _document_knowledge_base_name(document) -> str:
+    """取文档标题作为知识库名,缺失时退回文件名主干,再退回占位名。"""
     title = str(document.get("title") or "").strip()
     if title:
         return title
@@ -2619,6 +2659,7 @@ def _unique_migrated_knowledge_base_name(
     base_name: str,
     target_id: str,
 ) -> str:
+    """在同一租户内为迁移生成的知识库名去重,重名时追加递增序号。"""
     normalized = base_name.strip() or "未命名知识库"
     existing_names = {
         str(row[0])
@@ -2639,6 +2680,7 @@ def _unique_migrated_knowledge_base_name(
 
 
 def _seed_default_agents(conn, tables: set[str]) -> None:
+    """为每个租户补整体智能体档案、归档旧默认员工,并按需补齐默认资源绑定。"""
     if "agent_profiles" not in tables:
         return
     tenant_ids = _tenant_ids(conn, tables)
@@ -2676,6 +2718,7 @@ def _seed_default_agents(conn, tables: set[str]) -> None:
 
 
 def _seed_default_agent_bindings(conn, tenant_id: str) -> None:
+    """把租户内技能、通用技能与知识库绑定到默认员工,状态随资源状态映射为 active 或 inactive。"""
     default_agent = _default_agent_id(tenant_id)
     active_default = conn.execute(
         text(
@@ -2742,6 +2785,7 @@ def _seed_default_agent_bindings(conn, tenant_id: str) -> None:
 
 
 def _archive_default_agent(conn, tenant_id: str) -> None:
+    """归档历史默认员工档案:只处理种子或管理员创建的行,并写入隐藏与归属元数据。"""
     default_agent = _default_agent_id(tenant_id)
     row = conn.execute(
         text(
@@ -2798,6 +2842,7 @@ def _archive_default_agent(conn, tenant_id: str) -> None:
 
 
 def _seed_agent_branch_state(conn, inspector, tables: set[str]) -> None:
+    """为每个员工智能体按资源绑定补技能与知识分支,并清空已废弃的员工模型绑定。"""
     if "agent_profiles" not in tables:
         return
     if "agent_skill_branches" in tables and "skills" in tables:
@@ -2860,6 +2905,7 @@ def _seed_agent_branch_state(conn, inspector, tables: set[str]) -> None:
 
 
 def _normalize_agent_branch_rows(conn, tables: set[str]) -> None:
+    """把员工资源绑定与技能/知识分支的 id 归一为规范生成值,并合并重复行。"""
     if "agent_resource_bindings" in tables:
         _normalize_canonical_ids(
             conn,
@@ -2911,6 +2957,7 @@ def _normalize_canonical_ids(
     key_columns: tuple[str, ...],
     id_factory: Callable[[dict[str, object]], str],
 ) -> None:
+    """按业务键收敛表内 id:重复键删除当前行,目标 id 已存在也删除当前行,否则直接改 id。"""
     columns_sql = ", ".join(select_columns)
     rows = conn.execute(text(f"SELECT {columns_sql} FROM {table}")).mappings().all()
     kept_keys: set[tuple[object, ...]] = set()
@@ -2933,6 +2980,7 @@ def _normalize_canonical_ids(
 
 
 def _seed_agent_skill_branch(conn, agent_id: str, row) -> None:
+    """为员工智能体补技能分支及其首个版本记录,分支已存在时直接返回。"""
     branch_id = _agent_skill_branch_id(agent_id, str(row["skill_id"]))
     existing = conn.execute(text("SELECT id FROM agent_skill_branches WHERE id = :id"), {"id": branch_id}).first()
     if existing:
@@ -3002,6 +3050,7 @@ def _seed_agent_skill_branch(conn, agent_id: str, row) -> None:
 
 
 def _seed_agent_knowledge_branch(conn, agent_id: str, row) -> None:
+    """为员工智能体补知识库分支,初始版本固定 1.0.0,分支已存在时跳过。"""
     branch_id = _agent_knowledge_branch_id(agent_id, str(row["id"]))
     existing = conn.execute(text("SELECT id FROM agent_knowledge_branches WHERE id = :id"), {"id": branch_id}).first()
     if existing:
@@ -3031,6 +3080,7 @@ def _seed_agent_knowledge_branch(conn, agent_id: str, row) -> None:
 
 
 def _tenant_ids(conn, tables: set[str]) -> list[str]:
+    """汇总租户 id:tenants 表加上技能、会话等业务表中出现过的 tenant_id,去重后排序。"""
     ids: set[str] = set()
     if "tenants" in tables:
         ids.update(str(row[0]) for row in conn.execute(text("SELECT id FROM tenants")).all() if row[0])
@@ -3042,39 +3092,48 @@ def _tenant_ids(conn, tables: set[str]) -> list[str]:
 
 
 def _default_knowledge_base_id(tenant_id: str) -> str:
+    """生成租户默认知识库的稳定 id。"""
     return f"kb_{tenant_id}_default"
 
 
 def _overall_agent_id(tenant_id: str) -> str:
+    """生成租户整体智能体的稳定 id。"""
     return f"agent_{tenant_id}_overall"
 
 
 def _default_agent_id(tenant_id: str) -> str:
+    """生成租户默认员工的稳定 id。"""
     return f"agent_{tenant_id}_default"
 
 
 def _knowledge_base_version_id(knowledge_base_id: str, version: str) -> str:
+    """由知识库 id 与版本号生成稳定版本 id,版本号中的点与连字符替换为下划线。"""
     return f"kbver_{knowledge_base_id}_{version.replace('.', '_').replace('-', '_')}"
 
 
 def _agent_skill_branch_id(agent_id: str, skill_id: str) -> str:
+    """生成员工技能分支的稳定 id。"""
     return f"agentbranch_{agent_id}_{skill_id}"
 
 
 def _agent_skill_branch_version_id(agent_id: str, skill_id: str, version: str) -> str:
+    """生成员工技能分支版本的稳定 id,版本号中的点与连字符替换为下划线。"""
     safe_version = version.replace(".", "_").replace("-", "_")
     return f"agentbranchver_{agent_id}_{skill_id}_{safe_version}"
 
 
 def _agent_knowledge_branch_id(agent_id: str, knowledge_base_id: str) -> str:
+    """生成员工知识库分支的稳定 id。"""
     return f"agentkb_{agent_id}_{knowledge_base_id}"
 
 
 def _agent_resource_binding_id(tenant_id: str, agent_id: str, resource_type: str, resource_id: str) -> str:
+    """用业务键的 SHA1 前 16 位生成员工资源绑定的稳定 id。"""
     key = f"{tenant_id}:{agent_id}:{resource_type}:{resource_id}"
     return f"agentres_{hashlib.sha1(key.encode('utf-8')).hexdigest()[:16]}"
 
 
 def get_session() -> Generator[Session, None, None]:
+    """FastAPI 依赖:每个请求产出一个 Session,请求结束自动关闭。"""
     with Session(engine) as session:
         yield session

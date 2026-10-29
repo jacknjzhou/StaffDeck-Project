@@ -54,8 +54,10 @@ export type ResourceImportDialogProps = {
 };
 
 /**
- * Generic "copy resources from another scope" dialog shared by the SOP and 技能
- * pages: a copy-source select plus a checkbox list of importable resources.
+ * 通用的“从其他范围复制资源”对话框，供 SOP 与技能页面复用。
+ *
+ * 由复制来源下拉与可勾选资源列表组成；可选目标下拉仅在传入 targets 与 onTargetChange 时展示。
+ * 列表为空时按是否已选来源展示 emptyText 或 emptySourceText。
  */
 export function ResourceImportDialog({
   open,
@@ -90,6 +92,7 @@ export function ResourceImportDialog({
     onSourceChange(sources[0].value);
   }, [onSourceChange, open, sourceId, sources]);
 
+  /** 勾选/取消勾选单个资源，并把新的 id 列表回传给父组件。 */
   const toggle = (id: string, checked: boolean) => {
     onSelectedChange(checked ? [...selectedIds, id] : selectedIds.filter((value) => value !== id));
   };

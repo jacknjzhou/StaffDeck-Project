@@ -1,20 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 
 export type ClientPagination<T> = {
-  /** Current 1-based page. */
+  /** 当前页码（从 1 开始）。 */
   page: number;
   setPage: (page: number) => void;
-  /** Total number of pages (never below 1). */
+  /** 总页数（最小为 1）。 */
   pageCount: number;
-  /** Items belonging to the current page. */
+  /** 当前页包含的条目。 */
   pagedItems: T[];
 };
 
 /**
- * Client-side pagination over an in-memory list.
+ * 对内存列表做客户端分页的 Hook。
  *
- * Clamps the current page when the list shrinks and resets back to page 1
- * whenever `resetKey` changes (e.g. when a filter is switched).
+ * 列表变短时会把当前页收敛到有效范围内，`resetKey` 变化（例如切换筛选条件）时重置回第 1 页。
  */
 export function useClientPagination<T>(
   items: T[],

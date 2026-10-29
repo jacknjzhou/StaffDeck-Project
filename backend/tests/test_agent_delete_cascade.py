@@ -22,6 +22,7 @@ from app.db.models import (
 
 
 def _test_session() -> Session:
+    """创建带全部模型表的 SQLite 内存会话,为级联删除用例提供隔离数据库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -32,6 +33,7 @@ def _test_session() -> Session:
 
 
 def _admin_user() -> User:
+    """构造演示租户下的管理员用户,满足删除接口对操作者权限的要求。"""
     return User(
         id="user_admin", tenant_id="tenant_demo", username="ops", role="admin", password_hash="test"
     )

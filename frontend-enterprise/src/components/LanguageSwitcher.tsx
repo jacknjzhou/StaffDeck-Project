@@ -11,11 +11,17 @@ import {
 import { useI18n, type AppLocale } from '@/i18n';
 import { cn } from '@/lib/utils';
 
+/** 语言切换下拉框的可选项：语言标识、完整名称与触发器上的短标签。 */
 const OPTIONS: Array<{ locale: AppLocale; label: string; shortLabel: string }> = [
   { locale: 'zh-CN', label: '中文', shortLabel: '中' },
   { locale: 'en-US', label: 'English', shortLabel: 'EN' },
 ];
 
+/**
+ * 顶部栏语言切换器：展示当前语言的短标签，并通过下拉菜单切换中文 / 英文。
+ *
+ * 选择后立即调用 `setLocale` 生效；`className` 用于覆盖触发器样式。
+ */
 export default function LanguageSwitcher({ className }: { className?: string }) {
   const { locale, setLocale } = useI18n();
   const active = OPTIONS.find((option) => option.locale === locale) || OPTIONS[0];

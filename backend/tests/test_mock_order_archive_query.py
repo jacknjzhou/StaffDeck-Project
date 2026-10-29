@@ -20,6 +20,7 @@ from app.db.seed import DEMO_TOOLS
 
 
 def test_primary_order_query_returns_configured_order() -> None:
+    """验证主订单中心查询命中预置订单并标记可退款。"""
     result = mock_order_query(MockOrderQueryRequest(order_id="ORDER-1001"))
 
     assert result["found"] is True
@@ -28,6 +29,7 @@ def test_primary_order_query_returns_configured_order() -> None:
 
 
 def test_primary_order_query_returns_miss_for_unknown_primary_order() -> None:
+    """验证主订单中心查不到归档订单时返回 source_miss。"""
     result = mock_order_query(MockOrderQueryRequest(order_id="ARCHIVE-1001"))
 
     assert result["found"] is False
@@ -35,6 +37,7 @@ def test_primary_order_query_returns_miss_for_unknown_primary_order() -> None:
 
 
 def test_archive_order_query_returns_refundable_history_order() -> None:
+    """验证归档订单查询命中历史订单且仍可退款。"""
     result = mock_order_archive_query(MockOrderQueryRequest(order_id="ARCHIVE-1001"))
 
     assert result["found"] is True
@@ -43,6 +46,7 @@ def test_archive_order_query_returns_refundable_history_order() -> None:
 
 
 def test_product_purchase_persists_queryable_order() -> None:
+    """验证商品购买落库后可通过订单查询接口取回完整信息。"""
     with _test_session() as db:
         purchase = mock_product_purchase(
             MockProductPurchaseRequest(user_id="user_demo", product_id="A1", quantity=2),
@@ -62,6 +66,7 @@ def test_product_purchase_persists_queryable_order() -> None:
 
 
 def test_product_purchase_uses_name_catalog_price_for_a3() -> None:
+    """验证小写商品编号被归一化，并按名称目录价格计算金额。"""
     with _test_session() as db:
         purchase = mock_product_purchase(
             MockProductPurchaseRequest(user_id="user_demo", product_id="a3", quantity=1),
@@ -81,6 +86,7 @@ def test_product_purchase_uses_name_catalog_price_for_a3() -> None:
 
 
 def test_product_purchase_returns_miss_for_unknown_product() -> None:
+    """验证购买未知商品时返回 product_not_found 且不生成订单号。"""
     with _test_session() as db:
         purchase = mock_product_purchase(
             MockProductPurchaseRequest(user_id="user_demo", product_id="UNKNOWN", quantity=1),
@@ -93,6 +99,7 @@ def test_product_purchase_returns_miss_for_unknown_product() -> None:
 
 
 def test_order_add_persists_queryable_order() -> None:
+    """验证手工新增订单可被订单查询接口按号取回。"""
     with _test_session() as db:
         added = mock_order_add(
             MockOrderAddRequest(user_id="user_demo", product_id="A3", quantity=1, status="created"),
@@ -109,6 +116,7 @@ def test_order_add_persists_queryable_order() -> None:
 
 
 def test_product_price_query_returns_price_by_product_name() -> None:
+    """验证按商品名查询返回目录价格与来源。"""
     result = mock_product_price_query(MockProductPriceQueryRequest(product_name="iPhone 15"))
 
     assert result["found"] is True
@@ -118,6 +126,7 @@ def test_product_price_query_returns_price_by_product_name() -> None:
 
 
 def test_product_price_query_accepts_display_name_alias() -> None:
+    """验证展示名别名也能解析到对应商品编号与价格。"""
     result = mock_product_price_query(MockProductPriceQueryRequest(product_name="A3 高阶商品"))
 
     assert result["found"] is True
@@ -126,6 +135,7 @@ def test_product_price_query_accepts_display_name_alias() -> None:
 
 
 def test_product_price_query_is_seeded_for_price_compare_skill() -> None:
+    """验证价格查询工具已配置给比价与图谱演示技能。"""
     price_tool = next(tool for tool in DEMO_TOOLS if tool["name"] == "product.price_query")
 
     assert "skill_price_compare_001" in price_tool["allowed_skills_json"]
@@ -134,6 +144,7 @@ def test_product_price_query_is_seeded_for_price_compare_skill() -> None:
 
 
 def test_member_benefit_reconcile_returns_missing_benefits() -> None:
+    """验证会员权益对账返回缺失权益与自动补发建议。"""
     result = mock_member_benefit_reconcile(
         MockBenefitReconcileRequest(
             user_id="user_demo",
@@ -151,6 +162,7 @@ def test_member_benefit_reconcile_returns_missing_benefits() -> None:
 
 
 def test_fulfillment_reroute_plan_returns_candidate_plans() -> None:
+    """验证履约改派返回可改派标记、推荐方案与候选列表。"""
     result = mock_fulfillment_reroute_plan(
         MockFulfillmentReroutePlanRequest(
             order_id="A12345",
@@ -169,6 +181,7 @@ def test_fulfillment_reroute_plan_returns_candidate_plans() -> None:
 
 
 def test_discovery_mock_apis_are_not_seeded_as_configured_tools() -> None:
+    """验证仅用于发现能力演示的接口没有被登记为已配置工具。"""
     tool_names = {tool["name"] for tool in DEMO_TOOLS}
 
     assert "member.benefit_reconcile" not in tool_names
@@ -176,6 +189,7 @@ def test_discovery_mock_apis_are_not_seeded_as_configured_tools() -> None:
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 会话，供需要落库的用例复用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

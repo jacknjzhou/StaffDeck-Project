@@ -173,6 +173,7 @@ const TOOL_STATUS_BADGE_VARIANTS: Record<ToolStatusBadgeVariant, string> = {
 export const TOOL_STATUS_BADGE_BASE_CLASS =
   'inline-flex shrink-0 items-center rounded-full border px-[7px] py-px text-[11px] font-semibold leading-[1.45]';
 
+/** 根据工具状态返回对应的徽标配色类名。 */
 export function toolStatusBadgeClass(status: ToolStatusBadgeVariant): string {
   return cn(TOOL_STATUS_BADGE_BASE_CLASS, TOOL_STATUS_BADGE_VARIANTS[status]);
 }
@@ -317,6 +318,7 @@ const FLOW_ZOOM_BUTTON_BASE =
 export const FLOW_ZOOM_STEP_BUTTON_CLASS = cn(FLOW_ZOOM_BUTTON_BASE, 'size-7 min-w-[34px] px-0');
 export const FLOW_ZOOM_PRESET_BUTTON_CLASS = cn(FLOW_ZOOM_BUTTON_BASE, 'h-7 min-w-[34px] px-2.5');
 
+/** 返回流程图缩放预设按钮的类名，选中态附加强调色样式。 */
 export function flowZoomPresetButtonClass(active: boolean): string {
   return cn(
     FLOW_ZOOM_PRESET_BUTTON_CLASS,
@@ -437,10 +439,12 @@ export const SOURCE_INPUT_CLASS =
   'box-border h-auto min-h-0 min-w-0 w-full max-w-full rounded-[6px] border border-transparent bg-transparent px-[6px] py-[2px] text-[13px] leading-[1.65] text-[#18181a] shadow-none transition-colors field-sizing-fixed hover:border-[#eceef1] hover:bg-white focus-visible:border-[#eceef1] focus-visible:bg-white focus-visible:ring-0';
 
 // Helper functions
+/** 返回对话行的布局类名，用户消息右对齐、助手消息左对齐。 */
 export function chatRowClass(role: 'user' | 'assistant'): string {
   return cn(CHAT_ROW_BASE_CLASS, role === 'user' ? CHAT_ROW_USER_CLASS : CHAT_ROW_ASSISTANT_CLASS);
 }
 
+/** 组合对话气泡样式：区分角色、编辑态与是否带附件。 */
 export function chatBubbleClass({
   role,
   editing = false,
@@ -465,10 +469,14 @@ export function chatBubbleClass({
   return cn(CHAT_BUBBLE_BASE_CLASS, CHAT_BUBBLE_ASSISTANT_CLASS, editing && 'ring-1 ring-[#04756f]/30');
 }
 
+/** 返回上传项样式类名，状态为 error 时附加错误配色。 */
 export function uploadItemClass(status: 'uploading' | 'ready' | 'error'): string {
   return cn(UPLOAD_ITEM_BASE_CLASS, status === 'error' && UPLOAD_ITEM_ERROR_CLASS);
 }
 
+/**
+ * 返回蒸馏来源卡片的样式类名：选中、变更高亮、更新中与脏数据状态可叠加。
+ */
 export function distillSourceSectionClass(
   path: string,
   selectedPaths: string[],
@@ -485,6 +493,9 @@ export function distillSourceSectionClass(
   );
 }
 
+/**
+ * 返回蒸馏流程节点的样式类名：根节点标记与选中、高亮、更新中、脏数据状态可叠加。
+ */
 export function distillFlowNodeClass(
   path: string,
   isRoot: boolean,
@@ -503,6 +514,7 @@ export function distillFlowNodeClass(
   );
 }
 
+/** 返回流程连线标签的类名，按 branch、parallel、return 语气区分样式。 */
 export function flowEdgeLabelClass(tone?: string): string {
   return cn(
     FLOW_EDGE_LABEL_BASE_CLASS,
@@ -512,6 +524,9 @@ export function flowEdgeLabelClass(tone?: string): string {
   );
 }
 
+/**
+ * 返回动作标签的样式类名：工具名决定状态配色，variant 决定新增/移除等动效。
+ */
 export function actionChipClass({
   toolName,
   status,

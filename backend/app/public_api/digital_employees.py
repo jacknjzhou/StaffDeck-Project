@@ -18,7 +18,11 @@ router = APIRouter(prefix="/digital-employees", tags=["digital-employees"])
 
 
 def distribution_agents(db: Session, principal: PublicPrincipal) -> list[AgentProfile]:
-    """The gallery set, resolved back to ORM rows for payload building."""
+    """取对外发布的数字员工集合，还原成供 payload 构建使用的 ORM 行。
+
+    先按 principal 求出可见 gallery 的 id 集合，集合为空时直接返回空列表，
+    再按租户过滤出 status 为 active 的记录。
+    """
     allowed = {row.id for row in visible_gallery_agents(db, principal)}
     if not allowed:
         return []
@@ -42,6 +46,11 @@ def list_digital_employees(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> Response | dict:
+    """返回数字员工清单，并用 ETag 支持条件请求与增量拉取。
+
+    ETag 只由业务核心字段计算、刻意不含 fetchedAt，否则每次请求都会失效；
+    If-None-Match 命中时返回 304，未命中则回写 ETag 并附上本次 fetchedAt。
+    """
     core = build_employee_list(principal, _distribution_agents(db, principal), db)
     # The ETag must not include fetchedAt: a per-request timestamp would make
     # every conditional request miss and defeat incremental fetching entirely.
@@ -60,11 +69,10 @@ def export_employee_skill(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> RawResponse:
-    """Download one general skill as a SKILL.md package for deepchat's skill dir.
+    """把指定数字员工的一项通用技能打包成 SKILL.md 压缩包供 deepchat 技能目录使用。
 
-    The slug is a query parameter rather than a path segment so the route keeps
-    the spec's `/{id}:export-skill` shape while still addressing one of the
-    employee's many skills.
+    slug 走查询参数而非路径段，以便在保持 `/{id}:export-skill` 路由形状的同时
+    定位该员工众多技能中的一项；成功下载后追加一条 API 审计日志。
     """
     agent = next(
         (row for row in _distribution_agents(db, principal) if row.id == agent_id),
@@ -118,6 +126,10 @@ def get_digital_employee(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> Response | dict:
+    """按 id 返回单个数字员工详情，同样用 ETag 支持条件请求。
+
+    目标不在可见发布集合内时抛 404 AGENT_NOT_FOUND；版本未变化时返回 304。
+    """
     agent = next(
         (row for row in _distribution_agents(db, principal) if row.id == agent_id),
         None,
@@ -135,4 +147,5 @@ def get_digital_employee(
 
 
 def _now_iso() -> str:
+    """返回带 Z 后缀的 UTC 当前时刻 ISO 字符串。"""
     return utc_now().isoformat() + "Z"

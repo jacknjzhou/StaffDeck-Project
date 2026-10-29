@@ -33,6 +33,7 @@ from app.observability.event_log import EventLog
 
 
 def test_task_frame_finished_keeps_switched_sop_name_while_awaiting_user() -> None:
+    """验证 SOP 任务帧在等待用户补充时仍保留切换后的流程名称与运行状态。"""
     line = _harness_event_trace_line(
         AgentEvent(
             tenant_id="tenant_demo",
@@ -60,6 +61,7 @@ def test_task_frame_finished_keeps_switched_sop_name_while_awaiting_user() -> No
 
 
 def test_event_log_binds_all_execution_events_to_current_turn() -> None:
+    """验证 EventLog 绑定轮次后，所有执行事件都会补全 turn_id 等轮次字段。"""
     with _test_db() as db:
         events = EventLog(db)
         events.bind_turn("msg_user", "client_turn")
@@ -80,6 +82,7 @@ def test_event_log_binds_all_execution_events_to_current_turn() -> None:
 
 
 def test_session_spans_endpoint_returns_internal_spans_without_relaying_them() -> None:
+    """验证会话 spans 接口只返回内部链路数据，不把 span 事件重新转发给客户端。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -141,6 +144,7 @@ def test_session_spans_endpoint_returns_internal_spans_without_relaying_them() -
 
 
 def test_turn_trace_uses_router_skill_hint_when_events_have_turn_id() -> None:
+    """验证事件带 turn_id 时，路由决策会带上目标 SOP 名称并生成推进轨迹。"""
     started_at = datetime(2026, 6, 5, 6, 35, 4)
     messages = [
         Message(
@@ -210,6 +214,7 @@ def test_turn_trace_uses_router_skill_hint_when_events_have_turn_id() -> None:
 
 
 def test_turn_trace_recovers_persisted_skill_state_for_current_turn() -> None:
+    """验证刷新后能依据持久化的 skill_state 恢复当前轮次的 SOP 选择与等待状态。"""
     started_at = datetime(2026, 7, 14, 9, 57, 4)
     messages = [
         Message(
@@ -269,6 +274,7 @@ def test_turn_trace_recovers_persisted_skill_state_for_current_turn() -> None:
 
 
 def test_turn_trace_merges_skill_started_with_matching_state_snapshot() -> None:
+    """验证 skill_started 与同轮次的 skill_state 快照会合并为单条 SOP 轨迹。"""
     started_at = datetime(2026, 7, 15, 13, 44, 11)
     messages = [
         Message(
@@ -340,6 +346,7 @@ def test_turn_trace_merges_skill_started_with_matching_state_snapshot() -> None:
 
 
 def test_turn_trace_uses_live_stream_ids_for_persisted_status_events() -> None:
+    """验证持久化的 stream_status 事件沿用实时流的轨迹 ID，保证刷新前后一致。"""
     started_at = datetime(2026, 7, 15, 14, 10, 0)
     messages = [
         Message(
@@ -406,6 +413,7 @@ def test_turn_trace_uses_live_stream_ids_for_persisted_status_events() -> None:
 
 
 def test_turn_trace_merges_knowledge_lifecycle_events_for_same_query() -> None:
+    """验证同一查询的知识检索开始、完成与结果事件会合并为一条知识轨迹。"""
     started_at = datetime(2026, 7, 15, 14, 33, 9)
     query = "招待客户的餐费是否计入差旅费报销范围"
     messages = [
@@ -467,6 +475,7 @@ def test_turn_trace_merges_knowledge_lifecycle_events_for_same_query() -> None:
 
 
 def test_turn_trace_merges_created_and_relayed_reflection_decisions() -> None:
+    """验证反思决策的创建事件与转发事件会合并，只保留一条反思通过轨迹。"""
     started_at = datetime(2026, 7, 15, 14, 37, 5)
     messages = [
         Message(
@@ -510,6 +519,7 @@ def test_turn_trace_merges_created_and_relayed_reflection_decisions() -> None:
 
 
 def test_turn_trace_ignores_noop_skill_step_change() -> None:
+    """验证前后步骤相同的空转 skill_step_changed 不会产生 SOP 轨迹。"""
     started_at = datetime(2026, 7, 15, 12, 40, 14)
     messages = [
         Message(
@@ -555,6 +565,7 @@ def test_turn_trace_ignores_noop_skill_step_change() -> None:
 
 
 def test_message_read_hydrates_knowledge_citation_content_from_concept() -> None:
+    """验证读取消息时会用知识概念正文补全引用的 content 与 excerpt。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -607,6 +618,7 @@ def test_message_read_hydrates_knowledge_citation_content_from_concept() -> None
 
 
 def test_message_read_compacts_historical_knowledge_citation_labels() -> None:
+    """验证历史消息的引用序号会重新压缩为连续编号，并同步正文与元数据。"""
     row = Message(
         id="msg_assistant_historical_citations",
         tenant_id="tenant_demo",
@@ -628,6 +640,7 @@ def test_message_read_compacts_historical_knowledge_citation_labels() -> None:
 
 
 def test_turn_trace_does_not_reconstruct_events_from_message_metadata() -> None:
+    """验证轨迹只来源于事件，不会根据消息元数据凭空重建执行步骤。"""
     started_at = datetime(2026, 6, 20, 10, 0, 0)
     messages = [
         Message(
@@ -662,6 +675,7 @@ def test_turn_trace_does_not_reconstruct_events_from_message_metadata() -> None:
 
 
 def test_turn_trace_keeps_running_routing_status_for_refresh() -> None:
+    """验证没有终态事件时，刷新后仍保留运行中的路由状态且轮次未结束。"""
     started_at = datetime(2026, 7, 4, 9, 0, 0)
     messages = [
         Message(
@@ -703,6 +717,7 @@ def test_turn_trace_keeps_running_routing_status_for_refresh() -> None:
 
 
 def test_turn_trace_marks_model_and_intermediate_errors_failed() -> None:
+    """验证模型错误与中间步骤错误都会标记为失败，并以最后一条错误事件收尾。"""
     started_at = datetime(2026, 7, 9, 12, 0, 0)
     messages = [
         Message(
@@ -784,6 +799,7 @@ def test_turn_trace_marks_model_and_intermediate_errors_failed() -> None:
 
 
 def test_turn_trace_cancel_event_closes_running_status_for_refresh() -> None:
+    """验证取消事件会关闭运行中的轨迹，并补写用户已停止生成的记录。"""
     started_at = datetime(2026, 7, 4, 9, 5, 0)
     messages = [
         Message(
@@ -832,6 +848,7 @@ def test_turn_trace_cancel_event_closes_running_status_for_refresh() -> None:
 
 
 def test_scheduled_task_draft_trace_restores_config_stages_for_refresh() -> None:
+    """验证刷新后能依据事件与草案恢复定时任务的识别、解析与草案三个阶段。"""
     started_at = datetime(2026, 7, 7, 16, 50, 0)
     draft = {
         "should_create": True,
@@ -926,6 +943,7 @@ def test_scheduled_task_draft_trace_restores_config_stages_for_refresh() -> None
 
 
 def test_scheduled_task_schedule_formatter_preserves_fallbacks() -> None:
+    """验证定时计划格式化在星期非法或类型未知时回退到默认文案。"""
     assert (
         _format_scheduled_task_schedule("weekly", {"time": "18:30", "weekdays": ["1", "x", 6, 7, -1]})
         == "每周 周二、周日 18:30"
@@ -935,6 +953,7 @@ def test_scheduled_task_schedule_formatter_preserves_fallbacks() -> None:
 
 
 def test_cancel_endpoint_persists_terminal_trace_for_client_turn_id() -> None:
+    """验证取消接口按 client_turn_id 落库终态事件与提示消息，且重复取消幂等。"""
     db = _test_db()
     started_at = datetime(2026, 7, 4, 9, 5, 0)
     session_row = ChatSession(id="session_cancel_endpoint", tenant_id="tenant_demo", user_id="user_demo")
@@ -1016,6 +1035,7 @@ def test_cancel_endpoint_persists_terminal_trace_for_client_turn_id() -> None:
 
 
 def test_cancel_endpoint_persists_cancel_even_before_user_event_is_visible() -> None:
+    """验证用户事件尚未可见时取消仍会落库，并能被取消状态查询命中。"""
     db = _test_db()
     session_row = ChatSession(id="session_cancel_before_event", tenant_id="tenant_demo", user_id="user_demo")
     db.add(session_row)
@@ -1049,6 +1069,7 @@ def test_cancel_endpoint_persists_cancel_even_before_user_event_is_visible() -> 
 
 
 def test_reused_message_id_does_not_cancel_a_new_client_turn() -> None:
+    """验证复用的消息 ID 不会误取消同一 ID 下的新客户端轮次。"""
     db = _test_db()
     session_row = ChatSession(id="session_reused_id", tenant_id="tenant_demo", user_id="user_demo")
     db.add(session_row)
@@ -1095,6 +1116,7 @@ def test_reused_message_id_does_not_cancel_a_new_client_turn() -> None:
 
 
 def test_process_local_cancel_markers_are_bounded(monkeypatch) -> None:
+    """验证进程内取消标记受上限约束，超出后只保留最近写入的记录。"""
     monkeypatch.setattr(cancellation_module, "_MAX_CANCEL_MARKERS", 2)
     session_id = "session_marker_bound"
     try:
@@ -1111,6 +1133,7 @@ def test_process_local_cancel_markers_are_bounded(monkeypatch) -> None:
 
 
 def test_stream_interrupted_persists_terminal_trace_and_message() -> None:
+    """验证流中断会落库中断事件与中断状态消息，并使轨迹以失败态收尾。"""
     db = _test_db()
     started_at = datetime(2026, 7, 4, 9, 7, 0)
     session_row = ChatSession(id="session_interrupted", tenant_id="tenant_demo", user_id="user_demo")
@@ -1189,6 +1212,7 @@ def test_stream_interrupted_persists_terminal_trace_and_message() -> None:
 
 
 def test_relay_event_payload_maps_persisted_router_and_status_events() -> None:
+    """验证持久化事件转发时会映射为前端使用的 status 与 router_decision 载荷。"""
     status_event = AgentEvent(
         id="evt_status",
         tenant_id="tenant_demo",
@@ -1217,6 +1241,7 @@ def test_relay_event_payload_maps_persisted_router_and_status_events() -> None:
 
 
 def test_turn_trace_without_terminal_event_stays_open_for_refresh_recovery() -> None:
+    """验证缺少终态事件时轨迹保持未完成，供刷新后继续恢复运行状态。"""
     started_at = datetime(2026, 7, 4, 9, 6, 0)
     messages = [
         Message(
@@ -1258,6 +1283,7 @@ def test_turn_trace_without_terminal_event_stays_open_for_refresh_recovery() -> 
 
 
 def test_turn_trace_ignores_trace_events_without_turn_id() -> None:
+    """验证未携带 turn_id 的通用技能、工具与运行事件不会混入该轮轨迹。"""
     started_at = datetime(2026, 7, 4, 9, 8, 0)
     messages = [
         Message(
@@ -1376,6 +1402,7 @@ def test_turn_trace_ignores_trace_events_without_turn_id() -> None:
 
 
 def test_turn_trace_restores_stream_tool_and_skill_events_with_turn_id() -> None:
+    """验证带 turn_id 的流式工具、通用技能与循环事件能恢复为对应轨迹。"""
     started_at = datetime(2026, 7, 4, 9, 9, 0)
     messages = [
         Message(
@@ -1464,6 +1491,7 @@ def test_turn_trace_restores_stream_tool_and_skill_events_with_turn_id() -> None
 
 
 def test_turn_trace_uses_message_id_for_repeated_user_text() -> None:
+    """验证重复的用户文本按消息 ID 归属轮次，不会串到上一轮轨迹。"""
     started_at = datetime(2026, 7, 3, 10, 0, 0)
     messages = [
         Message(
@@ -1550,6 +1578,7 @@ def test_turn_trace_uses_message_id_for_repeated_user_text() -> None:
 
 
 def test_turn_trace_keeps_late_trace_events_after_assistant_event() -> None:
+    """验证助手消息之后晚到的路由与步骤事件仍归入本轮轨迹。"""
     started_at = datetime(2026, 7, 6, 10, 0, 0)
     messages = [
         Message(
@@ -1631,6 +1660,7 @@ def test_turn_trace_keeps_late_trace_events_after_assistant_event() -> None:
 
 
 def test_turn_trace_does_not_merge_interleaved_repeated_turns() -> None:
+    """验证交错到达的两轮相同文本按各自消息 ID 分离，不互相混入。"""
     started_at = datetime(2026, 7, 3, 10, 30, 0)
     messages = [
         Message(
@@ -1743,6 +1773,7 @@ def test_turn_trace_does_not_merge_interleaved_repeated_turns() -> None:
 
 
 def test_turn_trace_without_message_id_does_not_bind_user_messages() -> None:
+    """验证事件缺少 message_id 时不会把用户消息绑定到轨迹轮次。"""
     started_at = datetime(2026, 7, 3, 11, 0, 0)
     messages = [
         Message(
@@ -1796,6 +1827,7 @@ def test_turn_trace_without_message_id_does_not_bind_user_messages() -> None:
 
 
 def test_message_turn_ids_from_events_use_ids_not_message_text() -> None:
+    """验证消息到轮次的映射依据 ID 而非文本，无法确定归属的消息不猜测。"""
     started_at = datetime(2026, 7, 3, 12, 0, 0)
     events = [
         AgentEvent(
@@ -1859,6 +1891,7 @@ def test_message_turn_ids_from_events_use_ids_not_message_text() -> None:
 
 
 def test_message_read_uses_metadata_turn_id_when_event_mapping_is_missing() -> None:
+    """验证事件映射缺失时，读取消息会回退使用元数据中的 turn_id。"""
     row = Message(
         id="msg_assistant",
         tenant_id="tenant_demo",
@@ -1873,6 +1906,7 @@ def test_message_read_uses_metadata_turn_id_when_event_mapping_is_missing() -> N
 
 
 def test_turn_trace_restores_harness_task_and_general_skill_execution() -> None:
+    """验证 Harness v2 任务帧、能力调用与通用技能执行能完整恢复为轨迹。"""
     started_at = datetime(2026, 8, 1, 9, 0, 0)
     messages = [
         Message(
@@ -2045,6 +2079,7 @@ def test_turn_trace_restores_harness_task_and_general_skill_execution() -> None:
 
 
 def test_event_trace_lines_humanizes_steps_and_status_for_channel_card() -> None:
+    """验证渠道卡片会把任务帧、SOP 与工具事件转成可读的中文轨迹行。"""
     step_names = {
         "skill_refund": {
             "collect_order_info": "收集订单信息",
@@ -2188,6 +2223,7 @@ def test_event_trace_lines_humanizes_steps_and_status_for_channel_card() -> None
 
 
 def test_event_trace_lines_keeps_raw_tool_names_without_tool_names() -> None:
+    """验证缺少工具与流程名称时，渠道卡片回退展示原始标识与完成原因。"""
     tool_completed = _event_trace_lines(
         _SinkEvent(
             "harness_tool_completed",
@@ -2208,6 +2244,7 @@ def test_event_trace_lines_keeps_raw_tool_names_without_tool_names() -> None:
 
 
 def test_event_trace_lines_keeps_technical_detail_without_step_names() -> None:
+    """验证缺少步骤名称映射时，任务帧轨迹保留原始步骤与技术细节。"""
     started = _event_trace_lines(
         _SinkEvent(
             "task_frame_started",
@@ -2226,6 +2263,7 @@ def test_event_trace_lines_keeps_technical_detail_without_step_names() -> None:
 
 
 def test_resolve_step_label_uses_names_then_fallbacks() -> None:
+    """验证步骤名称解析优先查表，查不到时按内置步骤与原始 ID 回退。"""
     step_names = {
         "skill_refund": {"collect_order_info": "收集订单信息"},
         "skill_exchange": {"collect_order_info": "收集换货订单信息"},
@@ -2242,6 +2280,7 @@ def test_resolve_step_label_uses_names_then_fallbacks() -> None:
 
 
 def _test_db() -> Session:
+    """创建内存 SQLite 会话并初始化全部表结构，供取消与中断相关用例复用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

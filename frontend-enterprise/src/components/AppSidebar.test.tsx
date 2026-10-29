@@ -36,11 +36,16 @@ const team: TeamRead = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+/** 补齐 jsdom 缺失的 ResizeObserver、matchMedia 与指针捕获等 Radix 依赖的浏览器 API。 */
 function stubRadixPointerApis() {
   if (!window.ResizeObserver) {
+    /** 替代 jsdom 缺失的 ResizeObserver 的空实现。 */
     window.ResizeObserver = class {
+      /** 注册观察目标，当前为空实现。 */
       observe() {}
+      /** 取消观察目标，当前为空实现。 */
       unobserve() {}
+      /** 断开全部观察目标，当前为空实现。 */
       disconnect() {}
     } as unknown as typeof ResizeObserver;
   }
@@ -67,6 +72,7 @@ function stubRadixPointerApis() {
   }
 }
 
+/** 在 I18n、Tooltip 与 Sidebar Provider 包裹下渲染带员工/团队作用域的侧边栏。 */
 function renderSidebar(props: {
   selectedAgentId: string;
   onSelectAgent?: (value: string) => void;
@@ -102,6 +108,7 @@ beforeEach(() => {
 });
 
 describe('AppSidebar agent switcher team group', () => {
+  /** 验证团队分组下列出团队项，选中后回传 team:<id> 形式的作用域值。 */
   it('lists teams under a team group and emits the team scope value on select', async () => {
     const user = userEvent.setup();
     const onSelectAgent = vi.fn();
@@ -120,6 +127,7 @@ describe('AppSidebar agent switcher team group', () => {
     expect(onSelectAgent).toHaveBeenCalledWith('team:team-1');
   });
 
+  /** 验证选中团队作用域时，触发器同时展示「当前团队」与团队名称。 */
   it('shows the team name and team caption when a team scope is selected', () => {
     renderSidebar({ selectedAgentId: 'team:team-1' });
 
@@ -128,6 +136,7 @@ describe('AppSidebar agent switcher team group', () => {
     expect(within(trigger).getByText('增长团队')).toBeTruthy();
   });
 
+  /** 验证选中的团队不在已知列表中时，触发器回退为裸「团队」文案。 */
   it('falls back to a bare team label when the selected team is unknown', () => {
     renderSidebar({ selectedAgentId: 'team:missing', scopeTeams: [team] });
 
@@ -161,6 +170,7 @@ describe('AppSidebar chat variant group conversations', () => {
     ],
   };
 
+  /** 渲染 chat 形态侧边栏，包含团队 TL 会话与员工会话。 */
   function renderChatSidebar(scopeTeams: TeamRead[] = [teamWithLeader]) {
     const sessions = [
       {
@@ -206,6 +216,7 @@ describe('AppSidebar chat variant group conversations', () => {
     );
   }
 
+  /** 验证员工会话与团队群聊按不同会话类型渲染。 */
   it('renders employee sessions and team groups as different conversation types', () => {
     renderChatSidebar();
 
@@ -216,6 +227,7 @@ describe('AppSidebar chat variant group conversations', () => {
     expect(employeeRow?.textContent).not.toContain('群聊');
   });
 
+  /** 验证团队成员仍在加载时依旧保留群聊标签。 */
   it('keeps a group label while the team roster is still loading', () => {
     renderChatSidebar([]);
 
@@ -223,6 +235,7 @@ describe('AppSidebar chat variant group conversations', () => {
     expect(screen.getByLabelText('群聊')).toBeTruthy();
   });
 
+  /** 验证悬浮头像时以带样式的提示气泡显示员工姓名。 */
   it('shows the employee name in a styled tooltip on avatar hover', async () => {
     const user = userEvent.setup();
     renderChatSidebar();

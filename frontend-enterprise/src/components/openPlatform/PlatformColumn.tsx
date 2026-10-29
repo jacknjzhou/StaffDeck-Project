@@ -5,35 +5,33 @@ import { cn } from '@/lib/utils';
 import IconChevronDown from '../../assets/icons/chevron-down.svg?react';
 
 export type PlatformColumnProps = {
-  /** Small 14px glyph shown before the title. */
+  /** 标题前展示的 14px 小图标。 */
   icon: ReactNode;
-  /** Column title, e.g. 数字员工广场. */
+  /** 列标题，例如 数字员工广场。 */
   title: ReactNode;
-  /** Count shown on the right of the header. */
+  /** 头部右侧展示的数量。 */
   count: number;
-  /** Unit label rendered after the count, e.g. 员工 / 内容. */
+  /** 数量后面的单位文案，例如 员工 / 内容。 */
   countLabel: string;
-  /** Filter chips rendered under the title. */
+  /** 标题下方展示的筛选标签。 */
   filters?: string[];
-  /** Renders a skeleton-free muted list while data loads. */
+  /** 数据加载期间渲染无骨架的置灰列表。 */
   loading?: boolean;
-  /** Whether the column has no content — shows the empty placeholder. */
+  /** 列内是否没有内容——为真时展示空状态占位。 */
   isEmpty?: boolean;
-  /** Text for the empty placeholder. */
+  /** 空状态占位展示的文案。 */
   emptyText?: string;
-  /** Fired when the "查看全部" button is pressed. */
+  /** 点击「查看全部」按钮时触发。 */
   onViewAll?: () => void;
-  /** The column's cards. */
+  /** 该列要渲染的卡片。 */
   children?: ReactNode;
   className?: string;
 };
 
 /**
- * Shared shell for a single 开放广场 column. It captures the parts that repeat
- * across all five modules (数字员工 / 知识库 / 技能 / SOP / 工具): the icon+title
- * header with a count, the filter chip row, the divider, the card list (or an
- * empty placeholder) and the "查看全部" footer button. Each module only supplies
- * its own cards via `children`.
+ * 开放广场单列的共用外壳：统一图标+标题头部（含数量）、筛选标签行、分隔线、
+ * 卡片列表（或空状态占位）以及「查看全部」底部按钮。各模块只需通过
+ * `children` 提供自己的卡片内容。
  */
 export default function PlatformColumn({
   icon,
@@ -129,6 +127,7 @@ export default function PlatformColumn({
   );
 }
 
+/** 列内骨架屏：渲染 3 个脉冲占位块，用于 loading 为真时的加载态。 */
 function PlatformColumnSkeleton() {
   return (
     <div className="flex w-full flex-col gap-[16px]">

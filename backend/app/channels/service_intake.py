@@ -76,10 +76,12 @@ _INBOUND_LEASE_SECONDS = 15 * 60
 
 
 def _inbound_lease_deadline():
+    """算出入站事件处理租约的到期时刻（当前时间加 _INBOUND_LEASE_SECONDS）。"""
     return utc_now() + timedelta(seconds=_INBOUND_LEASE_SECONDS)
 
 
 def current_processor_run_id() -> str:
+    """返回当前进程的处理代次 id；进程内首次调用生成并缓存，pid 变化时重新生成。"""
     global _processor_run_pid, _processor_run_id
     pid = os.getpid()
     if _processor_run_pid == pid and _processor_run_id:
@@ -144,6 +146,7 @@ def _bind_cooldown_remaining(
 
 
 def _record_bind_failure(tenant_id: str, channel: str, account_scope: str, external_id: str) -> None:
+    """累加一次绑定码校验失败并顺带淘汰过期条目，供冷却判定使用。"""
     now = time.monotonic()
     with _bind_failures_lock:
         key = (tenant_id, channel, account_scope, external_id)
@@ -154,6 +157,7 @@ def _record_bind_failure(tenant_id: str, channel: str, account_scope: str, exter
 
 
 def _reset_bind_failures(tenant_id: str, channel: str, account_scope: str, external_id: str) -> None:
+    """绑定成功后清空该身份键的失败计数，使该账号可立即重新尝试。"""
     with _bind_failures_lock:
         _bind_failures.pop((tenant_id, channel, account_scope, external_id), None)
 
@@ -187,7 +191,7 @@ def _claim_stale_event(db: Session, event_id: str) -> bool:
 
 
 def claim_staged_inbound(event_id: str, *, db_engine=None) -> bool:
-    """Atomically claim one durable received event for this processor generation."""
+    """原子认领一条 received 状态的 durable 入站事件，返回是否由本进程抢到。"""
     use_engine = db_engine or engine
     with Session(use_engine) as db:
         result = db.exec(
@@ -216,7 +220,7 @@ def _finish_owned_inbound(
     error: str | None = None,
     processed: bool = False,
 ) -> bool:
-    """Finish/release an inbound event only while this process still owns its lease."""
+    """仅在本进程仍持有租约时结算入站事件状态，返回是否成功更新。"""
     values = {
         "status": status,
         "error": error,
@@ -241,7 +245,7 @@ def _finish_owned_inbound(
 
 
 def pause_binding_intake(binding_id: str, timeout_seconds: float = 5.0) -> bool:
-    """Fence new durable work and wait for an already-running turn to leave."""
+    """暂停该 binding 的新入站处理，并等待正在执行的轮次退出；超时返回 False。"""
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     with _binding_intake_condition:
         _binding_intake_paused.add(binding_id)
@@ -254,12 +258,14 @@ def pause_binding_intake(binding_id: str, timeout_seconds: float = 5.0) -> bool:
 
 
 def resume_binding_intake(binding_id: str) -> None:
+    """解除该 binding 的入站暂停，并唤醒所有等待中的 pause_binding_intake 调用方。"""
     with _binding_intake_condition:
         _binding_intake_paused.discard(binding_id)
         _binding_intake_condition.notify_all()
 
 
 def _enter_binding_intake(binding_id: str) -> bool:
+    """登记一次入站处理（引用计数加一）；该 binding 处于暂停态时拒绝并返回 False。"""
     with _binding_intake_condition:
         if binding_id in _binding_intake_paused:
             return False
@@ -268,6 +274,7 @@ def _enter_binding_intake(binding_id: str) -> bool:
 
 
 def _leave_binding_intake(binding_id: str) -> None:
+    """结束一次入站处理（引用计数减一）；计数归零时移除条目并唤醒等待者。"""
     with _binding_intake_condition:
         remaining = _binding_intake_active.get(binding_id, 0) - 1
         if remaining > 0:
@@ -278,7 +285,7 @@ def _leave_binding_intake(binding_id: str) -> None:
 
 
 def _release_stale_event_claim(db_engine, event_id: str) -> None:
-    """Release only this process's claim after recovery infrastructure fails."""
+    """恢复流程失败时只释放本进程占用的认领，保留事件原状态等待下次接管。"""
     run_id = current_processor_run_id()
     with Session(db_engine) as db:
         db.exec(
@@ -302,7 +309,7 @@ def _release_stale_event_claim_by_key(
     binding_id: str,
     external_event_id: str,
 ) -> None:
-    """Release the currently surviving row after delete-and-recreate recovery fails."""
+    """删旧行重建恢复失败时，按 binding 与外部事件 id 释放本进程仍持有的认领。"""
     run_id = current_processor_run_id()
     with Session(db_engine) as db:
         db.exec(
@@ -323,6 +330,7 @@ def _release_stale_event_claim_by_key(
 
 
 def _session_lock(session_id: str) -> threading.Lock:
+    """取到（必要时新建）某个会话的进程级串行锁，保证同一会话的轮次按序执行。"""
     with _session_locks_guard:
         lock = _session_locks.get(session_id)
         if lock is None:
@@ -337,6 +345,7 @@ def _user_message_with_client_turn_exists(
     client_turn_id: str,
     tenant_id: str,
 ) -> bool:
+    """查该会话最近 _DEDUP_LOOKBACK 条用户消息是否已带此 client_turn_id，用于崩溃恢复去重。"""
     rows = db.exec(
         select(Message)
         .where(
@@ -433,6 +442,7 @@ def _turn_reply_exists(db: Session, binding: ChannelBinding, user_message: Messa
 
 
 def _stage_error_notice(db: Session, binding: ChannelBinding, chat_session: ChatSession) -> None:
+    """登记一条通用错误提示投递；目标地址不完整时静默跳过，不抛异常。"""
     target = dict(chat_session.channel_target_json or {})
     if not _valid_notice_target(binding.channel, target):
         return
@@ -459,6 +469,7 @@ def _stage_interrupted_notice(
     target: dict,
     event_id: str,
 ) -> None:
+    """登记一条“上一条消息处理中断”提示；按 idempotency_key 去重，同一事件只登记一次。"""
     idempotency_key = f"channel-interrupted:{binding.id}:{event_id}"
     existing = db.exec(
         select(ChannelDelivery).where(ChannelDelivery.idempotency_key == idempotency_key)
@@ -529,6 +540,7 @@ def _build_name_resolver(binding: ChannelBinding):
         return None
 
     def _resolve(open_id: str) -> str | None:
+        """按 open_id 查渠道用户姓名；失败或空结果写入负缓存，TTL 内不再请求。"""
         now = time.time()
         with _negative_name_cache_lock:
             expiry = _negative_name_cache.get(open_id)
@@ -557,6 +569,7 @@ def _build_name_resolver(binding: ChannelBinding):
 
 
 def _valid_notice_target(channel: str, target: dict) -> bool:
+    """判断 target_json 是否带齐该渠道发通知所需的寻址字段（飞书、微信客服与企微各不相同）。"""
     if channel == "feishu":
         return bool(target.get("message_id") or target.get("receive_id"))
     if channel == "wechat_kf":
@@ -603,6 +616,7 @@ def _stage_received_reaction(
 
 
 def _message_text(binding: ChannelBinding, inbound: ChannelInbound) -> str:
+    """拼出发给数字员工的文本：群聊加发送者前缀，纯附件消息补一句默认指令。"""
     text = inbound.text.strip()
     if not text and inbound.attachments:
         text = "请读取并用一句话概括。"
@@ -679,6 +693,7 @@ def _claim_bind_code(
     submitted_code: str,
     now,
 ) -> bool:
+    """原子占用绑定码（写入 used_at），返回是否抢占成功；并发下同一码只有一方成功。"""
     claim = db.exec(
         update(ChannelBindCode)
         .where(
@@ -699,6 +714,11 @@ def _bind_external_identity(
     inbound: ChannelInbound,
     code: str,
 ) -> str:
+    """用 /绑定 <码> 把当前渠道账号指向码主 StaffDeck 账号，并迁移其历史会话与记忆。
+
+    连续错码达上限后进入冷却，期间即使码正确也拒绝；码主已有其他 web 账号时要求先解绑。
+    返回给用户的中文提示文案。
+    """
     code = (code or "").strip()
     if not code:
         return "用法：/绑定 <6位绑定码>。绑定码请在 StaffDeck 网页端生成。"
@@ -768,6 +788,7 @@ def _unbind_external_identity(
     binding: ChannelBinding,
     inbound: ChannelInbound,
 ) -> str:
+    """用 /解绑 解除当前渠道账号与 StaffDeck 账号的绑定，返回提示文案（未绑定则直接告知）。"""
     scope = external_account_scope(db, binding)
     current = unbind_external_identity(
         db, binding.tenant_id, binding.channel, inbound.from_user_id, scope
@@ -819,7 +840,7 @@ def _normalize_compat(binding: ChannelBinding, raw: dict) -> ChannelInbound | No
 
 
 def _feishu_reply_message_ids(inbound: ChannelInbound) -> list[str]:
-    """Return direct-parent and topic-root ids for reliable handoff matching."""
+    """取飞书消息的直接父消息 id 与话题根 id，用于可靠匹配人工转接通知的回复。"""
     ids: list[str] = []
     parent_id = str(inbound.parent_id or "").strip()
     if parent_id:
@@ -1580,6 +1601,7 @@ def process_inbound(
                 trace_streamer.start()
             try:
                 def persist_span(event_type: str, payload: dict[str, object]) -> None:
+                    """把 span 事件写入 AgentEvent 表，并默认补上 client_turn_id 便于回溯。"""
                     event_payload = dict(payload)
                     event_payload.setdefault("client_turn_id", inbound.event_id)
                     db.add(
@@ -1598,6 +1620,7 @@ def process_inbound(
                         original_event_sink = event_sink
 
                         def event_sink(event_type: str, payload: dict[str, object]) -> None:
+                            """把事件先推给流式回复 sink，再转给原有的 trace 事件回调。"""
                             stream_sink.on_event(event_type, payload)
                             if original_event_sink:
                                 original_event_sink(event_type, payload)
@@ -1705,7 +1728,7 @@ def process_inbound(
 
 
 def process_staged_inbound(event_pk: str, *, db_engine=None) -> bool:
-    """Claim and process a durable inbox row without re-registering the event."""
+    """认领并处理一条 durable 收件箱事件（不重复登记事件行），返回是否真正执行了对话轮。"""
     use_engine = db_engine or engine
     with Session(use_engine) as db:
         staged = db.get(ChannelInboundEvent, event_pk)
@@ -1740,6 +1763,11 @@ def process_staged_inbound(event_pk: str, *, db_engine=None) -> bool:
 
 
 def _process_claimed_staged_inbound(event_pk: str, *, db_engine=None) -> bool:
+    """把已认领的 durable 事件解码为入站消息，交给 process_inbound 执行。
+
+    解码校验失败时直接标 failed 并返回 False；执行抛异常时按消息落库进度回落为
+    received（可重试）、done 或 failed，避免重复触发工具副作用。
+    """
     use_engine = db_engine or engine
     with Session(use_engine) as db:
         event = db.get(ChannelInboundEvent, event_pk)
@@ -1803,6 +1831,7 @@ def _process_claimed_staged_inbound(event_pk: str, *, db_engine=None) -> bool:
 
 
 def wake_staged_inbound_worker() -> None:
+    """唤醒 durable 入站轮询线程，让新入队事件立即被处理而不必等下次轮询。"""
     _staged_inbound_wake.set()
 
 
@@ -1812,6 +1841,10 @@ def run_staged_inbound_daemon(
     poll_seconds: float = 1.0,
     db_engine=None,
 ) -> None:
+    """轮询 received 状态的 durable 入站事件并逐个处理，直到 once 或收到停止信号。
+
+    单轮异常只记日志不退出；每轮结束后等待唤醒信号或 poll_seconds 超时。
+    """
     use_engine = db_engine or engine
     while True:
         try:
@@ -1838,6 +1871,7 @@ def run_staged_inbound_daemon(
 
 
 def start_staged_inbound_daemon(*, db_engine=None) -> None:
+    """启动 durable 入站后台守护线程；已有存活线程时不重复启动。"""
     global _staged_inbound_thread
     if _staged_inbound_thread and _staged_inbound_thread.is_alive():
         return
@@ -1853,6 +1887,7 @@ def start_staged_inbound_daemon(*, db_engine=None) -> None:
 
 
 def stop_staged_inbound_daemon(timeout_seconds: float = 5.0) -> bool:
+    """通知守护线程退出并最多等待 timeout_seconds，返回线程是否已真正停止。"""
     global _staged_inbound_thread
     _staged_inbound_stop.set()
     _staged_inbound_wake.set()
@@ -1869,6 +1904,11 @@ def _decode_and_validate_staged_event(
     event: ChannelInboundEvent,
     binding: ChannelBinding,
 ) -> ChannelInbound:
+    """把 durable 事件的原始帧解码为 ChannelInbound，并校验账号作用域未发生漂移。
+
+    事件的租户、渠道或账号/身份作用域与当前 binding 不一致时抛 ValueError，防止 replay
+    到错误账号；payload 结构不支持时抛 unsupported_envelope_channel。
+    """
     payload = event.payload_json or {}
     account = payload.get("account") if isinstance(payload, dict) else None
     if event.tenant_id != binding.tenant_id or event.channel != binding.channel:
@@ -1936,6 +1976,10 @@ def _decode_and_validate_staged_event(
 
 
 def _recover_stale_durable_event(event_pk: str, *, db_engine=None) -> bool:
+    """接管卡在 processing 的 durable 事件：已完成则收尾，未完成则回到队列重跑。
+
+    返回 True 表示事件已重新入队且本轮处理成功；租约没抢到或当前不可恢复时返回 False。
+    """
     use_engine = db_engine or engine
     with Session(use_engine) as db:
         event = db.get(ChannelInboundEvent, event_pk)

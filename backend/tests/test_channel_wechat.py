@@ -25,6 +25,7 @@ BASE_URL = "https://ilinkai.weixin.qq.com"
 
 
 def _test_engine():
+    """创建内存 SQLite 引擎并建表，供轮询相关用例隔离使用。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -35,10 +36,12 @@ def _test_engine():
 
 
 def _client(handler) -> WeChatClient:
+    """用给定请求处理器构造指向测试域名的微信客户端。"""
     return WeChatClient(BASE_URL, "bot_token_x", transport=httpx.MockTransport(handler))
 
 
 def test_decrypt_wechat_media_aes_ecb_pkcs7() -> None:
+    """验证 AES-ECB/PKCS7 媒体解密能还原明文。"""
     key = b"0123456789abcdef"
     aes_key = base64.b64encode(key.hex().encode("ascii")).decode("ascii")
     plaintext = b"\xff\xd8\xffjpeg-data\xff\xd9"
@@ -48,6 +51,7 @@ def test_decrypt_wechat_media_aes_ecb_pkcs7() -> None:
 
 
 def _text_message(**overrides) -> dict:
+    """构造一条标准单聊文本消息，可按需覆盖任意字段。"""
     msg = {
         "seq": 429,
         "message_id": 9812451782375,
@@ -65,6 +69,7 @@ def _text_message(**overrides) -> dict:
 
 
 def test_random_wechat_uin_format() -> None:
+    """验证随机 uin 是 base64 编码的十进制字符串，且取值在 32 位范围内。"""
     first, second = random_wechat_uin(), random_wechat_uin()
     assert first != second
     decoded = base64.b64decode(first).decode("utf-8")
@@ -73,12 +78,14 @@ def test_random_wechat_uin_format() -> None:
 
 
 def test_split_text_short() -> None:
+    """验证短文本不被切分，空文本返回空列表。"""
     assert split_wechat_text("") == []
     assert split_wechat_text("短文本") == ["短文本"]
     assert split_wechat_text("x" * 2000) == ["x" * 2000]
 
 
 def test_split_text_prefers_paragraph_break() -> None:
+    """验证长文本优先在空行处切分。"""
     head = "a" * 1500
     tail = "b" * 1200
     text = head + "\n\n" + tail
@@ -87,6 +94,7 @@ def test_split_text_prefers_paragraph_break() -> None:
 
 
 def test_split_text_falls_back_to_newline_then_space() -> None:
+    """验证无空行时依次退化为按换行、空格切分。"""
     head = "a" * 1500
     tail = "b" * 900
     chunks = split_wechat_text(head + "\n" + tail)
@@ -99,6 +107,7 @@ def test_split_text_falls_back_to_newline_then_space() -> None:
 
 
 def test_split_text_hard_cut_without_boundaries() -> None:
+    """验证没有可切分边界时按上限硬切并保持内容完整。"""
     text = "x" * 4500
     chunks = split_wechat_text(text)
     assert [len(chunk) for chunk in chunks] == [2000, 2000, 500]
@@ -106,9 +115,11 @@ def test_split_text_hard_cut_without_boundaries() -> None:
 
 
 def test_get_updates_request_and_parse() -> None:
+    """验证 getupdates 的请求头、请求体、响应解析以及消息归一化结果。"""
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录请求细节并返回一条新消息与下一页游标。"""
         captured["url"] = str(request.url)
         captured["authorization"] = request.headers.get("Authorization")
         captured["auth_type"] = request.headers.get("AuthorizationType")
@@ -145,6 +156,7 @@ def test_get_updates_request_and_parse() -> None:
 
 
 def test_normalize_image_and_file_items() -> None:
+    """验证图片与文件条目被归一化为带下载参数的附件。"""
     image = normalize_wechat_message(
         _text_message(
             item_list=[{"type": 2, "image_item": {"media_id": "image-1"}}],
@@ -179,6 +191,7 @@ def test_normalize_image_and_file_items() -> None:
 
 
 def test_normalize_text_message_does_not_emit_attachment_warning(caplog) -> None:
+    """验证纯文本消息不会产生附件诊断告警日志。"""
     with caplog.at_level(logging.WARNING, logger="app.channels.adapters.wechat"):
         assert normalize_wechat_message(_text_message()) is not None
 
@@ -186,6 +199,7 @@ def test_normalize_text_message_does_not_emit_attachment_warning(caplog) -> None
 
 
 def test_normalize_actual_image_media_shape() -> None:
+    """验证真实图片媒体结构被解析为图片附件及预期下载参数。"""
     inbound = normalize_wechat_message(
         _text_message(
             item_list=[
@@ -214,9 +228,11 @@ def test_normalize_actual_image_media_shape() -> None:
 
 
 def test_download_media_request() -> None:
+    """验证下载媒体请求的地址与请求体参数。"""
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录下载请求并返回图片字节。"""
         captured["url"] = str(request.url)
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, content=b"image-bytes", headers={"content-type": "image/jpeg"})
@@ -229,9 +245,11 @@ def test_download_media_request() -> None:
 
 
 def test_send_message_payload() -> None:
+    """验证发送消息的地址与消息体字段。"""
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录发送请求并返回空的成功响应。"""
         captured["url"] = str(request.url)
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={})
@@ -251,7 +269,9 @@ def test_send_message_payload() -> None:
 
 
 def test_send_message_raises_on_errcode() -> None:
+    """验证接口返回错误码时发送抛出异常。"""
     def handler(request: httpx.Request) -> httpx.Response:
+        """返回带错误码的响应，模拟发送失败。"""
         return httpx.Response(200, json={"ret": -2, "errmsg": "参数错误"})
 
     client = _client(handler)
@@ -265,9 +285,11 @@ def test_send_message_raises_on_errcode() -> None:
 
 
 def test_adapter_splits_long_text_into_multiple_sends() -> None:
+    """验证超长文本被拆成多条分片发送，且分片 client_id 互不相同。"""
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录每次发送的消息体并返回成功。"""
         sent.append(json.loads(request.content))
         return httpx.Response(200, json={})
 
@@ -285,6 +307,7 @@ def test_adapter_splits_long_text_into_multiple_sends() -> None:
 
 
 def test_adapter_requires_target_fields() -> None:
+    """验证目标字段缺失时适配器拒绝发送并抛出 ValueError。"""
     adapter = WeChatAdapter(client_factory=lambda binding: None)
     binding = ChannelBinding(tenant_id="t", agent_id="a", channel="wechat", status="active")
     try:
@@ -296,6 +319,7 @@ def test_adapter_requires_target_fields() -> None:
 
 
 def test_normalize_drops_self_messages() -> None:
+    """验证机器人自己发出的消息在判断与归一化阶段都被丢弃。"""
     assert is_self_message(_text_message(message_type=2), "bot_1@im.bot") is True
     assert is_self_message(_text_message(from_user_id="bot_1@im.bot"), "bot_1@im.bot") is True
     assert normalize_wechat_message(_text_message(message_type=2), ilink_bot_id="bot_1@im.bot") is None
@@ -305,6 +329,7 @@ def test_normalize_drops_self_messages() -> None:
 
 
 def test_normalize_drops_non_text_or_missing_context() -> None:
+    """验证无文本、缺上下文或空 item 列表的消息被丢弃。"""
     image_only = _text_message(item_list=[{"type": 2, "image_item": {"url": "x"}}])
     assert normalize_wechat_message(image_only) is None
     assert normalize_wechat_message(_text_message(context_token="")) is None
@@ -312,6 +337,7 @@ def test_normalize_drops_non_text_or_missing_context() -> None:
 
 
 def test_voice_message_text_is_extracted() -> None:
+    """验证语音消息中的文本被提取为入站文本。"""
     voice_msg = _text_message(
         item_list=[
             {
@@ -330,11 +356,13 @@ def test_voice_message_text_is_extracted() -> None:
 
 
 def test_voice_message_without_text_is_dropped() -> None:
+    """验证无文本的语音消息被丢弃。"""
     voice_msg = _text_message(item_list=[{"type": 3, "voice_item": {"encode_type": 6}}])
     assert normalize_wechat_message(voice_msg) is None
 
 
 def test_text_and_voice_items_join() -> None:
+    """验证文本与语音条目按顺序拼接为一条入站文本。"""
     mixed = _text_message(
         item_list=[
             {"type": 1, "text_item": {"text": "先听语音"}},
@@ -347,6 +375,7 @@ def test_text_and_voice_items_join() -> None:
 
 
 def test_normalize_group_message() -> None:
+    """验证群消息被识别为群会话，并用兜底规则区分单聊。"""
     group_msg = _text_message(group_id="room_123456", session_id="room_123456")
     inbound = normalize_wechat_message(group_msg)
     assert inbound is not None
@@ -365,6 +394,7 @@ def test_normalize_group_message() -> None:
 
 
 def test_event_id_fallback_order() -> None:
+    """验证事件 ID 依次回退到 message_id、msg_id、client_id，全缺则丢弃。"""
     by_msg_id = normalize_wechat_message(_text_message(message_id=None, msg_id="mid_1"))
     assert by_msg_id is not None and by_msg_id.event_id == "mid_1"
     by_client_id = normalize_wechat_message(_text_message(message_id=None, msg_id=None))
@@ -375,9 +405,11 @@ def test_event_id_fallback_order() -> None:
 
 
 def test_qrcode_endpoints() -> None:
+    """验证扫码登录两个接口的请求方式、参数与响应解析。"""
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """按路径校验并响应二维码相关请求。"""
         path = request.url.path
         captured[path] = request
         if path == "/ilink/bot/get_bot_qrcode":
@@ -410,9 +442,11 @@ def test_qrcode_endpoints() -> None:
 
 
 def test_get_bot_qrcode_defaults_to_empty_token_list() -> None:
+    """验证未传 token 列表时请求体默认为空列表。"""
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录请求体并返回二维码响应。"""
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={"qrcode": "qrc_1"})
 
@@ -422,9 +456,11 @@ def test_get_bot_qrcode_defaults_to_empty_token_list() -> None:
 
 
 def test_get_qrcode_status_without_verify_code() -> None:
+    """验证未传 verify_code 时查询参数不包含该字段。"""
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录查询参数并返回等待扫码状态。"""
         captured["params"] = dict(request.url.params)
         return httpx.Response(200, json={"status": "wait"})
 
@@ -434,9 +470,11 @@ def test_get_qrcode_status_without_verify_code() -> None:
 
 
 def test_get_config_and_send_typing_payloads() -> None:
+    """验证 getconfig 与 sendtyping 的请求体结构。"""
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """按路径记录请求体并返回对应响应。"""
         captured[request.url.path] = json.loads(request.content)
         if request.url.path == "/ilink/bot/getconfig":
             return httpx.Response(200, json={"ret": 0, "typing_ticket": "ticket_1"})
@@ -461,6 +499,7 @@ def test_get_config_and_send_typing_payloads() -> None:
 
 
 def test_client_for_binding_decrypts_credentials() -> None:
+    """验证按绑定构造客户端时解密凭据并采用配置的域名。"""
     binding = ChannelBinding(
         tenant_id="t",
         agent_id="a",
@@ -475,9 +514,11 @@ def test_client_for_binding_decrypts_credentials() -> None:
 
 
 def test_poll_loop_marks_expired_on_minus_14() -> None:
+    """验证连续 -14 达到上限后绑定被判过期并清空游标。"""
     engine = _test_engine()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """始终返回会话超时错误码。"""
         return httpx.Response(200, json={"ret": -14, "errcode": -14, "errmsg": "session timeout"})
 
     with Session(engine) as db:
@@ -511,10 +552,12 @@ def test_poll_loop_marks_expired_on_minus_14() -> None:
 
 
 def test_poll_loop_persists_cursor_and_processes_messages() -> None:
+    """验证轮询会持久化游标并把消息交给 intake 处理。"""
     engine = _test_engine()
     calls = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """首轮返回一条消息与游标，之后返回 -14 触发退出。"""
         calls["count"] += 1
         if calls["count"] == 1:
             return httpx.Response(
@@ -526,6 +569,7 @@ def test_poll_loop_persists_cursor_and_processes_messages() -> None:
     processed: list[dict] = []
 
     def fake_process_inbound(binding, msg, *, db_engine=None):
+        """记录收到的消息并直接返回处理成功。"""
         processed.append(msg)
         return True
 
@@ -564,6 +608,7 @@ def test_poll_loop_persists_cursor_and_processes_messages() -> None:
 
 
 def test_reconcile_starts_and_stops_binding_threads() -> None:
+    """验证 reconcile 拉起新激活绑定并停掉已消失绑定的线程。"""
     engine = _test_engine()
 
     with Session(engine) as db:
@@ -589,15 +634,18 @@ class _RecordingPollClient:
     """记录每次 get_updates 的 timeout_seconds,按脚本返回响应。"""
 
     def __init__(self, responses: list[dict]):
+        """保存脚本响应并初始化超时记录。"""
         self.responses = list(responses)
         self.timeouts: list[float | None] = []
 
     def get_updates(self, cursor: str, *, timeout_seconds: float = 40.0):
+        """记录本次超时值并弹出下一条脚本响应。"""
         self.timeouts.append(timeout_seconds)
         return self.responses.pop(0)
 
 
 def test_poll_loop_follows_longpolling_timeout_ms() -> None:
+    """验证轮询超时随服务端下发值调整，并被钳制在上下限内。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -638,6 +686,7 @@ def test_poll_loop_follows_longpolling_timeout_ms() -> None:
 
 
 def _wait_for(condition, timeout: float = 5.0) -> bool:
+    """轮询等待条件成立，超时返回 False。"""
     import time as _time
 
     deadline = _time.time() + timeout
@@ -649,6 +698,7 @@ def _wait_for(condition, timeout: float = 5.0) -> bool:
 
 
 def _seed_poll_binding(engine, **config_overrides) -> str:
+    """写入一条激活的微信绑定并返回 ID，可覆盖配置字段。"""
     config = {"baseurl": BASE_URL, "ilink_bot_id": "bot@im.bot", "get_updates_buf": "cur"}
     config.update(config_overrides)
     with Session(engine) as db:
@@ -671,12 +721,14 @@ class _ScriptedPollClient:
     """按脚本应答 getupdates;脚本用完后返回 tail 响应。"""
 
     def __init__(self, responses: list[dict], tail: dict):
+        """保存脚本响应、兜底响应与调用记录。"""
         self.responses = list(responses)
         self.tail = tail
         self.calls = 0
         self.cursors: list[str] = []
 
     def get_updates(self, get_updates_buf: str, *, timeout_seconds: float = 40.0) -> dict:
+        """按脚本返回响应，脚本用尽后返回兜底响应。"""
         self.calls += 1
         self.cursors.append(get_updates_buf)
         if self.responses:
@@ -685,6 +737,7 @@ class _ScriptedPollClient:
 
 
 def test_first_minus_14_enters_recovery_without_expired() -> None:
+    """验证首次 -14 只进入恢复冷却，不判过期也不清游标。"""
     engine = _test_engine()
     binding_id = _seed_poll_binding(engine)
     client = _ScriptedPollClient([], {"ret": -14, "errcode": -14})
@@ -694,6 +747,7 @@ def test_first_minus_14_enters_recovery_without_expired() -> None:
     manager.ensure_binding(binding_id)
 
     def in_recovery():
+        """检查绑定是否已记录一次恢复失败。"""
         with Session(engine) as db:
             binding = db.get(ChannelBinding, binding_id)
             config = dict(binding.config_json or {})
@@ -722,6 +776,7 @@ def test_first_minus_14_enters_recovery_without_expired() -> None:
 
 
 def test_recovery_success_clears_state_and_resumes_polling() -> None:
+    """验证恢复成功后清除过期标记并继续推进游标。"""
     engine = _test_engine()
     binding_id = _seed_poll_binding(engine)
     client = _ScriptedPollClient(
@@ -734,6 +789,7 @@ def test_recovery_success_clears_state_and_resumes_polling() -> None:
     manager.ensure_binding(binding_id)
 
     def recovered():
+        """检查绑定是否已恢复连接并清除过期标记。"""
         with Session(engine) as db:
             binding = db.get(ChannelBinding, binding_id)
             config = dict(binding.config_json or {})
@@ -756,6 +812,7 @@ def test_recovery_success_clears_state_and_resumes_polling() -> None:
 
 
 def test_repeated_minus_14_marks_expired_at_cap() -> None:
+    """验证连续 -14 达到上限次数后绑定才被判过期。"""
     engine = _test_engine()
     binding_id = _seed_poll_binding(engine)
     client = _ScriptedPollClient([], {"ret": -14, "errcode": -14})
@@ -775,6 +832,7 @@ def test_repeated_minus_14_marks_expired_at_cap() -> None:
 
 
 def test_reconcile_does_not_restart_recovering_binding() -> None:
+    """验证恢复冷却中的绑定不会被 reconcile 重复拉起或误杀。"""
     engine = _test_engine()
     binding_id = _seed_poll_binding(engine)
     client = _ScriptedPollClient([], {"ret": -14, "errcode": -14})
@@ -797,11 +855,13 @@ def test_reconcile_does_not_restart_recovering_binding() -> None:
 
 
 def test_cursor_advances_only_after_full_batch() -> None:
+    """验证批内处理失败时游标不推进，下批重拉同一窗口。"""
     engine = _test_engine()
     binding_id = _seed_poll_binding(engine)
     calls = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """首轮返回一条消息，之后返回 -14 结束轮询。"""
         calls["count"] += 1
         if calls["count"] == 1:
             return httpx.Response(
@@ -815,6 +875,7 @@ def test_cursor_advances_only_after_full_batch() -> None:
     attempts: list[dict] = []
 
     def failing_process_inbound(binding, msg, *, db_engine=None):
+        """模拟处理过程崩溃并记录被处理的消息。"""
         attempts.append(msg)
         raise RuntimeError("处理中途崩溃")
 
@@ -841,6 +902,7 @@ def test_cursor_advances_only_after_full_batch() -> None:
 
 
 def test_validate_wechat_host_rules() -> None:
+    """验证接入域名校验只放行微信官方域名及其端口写法。"""
     from app.channels.adapters.wechat import validate_wechat_host
 
     assert validate_wechat_host("ilinkai.weixin.qq.com") is True
@@ -853,6 +915,7 @@ def test_validate_wechat_host_rules() -> None:
 
 
 def test_sanitize_wechat_baseurl_normalizes_and_falls_back() -> None:
+    """验证域名清洗规范化为 https 域名，非法输入回退默认值。"""
     from app.channels.adapters.wechat import sanitize_wechat_baseurl
 
     default = "https://ilinkai.weixin.qq.com"
@@ -868,6 +931,7 @@ def test_sanitize_wechat_baseurl_normalizes_and_falls_back() -> None:
 
 
 def test_for_binding_clamps_stored_illegal_baseurl() -> None:
+    """验证按绑定构造客户端时会纠正配置里非法的域名。"""
     binding = ChannelBinding(
         tenant_id="t",
         agent_id="a",
@@ -885,16 +949,20 @@ def test_for_binding_clamps_stored_illegal_baseurl() -> None:
 
 
 def test_reconfigure_stop_aborts_inflight_poll_and_restarts() -> None:
+    """验证重配会中止在飞长轮询，并在重扫后用新客户端重启。"""
     engine = _test_engine()
     binding_id = _seed_poll_binding(engine)
 
     class BlockingPollClient:
+        """模拟会阻塞在长轮询上的客户端，close 可解除阻塞。"""
         def __init__(self):
+            """初始化关闭标记、调用计数与阻塞闸门。"""
             self.closed = False
             self.calls = 0
             self._gate = threading.Event()
 
         def get_updates(self, cursor, *, timeout_seconds: float = 40.0):
+            """首轮立即返回，之后阻塞直到 close 唤醒。"""
             self.calls += 1
             if self.calls == 1:
                 return {"ret": 0, "msgs": [], "get_updates_buf": "c1"}
@@ -902,6 +970,7 @@ def test_reconfigure_stop_aborts_inflight_poll_and_restarts() -> None:
             return {"ret": 0, "msgs": [], "get_updates_buf": cursor}
 
         def close(self):
+            """标记关闭并放行阻塞中的长轮询。"""
             self.closed = True
             self._gate.set()
 
@@ -910,6 +979,7 @@ def test_reconfigure_stop_aborts_inflight_poll_and_restarts() -> None:
 
     def factory(binding):
         # 同一连接期内复用同一 client;被 close(重配)后下次工厂调用给新 client
+        """复用当前连接期的客户端，被关闭后为新连接期创建新实例。"""
         if not created:
             created.append(old_client)
         elif created[-1].closed:
@@ -936,22 +1006,27 @@ def test_reconfigure_stop_aborts_inflight_poll_and_restarts() -> None:
 
 
 def test_timeout_then_reconcile_restores_old_wechat_config_once() -> None:
+    """验证超时后暂停绑定，reconcile 只在旧线程退出后重启一次。"""
     engine = _test_engine()
     binding_id = _seed_poll_binding(engine)
 
     class ControlledPollClient:
+        """可控制释放时机的轮询客户端，用于观察暂停与重启时序。"""
         def __init__(self, *, release_on_close: bool):
+            """初始化关闭标记、调用计数以及是否在 close 时放行闸门。"""
             self.closed = False
             self.calls = 0
             self.release_on_close = release_on_close
             self.gate = threading.Event()
 
         def get_updates(self, cursor, *, timeout_seconds: float = 40.0):
+            """等待闸门放行后原样返回游标。"""
             self.calls += 1
             self.gate.wait(10.0)
             return {"ret": 0, "msgs": [], "get_updates_buf": cursor}
 
         def close(self):
+            """标记关闭，并按配置决定是否放行阻塞调用。"""
             self.closed = True
             if self.release_on_close:
                 self.gate.set()
@@ -959,6 +1034,7 @@ def test_timeout_then_reconcile_restores_old_wechat_config_once() -> None:
     created: list[ControlledPollClient] = []
 
     def factory(binding):
+        """按需创建客户端，关闭后替换为新实例。"""
         if not created or created[-1].closed:
             created.append(ControlledPollClient(release_on_close=bool(created)))
         return created[-1]
@@ -986,6 +1062,7 @@ def test_timeout_then_reconcile_restores_old_wechat_config_once() -> None:
 
 
 def test_cursor_patch_preserves_api_owned_config_fields() -> None:
+    """验证游标补丁只改游标，保留 API 维护的配置字段。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -1016,9 +1093,11 @@ def test_cursor_patch_preserves_api_owned_config_fields() -> None:
 
 
 def test_wechat_adapter_client_id_deterministic_per_dedupe_key() -> None:
+    """验证同一幂等键重试得到相同 client_id，未传时保持随机。"""
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录发送的消息体并返回成功。"""
         sent.append(json.loads(request.content))
         return httpx.Response(200, json={})
 
@@ -1038,9 +1117,11 @@ def test_wechat_adapter_client_id_deterministic_per_dedupe_key() -> None:
 
 
 def test_chunk_client_id_carries_chunk_index() -> None:
+    """验证长文本分片的 client_id 带分片下标，且重试时保持一致。"""
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录发送的消息体并返回成功。"""
         sent.append(json.loads(request.content))
         return httpx.Response(200, json={})
 

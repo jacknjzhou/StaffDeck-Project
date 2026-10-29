@@ -44,6 +44,7 @@ const team: TeamRead = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+/** 构造仅包含 ok/status 与 JSON 文本体的伪 Response 对象。 */
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -75,6 +76,7 @@ const modelConfig = {
   enabled: true,
 };
 
+/** 按 URL 分发应用所需的 fetch 假数据，并返回该 mock 以便断言调用。 */
 function stubAppFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -98,6 +100,7 @@ function stubAppFetch() {
   return fetchMock;
 }
 
+/** 补齐 jsdom 缺失的 matchMedia、指针捕获与滚动等浏览器 API。 */
 function stubBrowserApis() {
   if (!window.matchMedia) {
     window.matchMedia = ((query: string) => ({
@@ -137,6 +140,7 @@ afterEach(() => {
 });
 
 describe('App team scope selection', () => {
+  /** 验证在切换器中选择团队后跳转到聊天群聊，并写入团队作用域。 */
   it('opens the team group in the chat app when a team is selected', async () => {
     const user = userEvent.setup();
     const fetchMock = stubAppFetch();
@@ -163,6 +167,7 @@ describe('App team scope selection', () => {
     expect(window.localStorage.getItem(ENTERPRISE_AGENT_STORAGE_KEY)).toBe('team:team-1');
   });
 
+  /** 验证已预置的团队作用域不会被员工列表加载重置为员工。 */
   it('keeps a preset team scope instead of resetting it to an employee on agents load', async () => {
     stubAppFetch();
     window.localStorage.setItem(ENTERPRISE_AGENT_STORAGE_KEY, 'team:team-1');

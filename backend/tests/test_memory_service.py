@@ -10,12 +10,15 @@ from app.session.session_schema import ChatTurnRequest, StepAgentResult
 
 
 def test_memory_capture_uses_model_updates_and_deduplicates_profile_name(monkeypatch) -> None:
+    """验证记忆捕获按模型返回的 upsert 更新档案记忆，并按结构化键去重。"""
     captured_payload = {}
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实模型客户端初始化，避免用例发起外部请求。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """记录下发的 payload，并返回预设的记忆抽取结果。"""
         captured_payload.update(payload)
         return {
             "memories": [
@@ -82,10 +85,13 @@ def test_memory_capture_uses_model_updates_and_deduplicates_profile_name(monkeyp
 
 
 def test_memory_capture_ignores_summary_updates(monkeypatch) -> None:
+    """验证模型返回的摘要更新不落地，原有摘要内容与轮次信息保持不变。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实模型客户端初始化，避免用例发起外部请求。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """断言既有摘要已注入提示，并返回一条摘要更新。"""
         assert "用户长期摘要" in payload["existing_memories"]
         return {
             "memories": [],
@@ -131,6 +137,7 @@ def test_memory_capture_ignores_summary_updates(monkeypatch) -> None:
 
 
 def test_memory_job_reads_canonical_history_through_its_own_turn() -> None:
+    """验证记忆任务只读取本轮及之前的规范化历史，不含更晚的轮次。"""
     with _test_session() as db:
         db.add_all(
             [
@@ -179,6 +186,7 @@ def test_memory_job_reads_canonical_history_through_its_own_turn() -> None:
 
 
 def test_memory_recall_excludes_summary_history() -> None:
+    """验证记忆召回排除摘要类记录，只返回可检索的偏好类记忆。"""
     with _test_session() as db:
         db.add(
             MemoryRecord(
@@ -212,6 +220,7 @@ def test_memory_recall_excludes_summary_history() -> None:
 
 
 def test_context_memories_returns_all_supported_memories_without_model_selection() -> None:
+    """验证上下文记忆返回全部受支持类型且不筛选模型，并排除摘要。"""
     with _test_session() as db:
         for index, kind in enumerate(["profile", "preference", "fact"]):
             db.add(
@@ -244,6 +253,7 @@ def test_context_memories_returns_all_supported_memories_without_model_selection
 
 
 def test_memory_rows_for_read_deduplicates_by_structured_key_without_text_filtering() -> None:
+    """验证读取视图按结构化键去重，且不按文本内容过滤摘要。"""
     rows = [
         MemoryRecord(
             tenant_id="tenant_demo",
@@ -277,6 +287,7 @@ def test_memory_rows_for_read_deduplicates_by_structured_key_without_text_filter
 
 
 def test_clear_my_memories_scopes_to_current_user_and_agent() -> None:
+    """验证清空只删除当前用户在该员工范围内的记忆，其他数据保留。"""
     with _test_session() as db:
         user = User(
             id="user_demo",
@@ -349,6 +360,7 @@ def test_clear_my_memories_scopes_to_current_user_and_agent() -> None:
 
 
 def test_list_memories_for_gallery_agent_only_returns_current_user_for_non_creator() -> None:
+    """验证广场员工列表对非创建者只返回当前访问者自己的记忆。"""
     with _test_session() as db:
         owner = User(id="owner_user", tenant_id="tenant_demo", username="owner", password_hash="hash")
         viewer = User(id="viewer_user", tenant_id="tenant_demo", username="viewer", password_hash="hash")
@@ -405,6 +417,7 @@ def test_list_memories_for_gallery_agent_only_returns_current_user_for_non_creat
 
 
 def test_list_memories_non_creator_cannot_filter_into_other_user_memories() -> None:
+    """验证非创建者无法通过 user_id 参数窥探其他用户的记忆。"""
     with _test_session() as db:
         owner = User(id="owner_user", tenant_id="tenant_demo", username="owner", password_hash="hash")
         viewer = User(id="viewer_user", tenant_id="tenant_demo", username="viewer", password_hash="hash")
@@ -447,6 +460,7 @@ def test_list_memories_non_creator_cannot_filter_into_other_user_memories() -> N
 
 
 def test_list_memories_agent_creator_can_view_all_users_for_owned_agent() -> None:
+    """验证员工创建者可查看其名下员工下所有用户的记忆。"""
     with _test_session() as db:
         owner = User(id="owner_user", tenant_id="tenant_demo", username="owner", password_hash="hash")
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -500,6 +514,7 @@ def test_list_memories_agent_creator_can_view_all_users_for_owned_agent() -> Non
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 会话，为记忆相关用例提供隔离的数据库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

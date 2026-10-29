@@ -61,6 +61,13 @@ const LEGACY_EVOLUTION_ERRORS: Record<string, string> = {
   'Proposal has no published version to roll back': EVOLUTION_ERROR_MESSAGES.EVOLUTION_ROLLBACK_UNAVAILABLE,
 };
 
+/**
+ * 员工档案中的“反馈自进化”面板，列出候选并支持校验、批准、拒绝与回滚。
+ *
+ * - 挂载或 agentId 变化时拉取候选列表，失败时以 toast 提示具体原因；
+ * - 任一操作进行中会按 busyAction 置灰全部按钮，成功后重新加载列表；
+ * - 候选只有管理员批准后才会写入员工私有 Skill/SOP 版本。
+ */
 export default function EvolutionPanel({ agentId }: { agentId: string }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<EvolutionProposal[]>([]);
@@ -68,6 +75,7 @@ export default function EvolutionPanel({ agentId }: { agentId: string }) {
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState('');
 
+  /** 拉取当前员工的全部自进化候选，并维护 loading 状态与错误提示。 */
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -91,6 +99,12 @@ export default function EvolutionPanel({ agentId }: { agentId: string }) {
     [rows],
   );
 
+  /**
+   * 扫描真实反馈并生成新的自进化候选。
+   *
+   * - 可携带用户补充的改进目标 instruction，成功后清空该输入；
+   * - 请求期间 busyAction 置为 analyze，结束后无论成败都复位。
+   */
   async function analyze() {
     setBusyAction('analyze');
     try {
@@ -108,6 +122,13 @@ export default function EvolutionPanel({ agentId }: { agentId: string }) {
     }
   }
 
+  /**
+   * 对指定候选执行审核动作。
+   *
+   * - action 支持 evaluate、approve、reject 与 rollback 四种；
+   * - 拒绝时附带固定原因文案，其余动作只传 tenant_id；
+   * - busyAction 以“id:action”为键，避免同一候选重复提交。
+   */
   async function act(proposal: EvolutionProposal, action: 'evaluate' | 'approve' | 'reject' | 'rollback') {
     const key = `${proposal.id}:${action}`;
     setBusyAction(key);
@@ -261,12 +282,19 @@ export default function EvolutionPanel({ agentId }: { agentId: string }) {
   );
 }
 
+/** 按风险等级返回徽标的 Tailwind 配色类名，未知等级按低风险处理。 */
 function riskClass(risk: string): string {
   if (risk === 'high') return 'bg-[#ffe8e8] text-[#c13d3d]';
   if (risk === 'medium') return 'bg-[#fff4da] text-[#9a6a08]';
   return 'bg-[#e8f8f0] text-[#168760]';
 }
 
+/**
+ * 把后端错误码或历史英文报错转换为当前语言的提示文案。
+ *
+ * - 优先匹配 ApiError.code 对应的错误码表；
+ * - 其次匹配 Error.message 的历史文案，最后回退到传入的 fallback。
+ */
 function localizeEvolutionError(
   error: unknown,
   fallback: string,

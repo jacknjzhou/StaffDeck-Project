@@ -1,13 +1,12 @@
 import { cn } from '@/lib/utils';
 
 /**
- * Tailwind class tokens for the migrated chat conversation page.
+ * 迁移后的聊天会话页所使用的 Tailwind 类名令牌集合。
  *
- * Palette + metrics are derived from the SD1 Figma (nodes 38:3773 empty state
- * and 38:4962 active conversation): background #fcfcfc, 220px sidebar with a
- * #f4f4f4 right border, ink #18181a, muted #858b9c / #757f9c, hairline borders
- * #e3e7f1 (0.5px), user bubble #f6f6f6, 56px header, and a white composer card
- * with a #18181a 0.5px border, 14px radius and a dark send button.
+ * 配色与尺寸取自 SD1 Figma（节点 38:3773 空状态、38:4962 会话中）：背景 #fcfcfc，
+ * 220px 侧栏配 #f4f4f4 右边框，正文色 #18181a，弱化色 #858b9c / #757f9c，
+ * 发丝边框 #e3e7f1（0.5px），用户气泡 #f6f6f6，56px 头部，以及白色输入卡片
+ * （#18181a 0.5px 边框、14px 圆角、深色发送按钮）。
  */
 
 // ---------------------------------------------------------------------------
@@ -60,6 +59,7 @@ export const CHAT_QUEUED_BUBBLE_CLASS =
   'border border-dashed border-[#c9d2e4] bg-[#fafbfc] pr-[42px] text-[#464c5e]';
 export const CHAT_QUEUED_DELETE_BTN_CLASS =
   'absolute right-[8px] top-[8px] inline-grid size-[24px] place-items-center rounded-[7px] border-0 bg-transparent p-0 text-[#a2a8b8] transition-colors hover:bg-[#eef0f4] hover:text-[#18181a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c9d2e4]';
+/** 按消息角色返回消息行的布局类名：用户消息靠右，其余角色靠左。 */
 export function chatRowClass(role: 'user' | 'assistant' | 'system' | 'tool'): string {
   return cn(
     CHAT_MESSAGE_ROW_BASE_CLASS,
@@ -67,6 +67,7 @@ export function chatRowClass(role: 'user' | 'assistant' | 'system' | 'tool'): st
   );
 }
 
+/** 按消息角色与错误标记拼接气泡样式类名。 */
 export function chatBubbleClass(role: 'user' | 'assistant' | 'system' | 'tool', isError?: boolean): string {
   return cn(
     CHAT_BUBBLE_BASE_CLASS,

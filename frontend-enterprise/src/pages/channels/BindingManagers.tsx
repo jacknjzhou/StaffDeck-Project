@@ -20,6 +20,13 @@ type Props = {
   creatorUserId?: string | null;
 };
 
+/**
+ * 渠道协作管理面板：展示并维护指定渠道绑定的协作者列表。
+ *
+ * @param bindingId 渠道绑定 ID，变化时重新拉取协作者
+ * @param users 当前租户可选的成员列表
+ * @param creatorUserId 渠道创建者，不出现在可添加候选中
+ */
 export default function BindingManagers({ bindingId, users, creatorUserId }: Props) {
   const [managers, setManagers] = useState<ChannelBindingManagerRead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,6 +38,9 @@ export default function BindingManagers({ bindingId, users, creatorUserId }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bindingId]);
 
+  /**
+   * 拉取当前绑定的协作者列表；请求期间置 loading，失败时仅弹出错误提示。
+   */
   async function load() {
     setLoading(true);
     try {
@@ -50,6 +60,9 @@ export default function BindingManagers({ bindingId, users, creatorUserId }: Pro
     (u) => (!u.source || u.source === 'web') && u.id !== creatorUserId && !existingIds.has(u.id),
   );
 
+  /**
+   * 将下拉框选中的成员添加为协作者；未选择成员时直接返回，成功后清空选择并刷新列表。
+   */
   async function add() {
     if (!candidate) return;
     setAdding(true);
@@ -67,6 +80,11 @@ export default function BindingManagers({ bindingId, users, creatorUserId }: Pro
     }
   }
 
+  /**
+   * 移除指定成员的协作者权限，并在成功后重新拉取列表。
+   *
+   * @param userId 待移除的成员 ID
+   */
   async function remove(userId: string) {
     try {
       await api.delete(

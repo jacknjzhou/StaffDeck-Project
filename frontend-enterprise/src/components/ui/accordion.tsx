@@ -4,12 +4,14 @@ import { ChevronDownIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
+/** 手风琴根组件：透传 Radix Accordion.Root，并标记 data-slot="accordion"。 */
 function Accordion({
   ...props
 }: React.ComponentProps<typeof AccordionPrimitive.Root>) {
   return <AccordionPrimitive.Root data-slot="accordion" {...props} />
 }
 
+/** 手风琴条目容器：相邻条目之间渲染分隔线，最后一个条目不显示下边框。 */
 function AccordionItem({
   className,
   ...props
@@ -23,6 +25,7 @@ function AccordionItem({
   )
 }
 
+/** 手风琴触发器：包裹标题区并渲染随展开状态旋转 180 度的箭头图标。 */
 function AccordionTrigger({
   className,
   children,
@@ -45,6 +48,7 @@ function AccordionTrigger({
   )
 }
 
+/** 手风琴内容面板：收起/展开时播放对应动画，内部再包一层内边距容器。 */
 function AccordionContent({
   className,
   children,

@@ -79,6 +79,12 @@ type MessageBubbleProps = {
   render: MessageRender;
 };
 
+/**
+ * 读取助手消息中团队协作进度的展示信息。
+ *
+ * - 仅当 metadata.team_progress 的 phase 为 collecting 或 synthesizing 时返回；
+ * - statusText 会去除首尾空白，为空时返回 null 以隐藏进度提示。
+ */
 function activeTeamProgress(item: ChatMessage): { phase: string; statusText: string } | null {
   const progress = item.metadata?.team_progress;
   if (!progress || typeof progress !== 'object' || Array.isArray(progress)) return null;
@@ -91,6 +97,13 @@ function activeTeamProgress(item: ChatMessage): { phase: string; statusText: str
   return statusText ? { phase, statusText } : null;
 }
 
+/**
+ * 单条聊天消息气泡，按角色渲染排队态、思考轨迹、正文、附件与反馈入口。
+ *
+ * - 团队模式下助手消息额外渲染发送者头像与“项目领导”标识；
+ * - 用户消息支持定时任务标签、斜杠命令展示与排队消息删除；
+ * - 点赞/点踩按钮受 canRateMessage 约束，团队进度进行中时隐藏。
+ */
 export default function MessageBubble({ chat, item, render }: MessageBubbleProps) {
   const {
     toggleTrace,

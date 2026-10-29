@@ -8,6 +8,7 @@ from app.capabilities.local_registry import (
 
 
 def test_local_registry_pins_all_knowledge_operations_to_one_deployment() -> None:
+    """验证知识类操作绑定同一本地部署与配置修订号，且快照可回放重建为本地知识提供方。"""
     registry = build_local_capability_registry(
         db=object(), model_config=SimpleNamespace(id="model-1", config_revision=3), service_factory=object
     )
@@ -31,6 +32,7 @@ def test_local_registry_pins_all_knowledge_operations_to_one_deployment() -> Non
 
 
 def test_local_registry_rejects_retired_config_revision() -> None:
+    """验证已退役的配置修订号无法回放，重建时抛出可识别 retired 的查找错误。"""
     registry = build_local_capability_registry(db=object(), service_factory=object)
     snapshot = registry.snapshot({"knowledge.search"})
     durable = snapshot.durable_bindings[0]

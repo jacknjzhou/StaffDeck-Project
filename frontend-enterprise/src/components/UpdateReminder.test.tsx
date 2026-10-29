@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import UpdateReminder, { REMINDED_VERSION_KEY } from './UpdateReminder';
 
+/** 集中声明版本查询与 toast 相关的 mock 函数，供 vi.mock 工厂引用。 */
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   dismiss: vi.fn(),
@@ -45,6 +46,7 @@ const update = {
   check_succeeded: true,
 };
 
+/** 每个用例前清空本地提示记录，并重置各 mock 的调用状态。 */
 beforeEach(() => {
   window.localStorage.clear();
   mocks.apiGet.mockReset();
@@ -52,14 +54,18 @@ beforeEach(() => {
   mocks.toastCustom.mockReset().mockReturnValue('update-toast');
 });
 
+/** 每个用例结束后卸载已渲染的组件。 */
 afterEach(cleanup);
 
+/** 更新提醒组件的触发条件、内容与去重行为。 */
 describe('UpdateReminder', () => {
+  /** 验证引导流程未完成（enabled 为 false）时不发起版本查询请求。 */
   it('waits until the onboarding guides are complete', () => {
     render(<UpdateReminder enabled={false} />);
     expect(mocks.apiGet).not.toHaveBeenCalled();
   });
 
+  /** 验证有新版本时弹出提醒、记录已提示版本，并支持跳转发布页与关闭。 */
   it('shows a release link and remembers the announced version', async () => {
     mocks.apiGet.mockResolvedValue(update);
     render(<UpdateReminder enabled />);
@@ -81,6 +87,7 @@ describe('UpdateReminder', () => {
     expect(mocks.dismiss).toHaveBeenCalledWith('toast-id');
   });
 
+  /** 验证同一版本在本浏览器已提示过时不再重复提醒。 */
   it('does not repeat a version already announced in this browser', async () => {
     window.localStorage.setItem(REMINDED_VERSION_KEY, '0.3.0');
     mocks.apiGet.mockResolvedValue(update);
@@ -90,6 +97,7 @@ describe('UpdateReminder', () => {
     expect(mocks.toastCustom).not.toHaveBeenCalled();
   });
 
+  /** 验证版本检查被关闭或接口请求失败时保持静默，不弹出提醒。 */
   it('stays silent when checks are disabled or unavailable', async () => {
     mocks.apiGet.mockResolvedValue({ ...update, check_enabled: false, update_available: false });
     const { rerender } = render(<UpdateReminder enabled />);

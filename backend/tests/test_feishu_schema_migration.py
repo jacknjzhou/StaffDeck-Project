@@ -7,6 +7,7 @@ from app.db import database
 
 
 def _create_legacy_channel_schema(engine) -> None:
+    """建出迁移前的旧渠道三表,并写入需要保留的样本行。"""
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -102,6 +103,7 @@ def _create_legacy_channel_schema(engine) -> None:
 
 
 def _use_database(monkeypatch, engine, db_path) -> None:
+    """把迁移逻辑指向临时库文件与指定引擎。"""
     monkeypatch.setattr(database, "database_url", f"sqlite:///{db_path}")
     monkeypatch.setattr(database, "engine", engine)
 
@@ -109,6 +111,7 @@ def _use_database(monkeypatch, engine, db_path) -> None:
 def test_feishu_schema_migration_preserves_legacy_channel_data_and_is_idempotent(
     monkeypatch, tmp_path
 ) -> None:
+    """验证飞书渠道库迁移补齐列与索引、保留旧数据,且重复执行保持幂等。"""
     db_path = tmp_path / "legacy-feishu-schema.db"
     engine = create_engine(f"sqlite:///{db_path}")
     _create_legacy_channel_schema(engine)
@@ -164,12 +167,14 @@ def test_feishu_schema_migration_preserves_legacy_channel_data_and_is_idempotent
 def test_feishu_schema_migration_rolls_back_all_columns_on_failure(
     monkeypatch, tmp_path
 ) -> None:
+    """验证迁移中途失败会整体回滚,不留下半套列或迁移标记。"""
     db_path = tmp_path / "failed-feishu-schema.db"
     engine = create_engine(f"sqlite:///{db_path}")
     _create_legacy_channel_schema(engine)
     _use_database(monkeypatch, engine, db_path)
 
     def fail_before_delivery_column(_conn, _cursor, statement, *_args):
+        """在新增 first_attempt_at 列时抛出异常,模拟迁移中途失败。"""
         if "ADD COLUMN first_attempt_at" in statement:
             raise RuntimeError("injected migration failure")
 
@@ -211,6 +216,7 @@ def test_feishu_schema_migration_rolls_back_all_columns_on_failure(
 def test_feishu_schema_migration_repairs_incomplete_schema_with_marker(
     monkeypatch, tmp_path
 ) -> None:
+    """验证已有迁移标记但缺列的不完整库会被自动修复补齐。"""
     db_path = tmp_path / "partial-feishu-schema.db"
     engine = create_engine(f"sqlite:///{db_path}")
     _create_legacy_channel_schema(engine)

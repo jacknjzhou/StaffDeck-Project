@@ -12,11 +12,22 @@ import { sessionHasUnreadReply } from './chatHelpers';
 import { useChatSession } from './useChatSession';
 import ChatDialogs from './components/ChatDialogs';
 
+/**
+ * 员工画廊页：复用会话 Hook 提供侧边栏数据，主区域渲染可发起对话的数字员工画廊。
+ *
+ * @returns 侧边栏 + 画廊主内容 + 会话弹窗的整体布局。
+ */
 export default function ChatGalleryPage() {
   const chat = useChatSession();
   const auth = getEnterpriseAuthSession();
   const isAdmin = isEnterpriseAdmin(auth?.user);
 
+  /**
+   * 从画廊发起与指定数字员工的对话。
+   *
+   * 副作用：调用 use 接口后刷新员工列表、切换会话过滤并打开草稿会话；
+   * 接口失败时通过 toast 提示错误信息。
+   */
   async function startGalleryChat(agent: AgentProfileRead) {
     try {
       await api.post<AgentProfileRead>(`/api/chat/agents/${agent.id}/use?tenant_id=${TENANT_ID}`, {});

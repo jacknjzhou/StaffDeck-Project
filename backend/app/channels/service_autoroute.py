@@ -139,6 +139,7 @@ def recent_channel_messages(db: Session, chat_session: ChatSession | None) -> li
 
 
 def _route_candidates(db: Session, tenant_id: str, agent_ids: list[str]) -> list[dict[str, Any]]:
+    """按 id 批量取候选员工的 id、名称与描述，供分类提示词使用；空列表直接返回 []。"""
     if not agent_ids:
         return []
     rows = db.exec(

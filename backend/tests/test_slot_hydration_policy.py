@@ -10,6 +10,7 @@ from app.session.session_schema import (
 
 
 def _skill() -> Skill:
+    """构造带必填信息声明的技能，供水合策略用例复用。"""
     return Skill(
         tenant_id="tenant_test",
         skill_id="purchase",
@@ -23,6 +24,7 @@ def _skill() -> Skill:
 
 
 def test_hydrate_applies_all_structured_memory_to_primary_and_task_frames() -> None:
+    """验证结构化记忆同时注入主决策与任务框架，并清空已满足的待填字段。"""
     decision = RouterDecision(
         decision="continue_active",
         target_skill_id="purchase",
@@ -83,6 +85,7 @@ def test_hydrate_applies_all_structured_memory_to_primary_and_task_frames() -> N
 
 
 def test_hydration_uses_structured_memory_without_replacing_existing_slots() -> None:
+    """验证补丁只填充缺失槽位，已有值不会被结构化记忆覆盖。"""
     skill = _skill()
     memory = [
         {
@@ -125,6 +128,7 @@ def test_hydration_uses_structured_memory_without_replacing_existing_slots() -> 
 
 
 def test_hydrate_plan_applies_profile_before_sop_task_persistence() -> None:
+    """验证计划水合先应用画像信息，且只有 SOP 任务产出持久化载荷。"""
     plan = TurnPlan(
         decision="start_new_task",
         task_frames=[
@@ -195,6 +199,7 @@ def test_hydrate_plan_applies_profile_before_sop_task_persistence() -> None:
 
 
 def test_hydration_keeps_newest_value_for_duplicate_memory_keys() -> None:
+    """验证同一 key 存在多条记忆时取最新一条。"""
     memory = [
         {
             "kind": "fact",
@@ -212,6 +217,7 @@ def test_hydration_keeps_newest_value_for_duplicate_memory_keys() -> None:
 
 
 def test_hydration_projects_keyed_memory_even_without_a_loaded_skill() -> None:
+    """验证未加载技能时仍按 key 投影结构化记忆。"""
     memory = [
         {
             "kind": "preference",

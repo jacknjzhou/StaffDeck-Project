@@ -17,7 +17,11 @@ def message_read(
     db: Session | None = None,
     content_override: str | None = None,
 ) -> MessageRead:
-    """Serialize every chat surface through the same metadata and citation path."""
+    """让所有聊天入口统一走同一条元数据与引用路径来序列化消息。
+
+    助手消息会压缩知识引用标签；压缩后没有引用时，同时移除 knowledge_citations
+    与 knowledge_query 元数据。turn_id 缺失时回退到元数据中的轮次标识。
+    """
     metadata = _message_metadata_read(row, db)
     content = row.content if content_override is None else content_override
     if row.role == "assistant":
@@ -46,6 +50,11 @@ def message_read(
 
 
 def _message_metadata_read(row: Message, db: Session | None = None) -> dict:
+    """读取消息元数据，并在传入 db 时从知识库补齐引用正文。
+
+    引用正文按 CITATION_EXCERPT_CHAR_LIMIT 截断后写入 content 与 excerpt；未命中
+    正文的引用条目保持原样，只有发生补齐时才回写 knowledge_citations。
+    """
     metadata = dict(row.metadata_json or {})
     if db is None:
         return metadata
@@ -73,6 +82,10 @@ def _message_metadata_read(row: Message, db: Session | None = None) -> dict:
 
 
 def _citation_content_from_db(db: Session, tenant_id: str, citation: dict) -> str:
+    """按 concept_id 或 chunk_id 从知识库取引用正文，并校验租户归属。
+
+    概念正文会先剥掉 OKF frontmatter；都未命中时返回空字符串。
+    """
     concept_id = str(citation.get("concept_id") or "").strip()
     if concept_id:
         concept = db.exec(
@@ -94,4 +107,5 @@ def _citation_content_from_db(db: Session, tenant_id: str, citation: dict) -> st
 
 
 def _strip_okf_frontmatter(value: str) -> str:
+    """去掉文本开头由 --- 包裹的 OKF frontmatter，并返回去除首尾空白后的正文。"""
     return re.sub(r"^---[\s\S]*?---\s*", "", value or "", count=1).strip()

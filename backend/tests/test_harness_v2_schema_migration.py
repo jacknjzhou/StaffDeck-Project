@@ -8,6 +8,7 @@ from app.db import database
 
 
 def _create_legacy_harness_schema(engine) -> None:
+    """建出仅含主键列的旧版 Harness 三张表并写入样本行,用于模拟升级前的库结构。"""
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -50,6 +51,7 @@ def test_harness_v2_schema_migration_is_complete_and_idempotent(
     monkeypatch,
     tmp_path,
 ) -> None:
+    """验证 Harness v2 迁移可重复执行:补齐列与默认值、建唯一索引且不破坏既有数据。"""
     db_path = tmp_path / "harness-v2-migration.db"
     engine = create_engine(f"sqlite:///{db_path}")
     _create_legacy_harness_schema(engine)

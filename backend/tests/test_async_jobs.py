@@ -11,11 +11,13 @@ from app.session.session_schema import ChatTurnRequest, StepAgentResult
 
 
 def test_async_job_queue_runs_job_without_calling_inline() -> None:
+    """验证任务入队后由工作线程执行，而不是在调用方内联运行。"""
     queue = AsyncJobQueue(max_workers=1)
     started = Event()
     release = Event()
 
     def job_func() -> None:
+        """阻塞到外部放行，用于观察任务确实在后台线程执行。"""
         started.set()
         release.wait(1)
 
@@ -32,6 +34,7 @@ def test_async_job_queue_runs_job_without_calling_inline() -> None:
 
 
 def test_async_job_queue_rejects_enqueue_after_shutdown_without_phantom_job() -> None:
+    """验证关闭后入队抛错且不会留下幽灵任务记录。"""
     queue = AsyncJobQueue(max_workers=1)
     queue.shutdown()
 
@@ -46,11 +49,13 @@ def test_async_job_queue_rejects_enqueue_after_shutdown_without_phantom_job() ->
 
 
 def test_async_job_queue_shutdown_terminalizes_all_accepted_jobs() -> None:
+    """验证关闭会等待运行中任务，并让所有已接受任务进入终态。"""
     queue = AsyncJobQueue(max_workers=1)
     started = Event()
     release = Event()
 
     def blocking_job() -> None:
+        """阻塞到关闭测试放行，制造一个运行中的任务。"""
         started.set()
         release.wait(2)
 
@@ -71,6 +76,7 @@ def test_async_job_queue_shutdown_terminalizes_all_accepted_jobs() -> None:
 
 
 def test_enqueue_racing_with_shutdown_leaves_no_phantom_job() -> None:
+    """验证入队与关闭并发时只有一方成功，且不留幽灵任务。"""
     queue = AsyncJobQueue(max_workers=1)
     queue._executor.shutdown(wait=True)  # noqa: SLF001 - controlled race fixture.
     submit_entered = Event()
@@ -78,18 +84,22 @@ def test_enqueue_racing_with_shutdown_leaves_no_phantom_job() -> None:
     delegate = ThreadPoolExecutor(max_workers=1)
 
     class GatedExecutor:
+        """可控的线程池替身，在 submit 时挂起以便与关闭流程交错。"""
         def submit(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            """先发出已进入信号并等待放行，再委托真实线程池提交。"""
             submit_entered.set()
             release_submit.wait(2)
             return delegate.submit(*args, **kwargs)
 
         def shutdown(self, *, wait=True, cancel_futures=False):  # noqa: ANN001
+            """把关闭调用转发给真实线程池。"""
             delegate.shutdown(wait=wait, cancel_futures=cancel_futures)
 
     queue._executor = GatedExecutor()  # type: ignore[assignment]  # noqa: SLF001
     errors: list[Exception] = []
 
     def enqueue() -> None:
+        """在独立线程中发起入队并捕获预期异常。"""
         try:
             queue.enqueue("test.race", lambda: None)
         except Exception as exc:  # noqa: BLE001 - capture the expected rejection.
@@ -113,6 +123,7 @@ def test_enqueue_racing_with_shutdown_leaves_no_phantom_job() -> None:
 
 
 def test_start_async_jobs_replaces_queue_closed_by_prior_app_lifecycle(monkeypatch) -> None:
+    """验证重复启动时替换已被上个生命周期关闭的默认队列。"""
     closed_queue = AsyncJobQueue(max_workers=1)
     closed_queue.shutdown()
     monkeypatch.setattr(async_jobs, "_default_queue", closed_queue)
@@ -129,9 +140,11 @@ def test_start_async_jobs_replaces_queue_closed_by_prior_app_lifecycle(monkeypat
 
 
 def test_agent_loop_enqueues_memory_capture_without_running_it_inline(monkeypatch) -> None:
+    """验证记忆捕获以异步任务入队，并记录事件与提交事务。"""
     captured = {}
 
     def fake_enqueue_memory_capture(*args):  # noqa: ANN002
+        """记录入队参数并返回带 id 的任务替身。"""
         captured["args"] = args
         return SimpleNamespace(id="job_memory_1", name="memory.capture_turn")
 
@@ -163,6 +176,7 @@ def test_agent_loop_enqueues_memory_capture_without_running_it_inline(monkeypatc
 
 
 def _eventually_succeeded(queue: AsyncJobQueue, job_id: str) -> bool:
+    """轮询等待任务进入成功状态，超时返回 False。"""
     for _ in range(20):
         job = queue.get(job_id)
         if job and job.status == "succeeded":
@@ -172,16 +186,22 @@ def _eventually_succeeded(queue: AsyncJobQueue, job_id: str) -> bool:
 
 
 class _FakeEvents:
+    """记录事件写入的替身事件总线。"""
     def __init__(self) -> None:
+        """初始化事件记录列表。"""
         self.records: list[tuple[str, str, str, dict]] = []
 
     def record(self, tenant_id: str, session_id: str, event_type: str, payload: dict) -> None:
+        """按参数顺序追加一条事件记录。"""
         self.records.append((tenant_id, session_id, event_type, payload))
 
 
 class _FakeDb:
+    """统计提交次数的数据库会话替身。"""
     def __init__(self) -> None:
+        """初始化提交计数。"""
         self.commits = 0
 
     def commit(self) -> None:
+        """累加提交次数，供断言事务已提交。"""
         self.commits += 1

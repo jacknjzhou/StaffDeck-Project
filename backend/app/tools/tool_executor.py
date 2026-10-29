@@ -28,6 +28,7 @@ SECRET_PATTERN = re.compile(r"\$\{secret\.([A-Z0-9_]+)\}")
 
 
 def _json_path(value: Any, path: str) -> Any:
+    """按点分路径读取嵌套 JSON，路径缺失或中间节点不是 dict 时返回 None。"""
     current = value
     for part in (item for item in path.split(".") if item):
         if not isinstance(current, dict):
@@ -38,17 +39,28 @@ def _json_path(value: Any, path: str) -> Any:
 
 @dataclass(frozen=True)
 class ToolExecutionPolicy:
+    """工具调用的执行策略，目前只承载超时秒数。"""
+
     timeout_seconds: float
 
 
 @dataclass(frozen=True)
 class HttpExecutionResponse:
+    """HTTP 工具执行结果，附带状态码供异步协议判断是否受理。"""
+
     result: ToolResult
     status_code: int | None = None
 
 
 class ToolExecutor:
+    """按租户与授权上下文执行已配置的 HTTP / MCP / A2A 工具。
+
+    统一负责查找工具、校验可见性与技能/SOP 授权，并把各类失败归一为
+    success=False 的 ToolResult，避免异常穿透到会话循环。
+    """
+
     def __init__(self, db: Session):
+        """绑定数据库会话，并缓存当前进程的配置对象。"""
         self.db = db
         self.settings = get_settings()
 
@@ -67,6 +79,11 @@ class ToolExecutor:
         *,
         sop_authorization: SopToolAuthorization | None = None,
     ) -> ToolResult:
+        """执行一次工具调用：校验归属与授权后按工具类型分派。
+
+        tool_type 缺省按 http 处理；可见性、技能白名单或 SOP 授权任一不通过都
+        直接返回 NOT_ALLOWED 类错误，不发起任何外部请求。
+        """
         with self.db.no_autoflush:
             tool = self.db.exec(
                 select(Tool).where(Tool.tenant_id == tenant_id, Tool.name == tool_call.name)
@@ -191,7 +208,7 @@ class ToolExecutor:
         *,
         timeout_seconds_override: float | None = None,
     ) -> ToolResult:
-        """Execute the HTTP request directly for the detached worker."""
+        """为分离式 worker 同步执行 HTTP 请求，只返回 ToolResult。"""
         return self.execute_http_with_metadata(
             tool,
             arguments,
@@ -206,7 +223,7 @@ class ToolExecutor:
         timeout_seconds_override: float | None = None,
         additional_headers: dict[str, str] | None = None,
     ) -> HttpExecutionResponse:
-        """Execute HTTP while retaining the response status for async protocols."""
+        """执行 HTTP 请求，并保留状态码供异步协议判断是否受理。"""
         headers = self._request_headers(
             tool.url,
             self._resolve_headers(tool.headers_json or {}, tool.auth_json or {}),
@@ -272,6 +289,11 @@ class ToolExecutor:
         resume_step_id: str | None,
         timeout_seconds_override: float | None,
     ) -> ToolResult:
+        """把 HTTP 工具调用登记为 ExternalBusinessTask 后立即返回受理结果。
+
+        同一 invocation 幂等键或同一 TaskFrame 上已有进行中的任务时复用已有任务；
+        缺少用户上下文直接返回 USER_CONTEXT_REQUIRED，不写库。
+        """
         if not user_id:
             return self._error(
                 tool.name,
@@ -370,6 +392,10 @@ class ToolExecutor:
         tool: Tool,
         task: ExternalBusinessTask,
     ) -> ToolResult:
+        """把已登记的后台任务渲染成受理结果，供模型与用户读取。
+
+        包含任务状态、状态查询入口与可直接回复用户的文案，引导后续轮询而不是重复提交。
+        """
         state_text = {
             "queued": "已进入后台队列，尚未提交到外部接口",
             "submitting": "正在提交到外部接口",
@@ -421,7 +447,7 @@ class ToolExecutor:
         invocation_id: str | None = None,
         timeout_seconds_override: float | None = None,
     ) -> ToolResult:
-        """Invoke an A2A agent and wait for its durable Task lifecycle."""
+        """调用 A2A Agent，并等待其持久化 Task 生命周期结束。"""
 
         headers = self._request_headers(
             tool.url,
@@ -464,6 +490,10 @@ class ToolExecutor:
         active_skill_id: str | None = None,
         timeout_seconds_override: float | None = None,
     ) -> ToolResult:
+        """通过 MCP Server 调用工具，并按 apps_mode 决定是否附带 MCP App 描述符。
+
+        MCPClientError 归一为 MCP_ERROR，其余异常统一为 MCP_EXECUTION_ERROR。
+        """
         try:
             config, tool_name = self._resolve_mcp_config(tool)
             policy = self._execution_policy(
@@ -532,6 +562,7 @@ class ToolExecutor:
         *,
         timeout_seconds_override: float | None = None,
     ) -> ToolExecutionPolicy:
+        """解析工具超时配置：非法或越界值回落到全局默认，调用方还可再收紧上限。"""
         execution = (tool.config_json or {}).get("execution")
         raw_timeout = execution.get("timeout_seconds") if isinstance(execution, dict) else None
         try:
@@ -545,7 +576,10 @@ class ToolExecutor:
         return ToolExecutionPolicy(timeout_seconds=timeout_seconds)
 
     def _resolve_mcp_config(self, tool: Tool) -> tuple[dict[str, Any], str | None]:
-        """Resolve an MCP tool through its persisted MCP server relation."""
+        """通过工具关联的 MCP Server 解析客户端配置与远端工具名。
+
+        Server 缺失、跨租户或已停用时抛出 MCPClientError，由调用方转成错误结果。
+        """
         tool_config = tool.config_json or {}
         tool_name = (
             str(tool_config.get("tool") or tool_config.get("tool_name") or "").strip() or None
@@ -560,6 +594,7 @@ class ToolExecutor:
         return self._server_client_config(server), tool_name
 
     def _server_client_config(self, server: MCPServer) -> dict[str, Any]:
+        """按 Server 的传输方式组装 MCP 客户端配置（URL / 命令 / 内置服务）。"""
         transport = server.transport or "streamable_http"
         config: dict[str, Any] = {"transport": transport}
         if transport in {"streamable_http", "sse"}:
@@ -579,12 +614,17 @@ class ToolExecutor:
         return config
 
     def _response_data(self, response: httpx.Response) -> Any:
+        """优先解析 JSON 响应体，解析失败时退化为原始文本。"""
         try:
             return response.json()
         except Exception:
             return response.text
 
     def _resolve_headers(self, headers: dict[str, Any], auth: dict[str, Any]) -> dict[str, str]:
+        """合并静态 headers 与 auth 配置，并把 ${secret.*} 占位符替换为环境变量。
+
+        bearer/basic 会生成 Authorization；未知 auth 类型则把非 type 字段当作字面 header。
+        """
         resolved = {key: self._resolve_secret(str(value)) for key, value in headers.items()}
         auth_type = str(auth.get("type") or "").strip().lower()
         if auth_type == "bearer" and auth.get("token"):
@@ -618,6 +658,7 @@ class ToolExecutor:
         *,
         normalized_tool_base_url: str | None = None,
     ) -> dict[str, str]:
+        """为内部 mock 地址补充内部服务凭证 header，其余地址原样返回。"""
         if not self._is_internal_mock_url(url, normalized_tool_base_url=normalized_tool_base_url):
             return headers
         resolved = dict(headers)
@@ -630,6 +671,7 @@ class ToolExecutor:
         *,
         normalized_tool_base_url: str | None = None,
     ) -> bool:
+        """判断 URL 是否为内部 mock 端点：相对路径或与配置基址同源时返回 True。"""
         target = urlsplit(url)
         if not target.path.startswith("/api/mock/"):
             return False
@@ -647,12 +689,15 @@ class ToolExecutor:
         )
 
     def _resolve_secret(self, value: str) -> str:
+        """把字符串中的 ${secret.NAME} 占位符替换为同名环境变量值。"""
         def repl(match: re.Match[str]) -> str:
+            """替换单个占位符；环境变量缺失时得到空串。"""
             return os.getenv(match.group(1), "")
 
         return SECRET_PATTERN.sub(repl, value)
 
     def _error(self, tool_name: str, code: str, message: str) -> ToolResult:
+        """构造统一的失败 ToolResult，供各分派分支复用。"""
         return ToolResult(
             tool_name=tool_name,
             success=False,
@@ -662,4 +707,5 @@ class ToolExecutor:
 
 
 def _default_port(scheme: str) -> int | None:
+    """按 scheme 返回默认端口，非 http/https 时返回 None。"""
     return 443 if scheme.lower() == "https" else 80 if scheme.lower() == "http" else None

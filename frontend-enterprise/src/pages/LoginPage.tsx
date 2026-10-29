@@ -14,10 +14,11 @@ export type LoginPageProps = {
 };
 
 /**
- * Signed-out landing / login page. Mirrors Figma node 68:201 (`Login_light`):
- * a full-bleed hero with the StaffDeck wordmark and a product-preview placeholder
- * anchored to the bottom. Clicking "登录" slides the credentials form (node 68:1563)
- * down into view in place of the call-to-action button.
+ * 未登录态落地/登录页，对应 Figma 节点 68:201（`Login_light`）：
+ * 全幅 hero 区展示 StaffDeck 字标，底部固定一张产品预览占位图。
+ *
+ * - 点击「登录」后，凭据表单（节点 68:1563）以滑动动画在原 CTA 按钮位置展开。
+ * - 组件只负责收集并校验账号密码，成功后通过 onLogin 回调上抛会话，不在此处做路由跳转。
  */
 export default function LoginPage({ onLogin }: LoginPageProps) {
   const [showForm, setShowForm] = useState(false);
@@ -28,6 +29,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [passwordError, setPasswordError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  /** 校验账号密码并调用登录接口，成功后写入本地会话并回调 onLogin；失败时写入字段级错误提示。 */
   async function login() {
     const trimmedUsername = username.trim();
     const trimmedPassword = password.trim();
@@ -53,6 +55,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     }
   }
 
+  /** 输入框回车快捷提交：仅当按键为 Enter 时复用表单登录逻辑。 */
   function onFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Enter') void login();
   }

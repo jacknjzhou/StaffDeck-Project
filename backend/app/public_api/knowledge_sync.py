@@ -35,6 +35,7 @@ router = APIRouter(prefix="/digital-employees", tags=["knowledge-sync"])
 
 
 def _agent_or_404(db: Session, principal: PublicPrincipal, agent_id: str) -> AgentProfile:
+    """在调用方可见的已发布数字员工中查找 agent_id，找不到则抛 AGENT_NOT_FOUND。"""
     agent = next(
         (row for row in distribution_agents(db, principal) if row.id == agent_id),
         None,
@@ -49,6 +50,7 @@ def _agent_or_404(db: Session, principal: PublicPrincipal, agent_id: str) -> Age
 def _package_or_404(
     db: Session, principal: PublicPrincipal, agent: AgentProfile, knowledge_base_id: str
 ) -> dict:
+    """取该员工已同步的知识包描述，未同步时抛 KNOWLEDGE_PACKAGE_NOT_FOUND。"""
     package = select_package(principal, agent, db, knowledge_base_id)
     if package is None:
         raise PublicAPIError(
@@ -67,6 +69,7 @@ def _audit(
     resource_type: str,
     resource_id: str,
 ) -> None:
+    """记录一条成功的公开 API 审计日志并立即提交。"""
     db.add(
         APIAuditLog(
             tenant_id=principal.tenant_id,
@@ -86,7 +89,10 @@ def _audit(
 def _version_stats(
     db: Session, tenant_id: str, version_ids: list[str]
 ) -> dict[str, dict[str, int]]:
-    """Per-version document/bucket/chunk counts, the console page's yardstick."""
+    """按 knowledge_base_id 统计指定版本下的文档、桶与切片数量。
+
+    与控制台页面同一口径；version_ids 为空时直接返回空映射。
+    """
     stats: dict[str, dict[str, int]] = {}
     if not version_ids:
         return stats
@@ -116,6 +122,10 @@ def list_knowledge_packages(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> Response | dict:
+    """列出已同步给该数字员工的知识包，If-None-Match 命中时返回 304。
+
+    ETag 只基于稳定内容计算、不含 fetchedAt，因此重复轮询不会因时间戳变化而失效。
+    """
     agent = _agent_or_404(db, principal, agent_id)
     core = build_knowledge_package_list(principal, agent, db)
     # Same rule as the employee endpoint: the ETag must not include fetchedAt.
@@ -132,11 +142,10 @@ def list_employee_knowledge_bases(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> dict:
-    """Console-style catalog of every knowledge base an employee can use.
+    """以控制台口径列出该员工可使用的全部知识库。
 
-    Deepchat's marketplace page mirrors the enterprise knowledge console, so
-    this listing is not gated by the sync opt-out flag and carries no concept
-    bodies — just the same document/chunk counts the console shows.
+    DeepChat 市场页对齐企业知识控制台，因此该列表不受同步 opt-out 标记过滤，也不
+    携带 concept 正文，只返回名称、描述、当前版本与文档/切片计数。
     """
     agent = _agent_or_404(db, principal, agent_id)
     versions = visible_knowledge_base_versions(db, principal.tenant_id, agent.id)
@@ -172,11 +181,10 @@ def list_concept_metadata(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> dict:
-    """Concept metadata for Deepchat's detail sheet and knowledge graph.
+    """返回该知识包内各 concept 的元数据，供 DeepChat 详情页与知识图谱使用。
 
-    The console builds its graph client-side from ``links``; this endpoint
-    hands the same fields to public API consumers. Bodies stay behind
-    ``:download`` — no content_md here.
+    字段与控制台建图所需一致（id、类型、标题、描述、links），并剔除 citations 中
+    已出现的引用型链接；正文需走 :download 获取，此处不含 content_md。
     """
     agent = _agent_or_404(db, principal, agent_id)
     package = _package_or_404(db, principal, agent, knowledge_base_id)
@@ -222,6 +230,10 @@ def export_knowledge_bundle(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> RawResponse:
+    """导出该知识包对应知识库的 OKF bundle（zip），并写入一条审计日志。
+
+    版本取当前租户对该员工可见的知识库版本，下载文件名优先使用知识库名称。
+    """
     agent = _agent_or_404(db, principal, agent_id)
     package = _package_or_404(db, principal, agent, knowledge_base_id)
     kb = db.get(KnowledgeBase, knowledge_base_id)
@@ -263,11 +275,10 @@ def download_concept(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> Response:
-    """Serve one concept body.
+    """返回单个 concept 的 Markdown 正文。
 
-    Concept ids contain slashes (``sources/<doc>/sections/sec-1``), so the path
-    converter captures them verbatim and the ``:download`` suffix is stripped
-    here rather than by the router.
+    concept id 含斜杠（如 ``sources/<doc>/sections/sec-1``），由 path 转换器原样捕获，
+    ``:download`` 后缀在此处剥离；缺少该后缀时抛 CONCEPT_NOT_FOUND。
     """
     if not concept_path.endswith(":download"):
         raise PublicAPIError(404, "CONCEPT_NOT_FOUND", "Concept downloads must end with :download.")

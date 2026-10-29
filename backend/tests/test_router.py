@@ -6,12 +6,15 @@ from app.llm import LLMClient, LLMError
 
 
 def test_router_payload_only_exposes_skill_routing_summary(monkeypatch):
+    """验证路由请求只暴露技能路由摘要，不泄露会话敏感字段。"""
     captured = {}
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试触网。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """拦截模型调用，校验 payload 结构并返回仅回答的决策。"""
         captured["system_prompt"] = system_prompt
         captured["payload"] = payload
         purchase = next(item for item in payload["available_skills"] if item["skill_id"] == "purchase")
@@ -61,10 +64,13 @@ def test_router_payload_only_exposes_skill_routing_summary(monkeypatch):
 
 
 def test_router_accepts_ordered_current_turn_task_frames(monkeypatch):
+    """验证接受有序的当轮任务帧，并补全首帧缺失的目标步骤。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试触网。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """返回包含退货与购买两段任务帧的决策。"""
         assert "task_frames" in payload["_agent_stage"]["instructions"]
         assert payload["current_session"]["active_skill_id"] == "refund"
         return {
@@ -120,10 +126,13 @@ def test_router_accepts_ordered_current_turn_task_frames(monkeypatch):
 
 
 def test_router_keeps_general_subtask_with_active_scene(monkeypatch):
+    """验证当前流程保持不变，通用子意图原样保留给执行阶段。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试触网。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """返回带通用子意图的继续当前任务决策。"""
         assert "general_intent" in payload["_agent_stage"]["instructions"]
         return {
             "decision": "continue_active",
@@ -157,10 +166,13 @@ def test_router_keeps_general_subtask_with_active_scene(monkeypatch):
 
 
 def test_router_converts_legacy_create_pending_tasks_to_current_turn_frames(monkeypatch):
+    """验证遗留 create_pending 被转成当轮任务帧，不再保留待办任务。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试触网。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """返回遗留格式的两条待办任务决策。"""
         assert "不会再调用独立 scheduler" in payload["_agent_stage"]["instructions"]
         return {
             "decision": "create_pending",
@@ -204,10 +216,13 @@ def test_router_converts_legacy_create_pending_tasks_to_current_turn_frames(monk
 
 
 def test_router_rejects_noncanonical_answer_alias(monkeypatch):
+    """验证非规范决策别名 answer 被拒绝，避免静默兜底。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试触网。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """返回非法决策值 answer 以触发校验失败。"""
         return {
             "decision": "answer",
             "confidence": 0.8,
@@ -228,10 +243,13 @@ def test_router_rejects_noncanonical_answer_alias(monkeypatch):
 
 
 def test_router_rejects_unknown_decision_instead_of_guessing_intent(monkeypatch):
+    """验证未知决策直接报错，不退化为猜测意图。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试触网。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """返回未知决策值以触发校验失败。"""
         return {
             "decision": "respond_to_user",
             "confidence": 0.2,
@@ -251,10 +269,13 @@ def test_router_rejects_unknown_decision_instead_of_guessing_intent(monkeypatch)
 
 
 def test_router_removes_hallucinated_target_skill_from_non_matching_flow(monkeypatch):
+    """验证模型编造的目标技能会被清空，只保留追问决策。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试触网。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """返回带不存在技能 id 的追问决策。"""
         assert "不要编造 target_skill_id" in payload["_agent_stage"]["instructions"]
         return {
             "decision": "clarify",
@@ -281,10 +302,13 @@ def test_router_removes_hallucinated_target_skill_from_non_matching_flow(monkeyp
 
 
 def test_router_strips_generated_message_content_slots(monkeypatch):
+    """验证各任务帧里的 message_content 槽位被统一剔除。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实 LLM 客户端初始化，避免测试触网。"""
+        return
 
     def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        """返回夹带 message_content 槽位的多段任务数据。"""
         assert "禁止填写 `message_content`" in payload["_agent_stage"]["instructions"]
         return {
             "decision": "continue_active",
@@ -335,6 +359,7 @@ def test_router_strips_generated_message_content_slots(monkeypatch):
 
 
 def _purchase_skill() -> Skill:
+    """构造购买流程技能，含收集姓名与商品的单节点。"""
     return Skill(
         tenant_id="tenant_demo",
         skill_id="purchase",
@@ -363,6 +388,7 @@ def _purchase_skill() -> Skill:
 
 
 def _price_compare_skill() -> Skill:
+    """构造比价技能，含收集两个商品名的单节点。"""
     return Skill(
         tenant_id="tenant_demo",
         skill_id="price_compare",
@@ -391,6 +417,7 @@ def _price_compare_skill() -> Skill:
 
 
 def _refund_skill() -> Skill:
+    """构造售后退款技能，含确认订单的单节点。"""
     return Skill(
         tenant_id="tenant_demo",
         skill_id="refund",

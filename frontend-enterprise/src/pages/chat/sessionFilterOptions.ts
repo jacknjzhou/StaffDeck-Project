@@ -5,11 +5,23 @@ import {
 import { toTeamScope } from '@/lib/agent-scope-storage';
 import type { AgentProfileRead, ChatSession } from '@/types';
 
+/** 会话筛选下拉框的单个选项：筛选值 + 带计数的展示文案。 */
 export type SessionFilterOption = {
   value: string;
   label: string;
 };
 
+/**
+ * 根据员工列表与会话列表构建会话筛选下拉选项。
+ *
+ * 顺序固定为：全部会话、有会话记录的员工（按显示名排序）、团队（按名称排序）。
+ * 计数只统计未归属团队的会话；正在草稿中的员工即使会话数为 0 也会保留。
+ *
+ * @param agents 可参与筛选的员工档案列表。
+ * @param sessions 当前会话列表，用于统计各员工 / 团队的会话数。
+ * @param activeDraftAgentId 正在新建草稿的员工 ID，用于保留零会话的草稿选项。
+ * @returns 供筛选下拉框渲染的选项数组，首项为 `all`。
+ */
 export function buildSessionFilterOptions(
   agents: readonly AgentProfileRead[],
   sessions: readonly ChatSession[],

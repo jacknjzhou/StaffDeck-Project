@@ -27,6 +27,7 @@ from app.db.models import ChannelBinding, ChannelInboundEvent, Tenant, WeChatKfA
 
 
 def _encrypt(plaintext: str, aes_key: str, receive_id: str) -> str:
+    """按微信客服规范加密明文:16 字节随机前缀、4 字节长度、补 PKCS#7 后 AES-CBC 加密并 base64。"""
     key = base64.b64decode(aes_key + "=")
     payload = b"0123456789abcdef" + struct.pack("!I", len(plaintext.encode()))
     payload += plaintext.encode() + receive_id.encode()
@@ -37,10 +38,12 @@ def _encrypt(plaintext: str, aes_key: str, receive_id: str) -> str:
 
 
 def _signature(token: str, timestamp: str, nonce: str, ciphertext: str) -> str:
+    """把 token、timestamp、nonce 与密文排序拼接后取 SHA1,生成回调用 msg_signature。"""
     return hashlib.sha1("".join(sorted((token, timestamp, nonce, ciphertext))).encode()).hexdigest()
 
 
 def _client(monkeypatch, tmp_path=None) -> tuple[TestClient, object, str, str, str, str]:
+    """搭建指向内存或临时文件库的测试客户端,写入租户、绑定与客服账号,并替换 API 使用的引擎。"""
     if tmp_path is None:
         db_engine = create_engine(
             "sqlite://",
@@ -98,6 +101,7 @@ def _client(monkeypatch, tmp_path=None) -> tuple[TestClient, object, str, str, s
 
 
 def test_wechat_kf_callback_verification_returns_decrypted_echostr(monkeypatch) -> None:
+    """验证 URL 校验请求签名通过后,原样返回解密出的 echostr 明文。"""
     client, _engine, binding_id, token, aes_key, corp_id = _client(monkeypatch)
     timestamp = str(int(time.time()))
     nonce = "nonce-value"
@@ -118,6 +122,7 @@ def test_wechat_kf_callback_verification_returns_decrypted_echostr(monkeypatch) 
 
 
 def test_wechat_kf_callback_rejects_invalid_signature(monkeypatch) -> None:
+    """验证签名不匹配的校验请求被拒绝并返回 403。"""
     client, _engine, binding_id, _token, aes_key, corp_id = _client(monkeypatch)
     ciphertext = _encrypt("verified", aes_key, corp_id)
     response = client.get(
@@ -133,6 +138,7 @@ def test_wechat_kf_callback_rejects_invalid_signature(monkeypatch) -> None:
 
 
 def test_wechat_kf_xml_parser_rejects_entity_expansion() -> None:
+    """验证回调 XML 解析器拒绝外部实体展开,抛出 DefusedXmlException。"""
     with pytest.raises(DefusedXmlException):
         wechat_kf_api._parse_callback_xml(
             b'<!DOCTYPE foo [<!ENTITY x "expanded">]><xml><Encrypt>&x;</Encrypt></xml>'
@@ -140,6 +146,7 @@ def test_wechat_kf_xml_parser_rejects_entity_expansion() -> None:
 
 
 def test_wechat_kf_callback_returns_400_for_malicious_envelope_xml(monkeypatch) -> None:
+    """验证请求体为恶意实体 XML 时回调返回 400 及信封无效提示。"""
     client, _engine, binding_id, _token, _aes_key, _corp_id = _client(monkeypatch)
     timestamp = str(int(time.time()))
 
@@ -158,6 +165,7 @@ def test_wechat_kf_callback_returns_400_for_malicious_envelope_xml(monkeypatch) 
 
 
 def test_wechat_kf_callback_returns_400_for_malicious_plaintext_xml(monkeypatch) -> None:
+    """验证解密后的明文中含恶意实体时回调返回 400 及明文无效提示。"""
     client, _engine, binding_id, token, aes_key, corp_id = _client(monkeypatch)
     plaintext = (
         b'<!DOCTYPE foo [<!ENTITY x "expanded">]>'
@@ -182,6 +190,7 @@ def test_wechat_kf_callback_returns_400_for_malicious_plaintext_xml(monkeypatch)
 
 
 def test_wechat_kf_callback_rejects_stale_timestamp() -> None:
+    """验证时间戳超出允许窗口时以「已过期」拒绝,防止重放。"""
     with pytest.raises(HTTPException, match="已过期.*超过 300 秒"):
         wechat_kf_api._verify_callback(
             "token",
@@ -193,6 +202,7 @@ def test_wechat_kf_callback_rejects_stale_timestamp() -> None:
 
 
 def test_wechat_kf_callback_rejects_invalid_timestamp() -> None:
+    """验证时间戳不是 Unix 秒级整数时被拒绝。"""
     with pytest.raises(HTTPException, match="时间戳无效.*Unix 秒级整数"):
         wechat_kf_api._verify_callback(
             "token", "signature", "not-a-timestamp", "nonce", "ciphertext"
@@ -200,6 +210,7 @@ def test_wechat_kf_callback_rejects_invalid_timestamp() -> None:
 
 
 def test_wechat_kf_callback_rejects_future_timestamp() -> None:
+    """验证时间戳明显超前时以「尚未生效」拒绝,提示检查客户端时钟。"""
     with pytest.raises(HTTPException, match="尚未生效.*检查客户端时钟"):
         wechat_kf_api._verify_callback(
             "token",
@@ -211,6 +222,7 @@ def test_wechat_kf_callback_rejects_future_timestamp() -> None:
 
 
 def test_wechat_kf_callback_syncs_and_stages_customer_message(monkeypatch) -> None:
+    """验证回调按账号游标同步消息,落库为待处理入站事件并推进游标。"""
     client, db_engine, binding_id, token, aes_key, corp_id = _client(monkeypatch)
     open_kfid = "wk1234567890"
     plaintext = (
@@ -221,7 +233,9 @@ def test_wechat_kf_callback_syncs_and_stages_customer_message(monkeypatch) -> No
     captured: dict[str, str] = {}
 
     class FakeAdapter(WeChatKfAdapter):
+        """替换同步接口的假适配器,返回一条固定文本消息并记录调用参数。"""
         def sync_messages(self, binding, *, callback_token: str, cursor: str, open_kfid: str = ""):
+            """记录回调 token 与游标,并返回一条带 next_cursor 的固定消息列表。"""
             captured.update(token=callback_token, cursor=cursor)
             return {
                 "errcode": 0,
@@ -263,6 +277,7 @@ def test_wechat_kf_callback_syncs_and_stages_customer_message(monkeypatch) -> No
 
 
 def test_wechat_kf_stages_before_cursor_persistence_failure(monkeypatch) -> None:
+    """验证游标写入失败时消息已先落 durable inbox,不会因游标异常丢失。"""
     client, db_engine, binding_id, token, aes_key, corp_id = _client(monkeypatch)
     open_kfid = "wk1234567890"
     plaintext = (
@@ -272,7 +287,9 @@ def test_wechat_kf_stages_before_cursor_persistence_failure(monkeypatch) -> None
     ciphertext = _encrypt(plaintext, aes_key, corp_id)
 
     class FakeAdapter(WeChatKfAdapter):
+        """替换同步接口的假适配器,返回一条 next_cursor 会被尝试持久化的消息。"""
         def sync_messages(self, binding, *, callback_token: str, cursor: str, open_kfid: str = ""):
+            """返回固定消息列表,使回调先入库再尝试写游标。"""
             return {
                 "errcode": 0,
                 "next_cursor": "cursor-after-stage",
@@ -315,6 +332,7 @@ def test_wechat_kf_stages_before_cursor_persistence_failure(monkeypatch) -> None
 
 
 def test_wechat_kf_cursor_advanced_event_is_recovered_by_worker(monkeypatch) -> None:
+    """验证游标已推进但事件未处理时,worker 仍能扫描并把它消费为 done。"""
     client, db_engine, binding_id, token, aes_key, corp_id = _client(monkeypatch)
     open_kfid = "wk1234567890"
     plaintext = (
@@ -324,7 +342,9 @@ def test_wechat_kf_cursor_advanced_event_is_recovered_by_worker(monkeypatch) -> 
     ciphertext = _encrypt(plaintext, aes_key, corp_id)
 
     class FakeAdapter(WeChatKfAdapter):
+        """替换同步接口的假适配器,返回一条等待 worker 处理的消息。"""
         def sync_messages(self, binding, *, callback_token: str, cursor: str, open_kfid: str = ""):
+            """返回固定消息与已提交游标,模拟回调在 worker 处理前就完成。"""
             return {
                 "errcode": 0,
                 "next_cursor": "cursor-committed-before-worker",
@@ -363,6 +383,7 @@ def test_wechat_kf_cursor_advanced_event_is_recovered_by_worker(monkeypatch) -> 
 
     processed: list[str] = []
     def fake_process_inbound(binding, inbound, *, db_engine=None, staged_event_pk=None):
+        """替身处理入站事件:记录事件号并把对应行标记为 done。"""
         processed.append(inbound.event_id)
         with Session(db_engine) as db:
             row = db.get(ChannelInboundEvent, staged_event_pk)
@@ -379,6 +400,7 @@ def test_wechat_kf_cursor_advanced_event_is_recovered_by_worker(monkeypatch) -> 
 
 
 def test_wechat_kf_concurrent_callbacks_keep_account_cursors_isolated(monkeypatch, tmp_path) -> None:
+    """验证两个客服账号的回调并发执行时,各自游标与入站事件互不串扰。"""
     client, db_engine, binding_id, token, aes_key, corp_id = _client(monkeypatch, tmp_path)
     second_kfid = "wk-support"
     with Session(db_engine) as db:
@@ -393,7 +415,9 @@ def test_wechat_kf_concurrent_callbacks_keep_account_cursors_isolated(monkeypatc
         db.commit()
 
     class FakeAdapter(WeChatKfAdapter):
+        """按 open_kfid 生成独立游标与消息的假适配器,用于并发回调场景。"""
         def sync_messages(self, binding, *, callback_token: str, cursor: str, open_kfid: str = ""):
+            """按传入的 open_kfid 返回唯一游标和消息,便于区分账号来源。"""
             return {
                 "errcode": 0,
                 "next_cursor": f"cursor-{open_kfid}",
@@ -414,6 +438,7 @@ def test_wechat_kf_concurrent_callbacks_keep_account_cursors_isolated(monkeypatc
     monkeypatch.setattr(wechat_kf_api, "wake_staged_inbound_worker", lambda: None)
 
     def call(open_kfid: str) -> int:
+        """构造该账号的加密回调请求并返回 HTTP 状态码,供线程池并发调用。"""
         plaintext = (
             "<xml><Event>kf_msg_or_event</Event><Token>sync-token</Token>"
             f"<OpenKfId>{open_kfid}</OpenKfId></xml>"
@@ -448,6 +473,7 @@ def test_wechat_kf_concurrent_callbacks_keep_account_cursors_isolated(monkeypatc
 
 
 def test_wechat_kf_replay_accepts_account_scope(monkeypatch) -> None:
+    """验证重放事件携带账号作用域时,解码校验通过并还原目标客服账号。"""
     _client_instance, db_engine, binding_id, _token, _aes_key, corp_id = _client(monkeypatch)
     open_kfid = "wk1234567890"
     with Session(db_engine) as db:
@@ -491,6 +517,7 @@ def test_wechat_kf_replay_accepts_account_scope(monkeypatch) -> None:
 
 
 def test_wechat_kf_callback_rejects_unbound_account(monkeypatch) -> None:
+    """验证回调中的客服账号未绑定时返回 403 并提示先绑定渠道。"""
     client, db_engine, binding_id, token, aes_key, corp_id = _client(monkeypatch)
     with Session(db_engine) as db:
         db.delete(
@@ -523,6 +550,7 @@ def test_wechat_kf_callback_rejects_unbound_account(monkeypatch) -> None:
 
 
 def test_wechat_kf_stage_rejects_account_unbound_after_callback_start(monkeypatch) -> None:
+    """验证回调开始后账号被停用时,落库阶段按账号栅栏丢弃并给出错误码。"""
     _client_instance, db_engine, binding_id, _token, _aes_key, corp_id = _client(monkeypatch)
     inbound = normalize_wechat_kf_message(
         {
@@ -556,6 +584,7 @@ def test_wechat_kf_stage_rejects_account_unbound_after_callback_start(monkeypatc
 
 
 def test_wechat_kf_stage_rejects_binding_reconfiguration(monkeypatch) -> None:
+    """验证绑定配置版本已变化时,落库阶段按配置栅栏丢弃并给出错误码。"""
     _client_instance, db_engine, binding_id, _token, _aes_key, corp_id = _client(monkeypatch)
     inbound = normalize_wechat_kf_message(
         {
@@ -588,6 +617,7 @@ def test_wechat_kf_stage_rejects_binding_reconfiguration(monkeypatch) -> None:
 
 
 def test_wechat_kf_multiple_accounts_stage_with_isolated_targets(monkeypatch) -> None:
+    """验证同一绑定下多个客服账号各自入库,且目标账号互不覆盖。"""
     _client_instance, db_engine, binding_id, _token, _aes_key, corp_id = _client(monkeypatch)
     with Session(db_engine) as db:
         binding = db.get(ChannelBinding, binding_id)
@@ -638,6 +668,7 @@ def test_wechat_kf_multiple_accounts_stage_with_isolated_targets(monkeypatch) ->
 
 
 def test_wechat_kf_normalize_ignores_servicer_messages() -> None:
+    """验证 origin 表示人工客服发送的消息被归一化时直接忽略。"""
     raw = {
         "msgid": "msg-1",
         "open_kfid": "wk-1",
@@ -650,6 +681,7 @@ def test_wechat_kf_normalize_ignores_servicer_messages() -> None:
 
 
 def test_wechat_kf_normalize_drops_malformed_text_payload() -> None:
+    """验证 text 字段不是对象时归一化返回 None 而非抛错。"""
     assert normalize_wechat_kf_message(
         {
             "msgid": "msg-malformed",
@@ -663,6 +695,7 @@ def test_wechat_kf_normalize_drops_malformed_text_payload() -> None:
 
 
 def test_wechat_kf_normalize_drops_malformed_mixed_payload() -> None:
+    """验证 mixed.msg_item 不是列表时归一化返回 None。"""
     assert normalize_wechat_kf_message(
         {
             "msgid": "msg-malformed-mixed",
@@ -676,6 +709,7 @@ def test_wechat_kf_normalize_drops_malformed_mixed_payload() -> None:
 
 
 def test_wechat_kf_normalize_drops_malformed_attachment_payload() -> None:
+    """验证 file 字段不是对象时归一化返回 None。"""
     assert normalize_wechat_kf_message(
         {
             "msgid": "msg-malformed-file",
@@ -689,6 +723,7 @@ def test_wechat_kf_normalize_drops_malformed_attachment_payload() -> None:
 
 
 def test_wechat_kf_normalizes_image_and_file_messages() -> None:
+    """验证图片与文件消息归一化为附件,并带上各自的大小上限与文件信息。"""
     image = normalize_wechat_kf_message(
         {
             "msgid": "image-1",
@@ -722,6 +757,7 @@ def test_wechat_kf_normalizes_image_and_file_messages() -> None:
 
 
 def test_wechat_kf_file_metadata_uses_provider_name_and_mime() -> None:
+    """验证文件名取自服务商的 name 字段,并按扩展名补全 MIME 类型。"""
     inbound = normalize_wechat_kf_message(
         {
             "msgid": "file-1",
@@ -741,6 +777,7 @@ def test_wechat_kf_file_metadata_uses_provider_name_and_mime() -> None:
 
 
 def test_wechat_kf_normalizes_mixed_message() -> None:
+    """验证混合消息取文本内容并只保留其中的文件附件。"""
     inbound = normalize_wechat_kf_message(
         {
             "msgid": "mixed-1",
@@ -762,6 +799,7 @@ def test_wechat_kf_normalizes_mixed_message() -> None:
 
 
 def test_wechat_kf_replay_restores_attachment_dataclass() -> None:
+    """验证重放信封解码时把附件字典还原为附件数据类。"""
     from app.channels.service_wechat_kf_inbox import decode_replay_envelope
 
     inbound = decode_replay_envelope(
@@ -788,6 +826,7 @@ def test_wechat_kf_replay_restores_attachment_dataclass() -> None:
 
 
 def test_wechat_kf_downloads_binary_media(monkeypatch) -> None:
+    """验证下载媒体时走 /media/get 接口,并用响应头覆盖文件名与 MIME。"""
     adapter = WeChatKfAdapter()
     binding = ChannelBinding(
         tenant_id="tenant_demo",
@@ -798,7 +837,9 @@ def test_wechat_kf_downloads_binary_media(monkeypatch) -> None:
     monkeypatch.setattr(adapter._tokens, "get", lambda _binding: "token")
 
     class FakeResponse:
+        """模拟下载响应的上下文管理器,提供响应头与分块字节流。"""
         def __init__(self):
+            """设置模拟响应头,包含可解码的中文文件名与长度。"""
             self.headers = {
                 "content-type": "application/octet-stream",
                 "content-disposition": "attachment; filename*=UTF-8''%E6%8A%A5%E5%91%8A.docx",
@@ -806,25 +847,33 @@ def test_wechat_kf_downloads_binary_media(monkeypatch) -> None:
             }
 
         def __enter__(self):
+            """进入上下文时返回自身,模拟 httpx 响应用法。"""
             return self
 
         def __exit__(self, *_args):
-            return None
+            """退出上下文时不做任何清理。"""
+            return
 
         def raise_for_status(self):
-            return None
+            """模拟状态码校验通过。"""
+            return
 
         def iter_bytes(self, _size):
+            """返回固定载荷,作为下载到的媒体内容。"""
             return iter([b"payload"])
 
     class FakeClient:
+        """模拟 httpx 客户端,校验下载请求参数并返回假响应。"""
         def __enter__(self):
+            """进入上下文时返回自身。"""
             return self
 
         def __exit__(self, *_args):
-            return None
+            """退出上下文时不做任何清理。"""
+            return
 
         def stream(self, method, url, *, params):
+            """断言以 GET 调用 /media/get 且参数正确,再返回假响应。"""
             assert method == "GET"
             assert url.endswith("/media/get")
             assert params == {"access_token": "token", "media_id": "media-file"}
@@ -849,34 +898,45 @@ def test_wechat_kf_downloads_binary_media(monkeypatch) -> None:
 
 
 def test_wechat_kf_download_rejects_json_error(monkeypatch) -> None:
+    """验证下载接口返回 JSON 错误时抛异常并带上服务商错误信息。"""
     adapter = WeChatKfAdapter()
     binding = ChannelBinding(tenant_id="t", agent_id="a", channel="wechat_kf")
     monkeypatch.setattr(adapter._tokens, "get", lambda _binding: "token")
 
     class FakeResponse:
+        """模拟返回 JSON 错误体的下载响应。"""
         def __init__(self):
+            """设置 JSON 类型响应头,使适配器按错误体解析。"""
             self.headers = {"content-type": "application/json"}
 
         def __enter__(self):
+            """进入上下文时返回自身。"""
             return self
 
         def __exit__(self, *_args):
-            return None
+            """退出上下文时不做任何清理。"""
+            return
 
         def raise_for_status(self):
-            return None
+            """状态码校验放行,让错误交由响应体判断。"""
+            return
 
         def iter_bytes(self, _size):
+            """返回包含 errcode 与 errmsg 的 JSON 错误体。"""
             return iter([json.dumps({"errcode": 40001, "errmsg": "bad media"}).encode()])
 
     class FakeClient:
+        """模拟 httpx 客户端,直接返回 JSON 错误响应。"""
         def __enter__(self):
+            """进入上下文时返回自身。"""
             return self
 
         def __exit__(self, *_args):
-            return None
+            """退出上下文时不做任何清理。"""
+            return
 
         def stream(self, *_args, **_kwargs):
+            """忽略请求参数,返回预设的 JSON 错误响应。"""
             return FakeResponse()
 
     monkeypatch.setattr("app.channels.adapters.wechat_kf.httpx.Client", lambda **_kwargs: FakeClient())
@@ -895,6 +955,7 @@ def test_wechat_kf_download_rejects_json_error(monkeypatch) -> None:
 
 
 def test_wechat_kf_adapter_sends_text_with_stable_msgid(monkeypatch) -> None:
+    """验证发送文本走 /kf/send_msg,字段正确且 msgid 稳定为 32 位。"""
     adapter = WeChatKfAdapter()
     calls: list[tuple[str, dict]] = []
     monkeypatch.setattr(
@@ -924,6 +985,7 @@ def test_wechat_kf_adapter_sends_text_with_stable_msgid(monkeypatch) -> None:
 
 
 def test_wechat_kf_text_split_obeys_utf8_byte_limit() -> None:
+    """验证按 UTF-8 字节上限切分长文本,内容无损且每段不超 2048 字节。"""
     chunks = _split_utf8_text("中" * 1000)
     assert len(chunks) == 2
     assert "".join(chunks) == "中" * 1000
@@ -931,6 +993,7 @@ def test_wechat_kf_text_split_obeys_utf8_byte_limit() -> None:
 
 
 def test_wechat_kf_contact_way_returns_provider_url(monkeypatch) -> None:
+    """验证生成联系我二维码时返回服务商 URL 并带固定 scene。"""
     adapter = WeChatKfAdapter()
     monkeypatch.setattr(
         adapter,
@@ -952,10 +1015,12 @@ def test_wechat_kf_contact_way_returns_provider_url(monkeypatch) -> None:
 
 
 def test_wechat_kf_account_management(monkeypatch) -> None:
+    """验证客服账号列表与创建接口的路径、参数和返回值。"""
     adapter = WeChatKfAdapter()
     calls: list[tuple[str, dict]] = []
 
     def post(_binding, path, body):
+        """记录请求路径与请求体;列表接口返回一条账号,其余返回新建账号号。"""
         calls.append((path, body))
         if path == "/kf/account/list":
             return {
@@ -984,6 +1049,7 @@ def test_wechat_kf_account_management(monkeypatch) -> None:
 
 
 def test_wechat_kf_create_account_requires_media_id(monkeypatch) -> None:
+    """验证创建账号必须提供头像 media_id,补齐后才返回新账号号。"""
     adapter = WeChatKfAdapter()
     monkeypatch.setattr(adapter, "_post", lambda *_args: {"open_kfid": "wk-created"})
     binding = ChannelBinding(tenant_id="tenant_demo", agent_id="agent_1", channel="wechat_kf")
@@ -995,6 +1061,7 @@ def test_wechat_kf_create_account_requires_media_id(monkeypatch) -> None:
 
 
 def test_wechat_kf_update_and_delete_account(monkeypatch) -> None:
+    """验证更新与删除客服账号分别调用对应接口并传参正确。"""
     adapter = WeChatKfAdapter()
     calls: list[tuple[str, dict]] = []
     monkeypatch.setattr(

@@ -35,6 +35,8 @@ _INCOMPLETE_COMMAND_PATTERN = re.compile(
 
 
 class SlashCommandSelection(BaseModel):
+    """解析后的斜杠指令：类型（sop/skill/tool）、目标标识、附带提示词与原始文本。"""
+
     kind: SlashCommandKind
     target: str
     prompt: str = ""
@@ -42,6 +44,8 @@ class SlashCommandSelection(BaseModel):
 
 
 class SlashCommandRead(BaseModel):
+    """候选列表用的指令条目：类型、目标、展示名、描述与可直接输入的完整命令。"""
+
     kind: SlashCommandKind
     target: str
     label: str
@@ -50,13 +54,21 @@ class SlashCommandRead(BaseModel):
 
 
 class SlashCommandError(RuntimeError):
+    """斜杠指令解析或目标定位失败时抛出，带稳定错误码与用户可见文案。"""
+
     def __init__(self, code: str, message: str):
+        """保存错误码与提示文案，并交给 RuntimeError 携带消息本身。"""
         super().__init__(message)
         self.code = code
         self.message = message
 
 
 def parse_slash_command(message: str) -> SlashCommandSelection | None:
+    """把 `/sop 目标 提示词` 这类消息解析成指令选择；不是斜杠指令时返回 None。
+
+    只写了类型没写目标时抛 SLASH_COMMAND_TARGET_REQUIRED，提示用户从候选列表
+    中挑选。类型别名兼容中文（流程/技能/工具），大小写不敏感，提示词可省略。
+    """
     text = str(message or "").strip()
     match = _COMMAND_PATTERN.fullmatch(text)
     if match is None:
@@ -83,6 +95,11 @@ def slash_command_message(
     *,
     label: str | None = None,
 ) -> str:
+    """把指令选择还原成一句自然语言请求，供后续轮次当作用户消息。
+
+    指令自带提示词时直接沿用；label 用来把目标 id 换成更适合展示的名称，
+    缺省时回落到 target。
+    """
     if selection.prompt:
         return selection.prompt
     display = str(label or selection.target).strip()
@@ -97,6 +114,11 @@ def resolve_sop(
     selection: SlashCommandSelection,
     skills: list[Skill],
 ) -> Skill:
+    """按 skill_id 或名称在可用 SOP 列表里唯一定位技能。
+
+    非 SOP 指令抛 SLASH_COMMAND_KIND_INVALID；匹配不到或匹配到多个都按不可用
+    处理并抛 SLASH_COMMAND_NOT_AVAILABLE，避免误执行其它流程。
+    """
     if selection.kind != "sop":
         raise SlashCommandError("SLASH_COMMAND_KIND_INVALID", "当前指令不是 SOP 指令。")
     target = _normalized(selection.target)
@@ -117,6 +139,11 @@ def resolve_capability(
     selection: SlashCommandSelection,
     manifest: CapabilityManifest,
 ) -> CapabilityDescriptor:
+    """在已授权的能力清单里按多种别名唯一定位技能或工具。
+
+    比对 capability_id、name、slug、source_tool_name 等别名，且只接受 available
+    的条目；命中数不为 1 时抛 SLASH_COMMAND_NOT_AVAILABLE。
+    """
     expected_kind = "general_skill" if selection.kind == "skill" else "tool"
     target = _normalized(selection.target)
     matches: list[CapabilityDescriptor] = []
@@ -150,6 +177,12 @@ def build_slash_turn_plan(
     skills: list[Skill],
     task_frame_state: list[dict[str, object]] | None = None,
 ) -> TurnPlan:
+    """为斜杠指令直接构造确定性的 TurnPlan，跳过意图识别环节。
+
+    SOP 指令会复用已有任务帧：与当前活动技能一致则 continue_active，存在未结束
+    帧则 switch_to_pending，否则 start_new_task，并从 start_node_id 起步。技能与
+    工具指令只产出 answer_only 帧，具体能力由调用方另外强制注入。
+    """
     if selection.kind == "sop":
         skill = resolve_sop(selection, skills)
         known = _known_sop_frame(skill.skill_id, task_frame_state)
@@ -203,6 +236,11 @@ def force_capability_for_requirement(
     projected_manifest: CapabilityManifest,
     descriptor: CapabilityDescriptor,
 ) -> None:
+    """把用户指定的能力强制写进投影清单与任务需求，确保后续步骤真能调用它。
+
+    会去重写入 required_capability_names 并补一条完成标准；descriptor 先经
+    model_descriptor 投影，避免把授权内部字段带进模型上下文。
+    """
     projected = model_descriptor(descriptor)
     target_manifests = [projected_manifest]
     if requirement.capability_manifest is not projected_manifest:
@@ -229,6 +267,11 @@ def slash_command_catalog(
     skills: list[Skill],
     manifest: CapabilityManifest,
 ) -> list[SlashCommandRead]:
+    """汇总当前可用的 SOP、技能与工具，生成前端候选指令列表。
+
+    技能与工具只取 manifest 中 available 的 general_skill 与 tool 条目；结果先按
+    sop、skill、tool 分组，再依展示名与目标标识排序。
+    """
     rows = [
         SlashCommandRead(
             kind="sop",
@@ -270,6 +313,7 @@ def _known_sop_frame(
     skill_id: str,
     task_frame_state: list[dict[str, object]] | None,
 ) -> dict[str, object] | None:
+    """在任务帧状态里找该 SOP 未结束的帧，优先返回标记为 active 的那一个。"""
     candidates: list[dict[str, object]] = []
     for item in task_frame_state or []:
         if not isinstance(item, dict):
@@ -286,6 +330,7 @@ def _known_sop_frame(
 
 
 def _first_node_id(skill: Skill) -> str | None:
+    """取 SOP 的起始节点：优先 start_node_id，其次首个节点的 node_id 或 step_id。"""
     content = skill.content_json or {}
     start = str(content.get("start_node_id") or "").strip()
     if start:
@@ -300,10 +345,12 @@ def _first_node_id(skill: Skill) -> str | None:
 
 
 def _normalized(value: object) -> str:
+    """归一化用于匹配的键：压缩空白、去首尾空格并转小写。"""
     return " ".join(str(value or "").split()).strip().casefold()
 
 
 def _unique(values: list[str]) -> list[str]:
+    """按首次出现顺序去重并压缩空白，空串直接丢弃。"""
     result: list[str] = []
     for value in values:
         text = " ".join(str(value or "").split()).strip()

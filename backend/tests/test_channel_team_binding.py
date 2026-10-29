@@ -33,6 +33,7 @@ from app.teams.service import add_member, create_team, set_leader
 
 
 def _test_engine():
+    """构建共享同一内存 SQLite 连接的测试引擎并建表。"""
     engine = sqlmodel_create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -43,6 +44,7 @@ def _test_engine():
 
 
 def _p2p_message(event_id: str = "evt_1", text: str = "你好") -> dict:
+    """构造一条微信单聊入站消息，供服务入口测试使用。"""
     return {
         "message_id": event_id,
         "from_user_id": "user_ab12cd34@im.wechat",
@@ -57,6 +59,7 @@ def _p2p_message(event_id: str = "evt_1", text: str = "你好") -> dict:
 
 
 def _seed_team(db: Session, *, with_leader: bool = True) -> Team:
+    """创建租户、TL 与两名成员员工，并组建含 TL 的团队。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     db.add(AgentProfile(id="agent_tl", tenant_id="tenant_demo", name="TL 小队长"))
     db.add(AgentProfile(id="agent_worker", tenant_id="tenant_demo", name="工人甲"))
@@ -77,6 +80,7 @@ def _seed_team(db: Session, *, with_leader: bool = True) -> Team:
 
 
 def _seed_team_binding(engine, team_id: str | None, **overrides) -> str:
+    """写入一条指向团队（或未绑定）的渠道绑定并返回其 id。"""
     with Session(engine) as db:
         values = {
             "tenant_id": "tenant_demo",
@@ -94,6 +98,7 @@ def _seed_team_binding(engine, team_id: str | None, **overrides) -> str:
 
 
 def _load_binding(engine, binding_id: str) -> ChannelBinding:
+    """在独立会话中读取绑定后 detach，避免测试拿到过期对象。"""
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         db.expunge(binding)
@@ -107,9 +112,11 @@ class RecordingAgentLoop:
     reply_text = "自动回复"
 
     def __init__(self, db, *, event_sink=None):
+        """保存注入的数据库会话，保持与真实 AgentLoop 相同的构造签名。"""
         self.db = db
 
     def handle_turn(self, request):
+        """记录请求并按用户/助手消息落库，返回固定回复的桩实现。"""
         type(self).calls.append(request)
         self.db.add(
             Message(
@@ -137,6 +144,7 @@ class RecordingAgentLoop:
 
 @pytest.fixture(autouse=True)
 def _fake_agent_loop(monkeypatch):
+    """自动替换 AgentLoop 与打字指示为桩，并重置调用记录。"""
     RecordingAgentLoop.calls = []
     RecordingAgentLoop.reply_text = "自动回复"
     monkeypatch.setattr(agent_loop_module, "AgentLoop", RecordingAgentLoop)
@@ -150,6 +158,7 @@ def _fake_agent_loop(monkeypatch):
 
 
 def test_team_binding_inbound_routes_to_tl() -> None:
+    """验证团队绑定的入站消息直路由给 TL，会话落 team_id 与 TL 标题。"""
     engine = _test_engine()
     with Session(engine) as db:
         team = _seed_team(db)
@@ -177,6 +186,7 @@ def test_team_binding_inbound_routes_to_tl() -> None:
 
 
 def test_team_binding_follows_leader_change() -> None:
+    """验证换帅后新消息路由给新 TL，并按新 agent_id 另起团队会话。"""
     engine = _test_engine()
     with Session(engine) as db:
         team = _seed_team(db)
@@ -206,6 +216,7 @@ def test_team_binding_follows_leader_change() -> None:
 
 
 def test_team_binding_tl_reply_creates_tasks(monkeypatch) -> None:
+    """验证 TL 回复中的 team_tasks 会落库为直派任务并触发成员唤醒。"""
     engine = _test_engine()
     with Session(engine) as db:
         team = _seed_team(db)
@@ -236,6 +247,7 @@ def test_team_binding_tl_reply_creates_tasks(monkeypatch) -> None:
 
 
 def test_team_binding_without_leader_replies_notice() -> None:
+    """验证团队缺少 TL 时只回复提示通知，不进入 AgentLoop。"""
     engine = _test_engine()
     with Session(engine) as db:
         team = _seed_team(db, with_leader=False)
@@ -258,6 +270,7 @@ def test_team_binding_without_leader_replies_notice() -> None:
 
 
 def test_team_binding_switch_command_rejected() -> None:
+    """验证团队绑定下员工切换指令被拒绝，仅回复团队 TL 提示。"""
     engine = _test_engine()
     with Session(engine) as db:
         team = _seed_team(db)
@@ -281,10 +294,12 @@ def test_team_binding_switch_command_rejected() -> None:
 
 
 def _make_client(engine):
+    """构建仅挂载渠道路由、并用测试引擎覆盖 get_session 的客户端。"""
     app = FastAPI()
     app.include_router(channels_api.router)
 
     def override_get_session():
+        """为测试客户端提供使用内存引擎的数据库会话。"""
         with Session(engine) as session:
             yield session
 
@@ -293,10 +308,12 @@ def _make_client(engine):
 
 
 def _auth(user: User) -> dict[str, str]:
+    """生成携带指定用户身份的 Bearer 认证头。"""
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
 def _seed_api_users(engine) -> dict[str, User]:
+    """写入双租户、管理员/普通成员与三名员工，返回可鉴权的用户。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(Tenant(id="tenant_other", name="Other"))
@@ -319,6 +336,7 @@ def _seed_api_users(engine) -> dict[str, User]:
 
 
 def _create_api_team(engine, *, tenant_id: str = "tenant_demo", with_leader: bool = True) -> str:
+    """在指定租户下创建带 TL 的团队并返回团队 id。"""
     with Session(engine) as db:
         team = create_team(
             db,
@@ -334,6 +352,7 @@ def _create_api_team(engine, *, tenant_id: str = "tenant_demo", with_leader: boo
 
 
 def test_create_team_binding_success() -> None:
+    """验证管理员按团队创建绑定成功：回写 TL 且不写员工挂载行。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     team_id = _create_api_team(engine)
@@ -362,6 +381,7 @@ def test_create_team_binding_success() -> None:
 
 
 def test_create_binding_agent_and_team_mutually_exclusive() -> None:
+    """验证 agent_id 与 team_id 同时给出或都不给出时均返回 400。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     team_id = _create_api_team(engine)
@@ -388,6 +408,7 @@ def test_create_binding_agent_and_team_mutually_exclusive() -> None:
 
 
 def test_create_team_binding_requires_leader() -> None:
+    """验证团队未设置 TL 时创建团队绑定返回 400 并提示 TL。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     team_id = _create_api_team(engine, with_leader=False)
@@ -403,6 +424,7 @@ def test_create_team_binding_requires_leader() -> None:
 
 
 def test_create_team_binding_rejects_cross_tenant_team() -> None:
+    """验证跨租户团队创建绑定返回 404，避免越权绑定。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     team_id = _create_api_team(engine, tenant_id="tenant_other")
@@ -417,6 +439,7 @@ def test_create_team_binding_rejects_cross_tenant_team() -> None:
 
 
 def test_create_team_binding_requires_tl_manager_permission() -> None:
+    """验证普通成员无权为 TL 员工创建团队绑定，返回 403。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     team_id = _create_api_team(engine)
@@ -432,6 +455,7 @@ def test_create_team_binding_requires_tl_manager_permission() -> None:
 
 
 def test_update_team_binding_rejects_agents_replacement() -> None:
+    """验证更新团队绑定时提交 agents 替换被拒绝并提示团队绑定。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     team_id = _create_api_team(engine)
@@ -458,6 +482,7 @@ def test_update_team_binding_rejects_agents_replacement() -> None:
 
 
 def test_channel_binding_team_id_migration_is_idempotent(monkeypatch, tmp_path) -> None:
+    """验证老库迁移补出 team_id 列，且重复执行保持幂等。"""
     db_path = tmp_path / "migrate.db"
     engine = create_engine(f"sqlite:///{db_path}")
     with engine.begin() as conn:

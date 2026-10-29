@@ -3,6 +3,11 @@ import { Progress as ProgressPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * 进度条组件：基于 Radix Progress 渲染，按 `value`（0-100）位移内部指示条。
+ *
+ * 未传 `value` 时按 0 处理；`indicatorClassName` 仅用于覆写指示条样式。
+ */
 function Progress({
   className,
   indicatorClassName,

@@ -87,6 +87,10 @@ _SENSITIVE_KEYS = {
 
 
 def _redact(value: Any) -> Any:
+    """递归脱敏要返回给公开 API 的数据：剔除敏感键、截断长文本与超长列表。
+
+    列表只保留前 100 项，超过 8000 字符的字符串截断后追加省略号。
+    """
     if isinstance(value, dict):
         return {
             str(key): _redact(item)
@@ -101,6 +105,11 @@ def _redact(value: Any) -> Any:
 
 
 def _job_actor(db: Session, job: APIJob):
+    """由 run 任务关联的 API 凭证还原出执行用的凭证与用户身份。
+
+    凭证、API 客户端或客户端所属用户缺失，以及跨租户时抛 RuntimeError，表明该任务
+    已无法继续执行。
+    """
     credential = db.get(APICredential, job.credential_id)
     if not credential or credential.tenant_id != job.tenant_id:
         raise RuntimeError("Run credential is unavailable")
@@ -116,6 +125,7 @@ def _job_actor(db: Session, job: APIJob):
 
 
 def _message_matches_run(message: Message, client_turn_id: str, turn_id: str | None) -> bool:
+    """判断消息元数据里的任一标识是否落在本次运行的 client_turn_id / turn_id 上。"""
     metadata = dict(message.metadata_json or {})
     identities = {
         str(metadata.get("client_turn_id") or "").strip(),
@@ -133,6 +143,7 @@ def _latest_artifacts(
     client_turn_id: str,
     turn_id: str | None,
 ) -> list[dict[str, Any]]:
+    """汇总本次运行产生的助手消息工件并脱敏，最多返回最近 100 条。"""
     rows = db.exec(
         select(Message).where(
             Message.tenant_id == tenant_id,
@@ -152,6 +163,12 @@ def _latest_artifacts(
 
 @register_job_handler("run")
 def execute_run(db: Session, job: APIJob) -> dict[str, Any]:
+    """执行 kind=run 的后台任务，返回公开 API 的 run 结果体。
+
+    缺少 session_id 时先创建公开会话；随后在独立线程里跑完一轮 Harness，主线程轮询
+    取消标记并把 AgentEvent 转发成公开事件。工作线程的异常在持久任务边界重新抛出，
+    结果里的会话 id 在 stateless 模式下会被隐去。
+    """
     credential, actor = _job_actor(db, job)
     payload = dict(job.request_json or {})
     session_id = str(payload.get("session_id") or "").strip() or None
@@ -203,6 +220,7 @@ def execute_run(db: Session, job: APIJob) -> dict[str, Any]:
     worker_result: dict[str, Any] = {}
 
     def execute_harness() -> None:
+        """在工作线程内跑完一轮 Harness 流，取回完整 ChatTurnResponse 或记录异常。"""
         try:
             with Session(engine) as worker_db:
                 for item in AgentLoop(worker_db).handle_turn_stream(request):
@@ -322,6 +340,11 @@ def _relay_agent_events(
     session_id: str,
     seen_event_ids: set[str],
 ) -> None:
+    """把本次运行新增的 AgentEvent 转成公开事件写入任务事件流。
+
+    只处理未见过且轮次标识匹配本次运行的 AgentEvent；run.output.completed 会额外补上
+    助手消息里的知识引用。事件内容统一经 _redact 脱敏。
+    """
     rows = db.exec(
         select(AgentEvent)
         .where(
@@ -396,6 +419,10 @@ def create_run_route(
     principal: PublicPrincipal = Depends(require_scopes("runs:create")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """POST /agents/{agent_id}/runs：鉴权后创建 run 任务并返回 202 响应体。
+
+    命中幂等键时直接回放既有响应的状态码与内容，不重复创建任务。
+    """
     enforce_agent_access(principal, agent_id)
     ensure_public_agent(db, principal, agent_id)
     if body.session_id:
@@ -432,7 +459,7 @@ def create_run_stream_route(
     principal: PublicPrincipal = Depends(require_scopes("runs:create")),
     db: Session = Depends(get_session),
 ) -> StreamingResponse:
-    """Create a durable run and stream its public events in the same request."""
+    """创建持久化 run，并在同一请求内流式推送它的公开事件。"""
     enforce_agent_access(principal, agent_id)
     ensure_public_agent(db, principal, agent_id)
     if body.session_id:
@@ -468,6 +495,7 @@ def create_run_stream_route(
 
 
 def _owned_run(db: Session, principal: PublicPrincipal, run_id: str) -> APIJob:
+    """取出当前主体可访问的 run；不存在、类型不符或跨租户/跨 agent 一律按 404。"""
     row = db.get(APIJob, run_id)
     if not row or row.kind != "run" or row.tenant_id != principal.tenant_id:
         raise PublicAPIError(404, "RUN_NOT_FOUND", "Run not found.")
@@ -482,6 +510,7 @@ def get_run(
     principal: PublicPrincipal = Depends(require_scopes("runs:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """GET /runs/{run_id}：返回该 run 的任务视图。"""
     return job_read(_owned_run(db, principal, run_id)).model_dump(mode="json")
 
 
@@ -491,6 +520,7 @@ def get_run_result(
     principal: PublicPrincipal = Depends(require_scopes("runs:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """GET /runs/{run_id}/result：返回成功 run 的结果体，未成功时抛 409 RUN_NOT_SUCCEEDED。"""
     row = _owned_run(db, principal, run_id)
     if row.status != "succeeded":
         raise PublicAPIError(409, "RUN_NOT_SUCCEEDED", "The run has not succeeded.")
@@ -506,6 +536,7 @@ def stream_run_events(
     principal: PublicPrincipal = Depends(require_scopes("runs:read")),
     db: Session = Depends(get_session),
 ) -> StreamingResponse:
+    """GET /runs/{run_id}/events：以 SSE 续传方式推送该 run 的事件流。"""
     _owned_run(db, principal, run_id)
     return stream_job_events(run_id, request, after, last_event_id, principal, db)
 
@@ -516,6 +547,10 @@ def cancel_run(
     principal: PublicPrincipal = Depends(require_scopes("runs:cancel")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """POST /runs/{run_id}:cancel：请求取消尚未终结的 run，并通知其会话中断。
+
+    已成功、失败或已取消的 run 只返回当前视图，不重复写取消标记。
+    """
     row = _owned_run(db, principal, run_id)
     if row.status not in {"succeeded", "failed", "cancelled"}:
         row.cancel_requested = True
@@ -533,6 +568,7 @@ def list_run_artifacts(
     principal: PublicPrincipal = Depends(require_scopes("runs:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """GET /runs/{run_id}/artifacts：列出该 run 会话产生的工件；无会话时返回空列表。"""
     row = _owned_run(db, principal, run_id)
     if not row.session_id:
         return {"data": []}
@@ -547,6 +583,11 @@ def download_run_artifact(
     principal: PublicPrincipal = Depends(require_scopes("runs:read")),
     db: Session = Depends(get_session),
 ) -> StreamingResponse:
+    """GET /runs/{run_id}/artifacts/{task_frame_id}：下载指定任务帧的工件文件。
+
+    路径先归一化并校验确实属于该任务帧，缺失或越界统一按 404 处理；响应带私有缓存、
+    禁用内容嗅探与 attachment 头，并按打开句柄大小返回 Content-Length。
+    """
     row = _owned_run(db, principal, run_id)
     if not row.session_id:
         raise PublicAPIError(404, "ARTIFACT_NOT_FOUND", "Artifact not found.")
@@ -605,6 +646,7 @@ def download_run_artifact(
 
 
 def _safe_artifact_download_name(filename: str) -> str:
+    """清洗工件下载文件名：去掉控制字符与路径分隔符，截断到 180 字符，空则回落 artifact。"""
     cleaned = "".join(
         character
         for character in str(filename).strip()

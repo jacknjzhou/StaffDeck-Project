@@ -57,14 +57,17 @@ _TRANSIENT_EMOTION_CODES = {"system.err", "system.error"}
 
 
 class DingTalkSendError(RuntimeError):
+    """钉钉出站调用失败的基类，默认按可重试错误处理。"""
     retryable = True
 
 
 class DingTalkPermanentError(DingTalkSendError):
+    """不可恢复的钉钉错误（凭证无效、目标过期、参数缺失），不应重试。"""
     retryable = False
 
 
 class DingTalkTransientError(DingTalkSendError):
+    """暂时性钉钉错误（网络抖动、限流、5xx），可退避后重试。"""
     retryable = True
 
 
@@ -72,6 +75,7 @@ class DingTalkTokenProvider:
     """按绑定缓存 access token；sessionWebhook 出站不需要它，服务端 API 才需要。"""
 
     def __init__(self, *, client_factory: Callable[[], httpx.Client] | None = None):
+        """初始化 token 缓存；HTTP 客户端工厂可注入，便于测试替换网络层。"""
         self._client_factory = client_factory or (lambda: httpx.Client(timeout=10.0))
         self._cache: dict[tuple[str, str, int], tuple[str, float]] = {}
         self._lock = threading.Lock()
@@ -79,6 +83,7 @@ class DingTalkTokenProvider:
 
     @staticmethod
     def _key(binding: ChannelBinding) -> tuple[str, str, int]:
+        """生成缓存键：外部账号、租户与配置版本共同决定一份 token。"""
         return (
             str(binding.external_account_key or ""),
             str(binding.provider_tenant_key or ""),
@@ -86,6 +91,9 @@ class DingTalkTokenProvider:
         )
 
     def invalidate(self, binding: ChannelBinding, *, expected_token: str | None = None) -> bool:
+        """清除绑定对应的缓存 token；指定 expected_token 时仅在缓存仍是它时清除，
+        避免误删并发请求刚刷新的新 token。
+        """
         with self._lock:
             key = self._key(binding)
             cached = self._cache.get(key)
@@ -95,6 +103,11 @@ class DingTalkTokenProvider:
             return True
 
     def get(self, binding: ChannelBinding, *, force_refresh: bool = False) -> str:
+        """获取绑定对应的 access token，命中缓存直接返回，否则向钉钉换取并缓存。
+
+        同一缓存键用独立锁串行刷新，并发请求只会打一次远端；
+        缓存有效期扣除了 TOKEN_REFRESH_SKEW_SECONDS 的提前刷新窗口。
+        """
         key = self._key(binding)
         with self._lock:
             cached = self._cache.get(key)
@@ -138,6 +151,7 @@ class DingTalkTokenProvider:
 
 
 def _text_value(raw: dict[str, Any]) -> str:
+    """读取 text 消息正文，兼容 text 为字符串或 text.content 两种结构，并去除首尾空白。"""
     value = raw.get("text")
     if isinstance(value, dict):
         value = value.get("content")
@@ -162,7 +176,7 @@ def _richtext_text(raw: dict[str, Any]) -> str:
 
 
 def _strip_bot_mention(text: str, raw: dict[str, Any], *, is_group: bool) -> str:
-    """DingTalk may include the @ token in text.content as well as atUsers."""
+    """群聊且 isInAtList 为真时，去掉正文开头的一次机器人 @ 提及；单聊原样返回。"""
     if not is_group or raw.get("isInAtList") is not True:
         return text
     # Stream payloads do not consistently include the display name in atUsers;
@@ -234,7 +248,11 @@ def _extract_dingtalk_attachments(
 
 
 def normalize_dingtalk_message(raw: dict[str, Any], *, account_scope: str = "") -> ChannelInbound | None:
-    """Normalize a DingTalk Stream chatbot callback payload."""
+    """把钉钉 Stream 机器人回调转换成统一的 ChannelInbound，非法消息返回 None。
+
+    只接受 text/picture/file/richtext；群聊必须 @ 机器人；
+    且必须带 sessionWebhook，否则无法回复。
+    """
     if not isinstance(raw, dict):
         return None
     msgtype = str(raw.get("msgtype") or "").strip().lower()
@@ -296,7 +314,7 @@ def validate_dingtalk_credentials(
     *,
     client_factory: Callable[[], httpx.Client] | None = None,
 ) -> dict[str, str]:
-    """Validate credentials by opening a Stream connection subscription."""
+    """通过申请 Stream 连接订阅来校验应用凭证，失败时按可重试性抛出对应错误。"""
     client_id = client_id.strip()
     client_secret = client_secret.strip()
     if not client_id or not client_secret:
@@ -324,6 +342,7 @@ def validate_dingtalk_credentials(
 
 
 def _credential(binding: ChannelBinding) -> tuple[str, str]:
+    """从绑定配置解出 client_id 与解密后的 client_secret，缺失即抛永久错误。"""
     config = dict(binding.config_json or {})
     client_id = str(config.get("client_id") or "").strip()
     secret = decrypt_channel_secret(binding.credentials_enc or "") if binding.credentials_enc else ""
@@ -333,6 +352,7 @@ def _credential(binding: ChannelBinding) -> tuple[str, str]:
 
 
 def validate_dingtalk_webhook(url: str) -> bool:
+    """校验 sessionWebhook 是否为钉钉官方域名的 https 地址，避免凭证被发往任意站点。"""
     try:
         parsed = urlparse(url.strip())
     except ValueError:
@@ -346,6 +366,7 @@ def _emotion_body(
     conversation_id: str,
     emotion_name: str,
 ) -> dict[str, Any]:
+    """组装表情回写请求体；reply 与 recall 共用同一结构，只有 emotionName 可能不同。"""
     return {
         "robotCode": robot_code,
         "openMsgId": message_id,
@@ -362,6 +383,8 @@ def _emotion_body(
 
 
 class DingTalkAdapter:
+    """钉钉渠道适配器：负责消息归一化、表情回写、附件下载与 sessionWebhook 投递。"""
+
     # 钉钉不提供“查询我加过的表情”接口，无法在崩溃后回查远端状态；但 emotion/reply
     # 参数固定且可重复提交，因此重试路径直接重发而不是回查。
     reaction_attach_idempotent = True
@@ -373,10 +396,12 @@ class DingTalkAdapter:
         client_factory: Callable[[], httpx.Client] | None = None,
         token_provider: DingTalkTokenProvider | None = None,
     ):
+        """初始化适配器；HTTP 客户端工厂与 token 提供器均可注入以便替换网络层。"""
         self._client_factory = client_factory or (lambda: httpx.Client(timeout=15.0))
         self._tokens = token_provider or DingTalkTokenProvider(client_factory=self._client_factory)
 
     def normalize(self, raw: dict[str, Any]) -> ChannelInbound | None:
+        """把原始钉钉回调归一化为平台入站消息，无法识别时返回 None。"""
         return normalize_dingtalk_message(raw)
 
     def _emotion_request(
@@ -386,6 +411,10 @@ class DingTalkAdapter:
         target: dict[str, Any],
         emotion_name: str,
     ) -> None:
+        """向钉钉提交表情 reply/recall 请求，401 时刷新一次 token 后重试。
+
+        robotCode 取自绑定配置的 client_id；4xx 按错误码区分永久错误与暂时错误。
+        """
         # robotCode 取绑定配置里的 client_id，不从可变入站 payload 里推断。
         robot_code, _ = _credential(binding)
         message_id = str(target.get("message_id") or "").strip()
@@ -437,6 +466,7 @@ class DingTalkAdapter:
         target: dict[str, Any],
         emotion_name: str = DINGTALK_ACK_EMOTION_NAME,
     ) -> str:
+        """给目标消息挂上“思考中”表情，返回本地哨兵 handle 供撤回时使用。"""
         self._emotion_request(binding, "reply", target, emotion_name)
         return DINGTALK_REACTION_HANDLE
 
@@ -446,6 +476,7 @@ class DingTalkAdapter:
         target: dict[str, Any],
         handle: str = "",
     ) -> None:
+        """按与回复相同的参数撤回表情；handle 仅作本地标记，重复调用幂等。"""
         # handle 只是本地哨兵，撤回按与 reply 相同的参数提交，重复调用无副作用。
         self._emotion_request(
             binding,
@@ -544,6 +575,10 @@ class DingTalkAdapter:
         *,
         idempotency_key: str | None = None,
     ) -> None:
+        """通过 sessionWebhook 把文本或 Markdown 分片投递给钉钉会话。
+
+        按 DINGTALK_TEXT_LIMIT 切片；地址非法、已过期或文本为空时抛永久错误。
+        """
         webhook = str(target.get("session_webhook") or target.get("context_token") or "").strip()
         if not webhook or not validate_dingtalk_webhook(webhook) or not text.strip():
             raise DingTalkPermanentError("钉钉投递目标或文本无效")
@@ -588,20 +623,23 @@ class DingTalkAdapter:
             raise DingTalkTransientError("钉钉消息发送暂时失败") from exc
 
     def start_ingress(self, binding_id: str) -> None:
+        """确保该绑定的 Stream 长连接已启动，重复调用无副作用。"""
         from app.channels import get_dingtalk_stream_manager
 
         get_dingtalk_stream_manager().ensure_binding(binding_id)
 
     def stop_ingress(self, binding_id: str) -> None:
+        """停止该绑定的 Stream 长连接，接收循环会在下一轮检查时退出。"""
         from app.channels import get_dingtalk_stream_manager
 
         get_dingtalk_stream_manager().stop_binding(binding_id)
 
 
 class DingTalkStreamManager:
-    """One SDK client per active binding, with durable staging in the callback."""
+    """管理每个生效绑定的钉钉 Stream 客户端，回调经处理器落库以保证消息不丢。"""
 
     def __init__(self, *, db_engine=None, client_factory=None):
+        """初始化管理器；数据库引擎与 SDK 客户端工厂可注入以便测试。"""
         self._engine = db_engine or engine
         self._client_factory = client_factory or self._default_client_factory
         self._threads: dict[str, threading.Thread] = {}
@@ -613,6 +651,7 @@ class DingTalkStreamManager:
 
     @staticmethod
     def _default_client_factory(client_id: str, secret: str, handler):
+        """创建钉钉 Stream 客户端并注册机器人消息回调，供生产路径使用。"""
         from dingtalk_stream import Credential, DingTalkStreamClient
 
         client = DingTalkStreamClient(Credential(client_id, secret))
@@ -620,6 +659,7 @@ class DingTalkStreamManager:
         return client
 
     def ensure_binding(self, binding_id: str) -> None:
+        """为绑定启动后台接收线程；已暂停或线程仍存活时直接跳过。"""
         with self._lock:
             if binding_id in self._paused:
                 return
@@ -637,6 +677,10 @@ class DingTalkStreamManager:
             thread.start()
 
     def _run_binding(self, binding_id: str, stop: threading.Event) -> None:
+        """在独立线程中建立并运行绑定对应的 Stream 客户端，退出时清理线程登记。
+
+        绑定不存在、非 active 或渠道不匹配时直接返回；连接异常只记录日志。
+        """
         from app.channels.dingtalk_runtime import DingTalkCallbackHandler
 
         try:
@@ -663,7 +707,7 @@ class DingTalkStreamManager:
 
     @staticmethod
     async def _run_client(client, stop: threading.Event, on_connected: Callable[[bool], None]) -> None:
-        """Run the SDK protocol with a manager-owned, stop-aware receive loop."""
+        """用管理器自有且可感知 stop 的循环驱动 SDK 协议，连接断开后自动重连。"""
         import websockets
 
         client.pre_start()
@@ -698,6 +742,7 @@ class DingTalkStreamManager:
                 await asyncio.to_thread(on_connected, False)
 
     def _set_connected(self, binding_id: str, revision: int, connected: bool) -> None:
+        """仅在绑定 id 与配置版本都匹配时更新 connected，避免旧连接覆盖新配置状态。"""
         with Session(self._engine) as db:
             db.exec(
                 update(ChannelBinding)
@@ -711,23 +756,27 @@ class DingTalkStreamManager:
             db.commit()
 
     def stop_binding(self, binding_id: str) -> None:
+        """通知绑定的接收线程停止，不阻塞等待其退出。"""
         with self._lock:
             stop = self._stops.get(binding_id)
         if stop:
             stop.set()
 
     def pause_binding(self, binding_id: str) -> None:
+        """暂停绑定：标记为暂停并停止当前连接，之后的 ensure_binding 不再拉起。"""
         with self._lock:
             self._paused.add(binding_id)
         self.stop_binding(binding_id)
 
     def resume_binding(self, binding_id: str, *, start: bool = True) -> None:
+        """解除暂停状态，并按 start 决定是否立即重新拉起接收线程。"""
         with self._lock:
             self._paused.discard(binding_id)
         if start:
             self.ensure_binding(binding_id)
 
     def wait_binding_stopped(self, binding_id: str, timeout_seconds: float = 5.0) -> bool:
+        """等待绑定线程退出；超时未退出返回 False，没有登记线程视为已停止。"""
         with self._lock:
             thread = self._threads.get(binding_id)
         if not thread:
@@ -736,6 +785,7 @@ class DingTalkStreamManager:
         return not thread.is_alive()
 
     def start(self) -> None:
+        """启动后台 reconcile 线程，定期对齐数据库中的生效绑定与运行中的连接。"""
         with self._lock:
             if self._reconcile_thread and self._reconcile_thread.is_alive():
                 return
@@ -748,6 +798,7 @@ class DingTalkStreamManager:
             self._reconcile_thread.start()
 
     def _reconcile_loop(self) -> None:
+        """每 5 秒同步一次：拉起新增的生效绑定，停止已失效或删除的绑定连接。"""
         while not self._reconcile_stop.wait(5.0):
             try:
                 with Session(self._engine) as db:
@@ -770,6 +821,7 @@ class DingTalkStreamManager:
                 logger.exception("钉钉绑定 reconcile 失败")
 
     def stop(self, timeout_seconds: float = 5.0) -> bool:
+        """停止 reconcile 线程与全部绑定连接，返回是否在超时内完全停止。"""
         self._reconcile_stop.set()
         reconcile_thread = self._reconcile_thread
         if reconcile_thread and reconcile_thread.is_alive():

@@ -8,6 +8,7 @@ import {
   type ConversationLogRow,
 } from './conversationLogFilters';
 
+/** 构造一条会话反馈记录，可按需指定主要问题分类。 */
 function feedback(
   sessionId: string,
   primaryBucket?: string,
@@ -25,6 +26,7 @@ function feedback(
   };
 }
 
+/** 构造一行会话日志，并按需覆盖已有字段。 */
 function row(
   id: string,
   userId: string,
@@ -44,7 +46,9 @@ function row(
   };
 }
 
+/** 验证会话日志的用户选项与分类筛选匹配规则。 */
 describe('conversation log filters', () => {
+  /** 验证用户选项只统计当前日志分类中出现的用户。 */
   it('counts only users present in the current log category', () => {
     const rows = [
       row('session-a-up', 'user-a', 'Alice', { upFeedback: feedback('session-a-up') }),
@@ -63,6 +67,7 @@ describe('conversation log filters', () => {
     ]);
   });
 
+  /** 验证问题标签映射到反馈分类并忽略缺失用户 ID 的记录。 */
   it('maps issue tabs to their feedback buckets and omits missing user ids', () => {
     const abilityRow = row('session-ability', 'user-a', 'Alice', {
       downFeedback: feedback('session-ability', 'model_issue'),

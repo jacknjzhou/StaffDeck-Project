@@ -18,6 +18,7 @@ router = APIRouter(prefix="/gallery/agents", tags=["gallery"])
 
 
 def _payload(value: object) -> dict:
+    """把员工档案对象或字典转成对外 JSON,去掉 tenant_id 并按元数据补 added 标记。"""
     if hasattr(value, "model_dump"):
         payload = value.model_dump(mode="json")
     elif isinstance(value, dict):
@@ -34,7 +35,7 @@ def _payload(value: object) -> dict:
 
 
 def visible_gallery_agents(db: Session, principal: PublicPrincipal) -> list[AgentProfileRead]:
-    """Agents this principal may use from the gallery (also the distribution set)."""
+    """列出该主体可在画廊看到并使用的员工:非 overall、active 且已发布到画廊。"""
     rows = internal_agents.list_agents(
         principal.tenant_id,
         db,
@@ -61,6 +62,7 @@ def list_gallery_agents(
     principal: PublicPrincipal = Depends(require_scopes("gallery:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """分页返回画廊员工,按创建时间倒序,支持关键词过滤与游标翻页。"""
     rows = sorted(
         _gallery_agents(db, principal),
         key=lambda row: (str(row.created_at), row.id),
@@ -105,6 +107,7 @@ def get_gallery_agent(
     principal: PublicPrincipal = Depends(require_scopes("gallery:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """按 agent_id 取画廊中可见的单个员工,不可见时抛 404 GALLERY_AGENT_NOT_FOUND。"""
     row = next((item for item in _gallery_agents(db, principal) if item.id == agent_id), None)
     if not row:
         raise PublicAPIError(404, "GALLERY_AGENT_NOT_FOUND", "Gallery agent not found.")
@@ -119,6 +122,7 @@ def add_gallery_agent(
     principal: PublicPrincipal = Depends(require_scopes("gallery:use")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """把画廊员工加入当前用户的聊天列表,幂等重放命中时直接返回已存响应。"""
     payload = {"agent_id": agent_id}
     replay = replay_idempotent_response(db, principal, request, payload)
     if replay:

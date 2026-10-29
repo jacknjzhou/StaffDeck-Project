@@ -57,6 +57,12 @@ const BLANK_FORM: EmployeeProfileFormValues = {
   publishedToGallery: false,
 };
 
+/**
+ * 数字员工档案编辑弹窗：左侧展示头像与岗位预览，右侧编辑姓名、岗位、描述、约束与标签。
+ *
+ * 每次打开或切换 agent 时用最新档案重置表单；保存成功后回调 onSaved 并关闭弹窗。
+ * 员工不单独绑定模型，统一继承模型配置中的全局默认模型。
+ */
 export default function EmployeeProfileEditor({
   agent,
   open,
@@ -74,6 +80,7 @@ export default function EmployeeProfileEditor({
   const [saving, setSaving] = useState(false);
   const profile = useMemo(() => employeeProfile(agent), [agent]);
 
+  /** 以浅合并方式更新表单字段，供各输入控件的 onChange 复用。 */
   const update = (patch: Partial<EmployeeProfileFormValues>) => setForm((prev) => ({ ...prev, ...patch }));
 
   useEffect(() => {
@@ -94,6 +101,12 @@ export default function EmployeeProfileEditor({
     });
   }, [agent, open, profile]);
 
+  /**
+   * 保存档案：校验姓名后 PUT 员工基本信息，并合并 metadata 中的入职时间、标签与广场发布状态。
+   *
+   * 首次发布时补写发布时间与操作人，取消发布时清空这两项；轮次上限会被夹到 1–100。
+   * 成功后提示、回调 onSaved、关闭弹窗并广播作用域刷新事件；失败时保持弹窗打开。
+   */
   async function save() {
     if (!agent) return;
     if (!form.name.trim()) {
@@ -271,6 +284,7 @@ export default function EmployeeProfileEditor({
   );
 }
 
+/** 表单字段包装组件：在控件上方渲染统一样式的标签文案。 */
 function LabeledField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-[6px]">
@@ -280,6 +294,11 @@ function LabeledField({ label, children }: { label: string; children: React.Reac
   );
 }
 
+/**
+ * 标签输入组件：支持回车 / 中文逗号 / 英文逗号添加、Backspace 删除末尾标签与失焦补录。
+ *
+ * 输入内容按逗号拆分并去重合并到已有标签；下方列出尚未选中的候选标签供一键添加。
+ */
 function TagsField({
   value,
   options,
@@ -292,11 +311,13 @@ function TagsField({
   onChange: (next: string[]) => void;
 }) {
   const [draft, setDraft] = useState('');
+  /** 按中英文逗号拆分原始输入，去重后合并进已有标签，并清空输入草稿。 */
   const addTags = (raw: string) => {
     const parts = raw.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
     if (parts.length) onChange(Array.from(new Set([...value, ...parts])));
     setDraft('');
   };
+  /** 移除指定标签，并把新的标签数组回传给父组件。 */
   const removeTag = (tag: string) => onChange(value.filter((item) => item !== tag));
   const suggestions = options.filter((item) => !value.includes(item));
 
@@ -357,6 +378,7 @@ function TagsField({
   );
 }
 
+/** 归一化标签数组：逐项修剪空白、丢弃空值、去重，并最多保留 12 个，用于写入 metadata。 */
 function compactTags(values: string[] | undefined): string[] {
   return Array.from(new Set((values || []).map((item) => item.trim()).filter(Boolean))).slice(0, 12);
 }

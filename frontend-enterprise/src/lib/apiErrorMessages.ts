@@ -16,22 +16,42 @@ const API_ERROR_MESSAGES: Record<string, string> = {
   MODEL_VERIFICATION_STALE: '模型测试状态已变化，请重新测试',
 };
 
+/** 判断给定值是否为稳定的全大写错误码：命中返回原值，否则返回 undefined。 */
 function stableErrorCode(value: unknown): string | undefined {
   return typeof value === 'string' && STABLE_ERROR_CODE_PATTERN.test(value)
     ? value
     : undefined;
 }
 
+/** 从任意错误值中提取可读消息：字符串原样返回，Error 取 message，其余返回空串。 */
 function errorMessage(error: unknown): string {
   if (typeof error === 'string') return error;
   return error instanceof Error ? error.message : '';
 }
 
+/**
+ * 解析错误值对应的稳定错误码。
+ *
+ * 优先读取 ApiError 自带的 code，其次从错误消息中匹配全大写错误码。
+ *
+ * @param error 原始错误，可为 ApiError、Error、字符串等。
+ * @returns 稳定错误码；无法识别时返回 undefined。
+ */
 export function apiErrorCode(error: unknown): string | undefined {
   if (error instanceof ApiError && error.code) return stableErrorCode(error.code);
   return stableErrorCode(errorMessage(error));
 }
 
+/**
+ * 将错误值转换为可直接展示给用户的中文提示。
+ *
+ * 已知错误码映射为预置文案；仅有错误码时给出「操作失败（错误码：…）」；
+ * 其余情况回退到原始消息，再无消息则使用 fallback。
+ *
+ * @param error 原始错误，可为 ApiError、Error、字符串等。
+ * @param fallback 无可用消息时展示的兜底文案。
+ * @returns 最终用于展示的提示文本。
+ */
 export function apiErrorMessage(error: unknown, fallback: string): string {
   const code = apiErrorCode(error);
   if (code && API_ERROR_MESSAGES[code]) return API_ERROR_MESSAGES[code];

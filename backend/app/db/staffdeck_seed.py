@@ -71,7 +71,7 @@ ModelT = TypeVar("ModelT", bound=SQLModel)
 
 
 def seed_staffdeck_admin_gallery(session: Session) -> None:
-    """Seed the curated StaffDeck gallery package as admin-owned resources."""
+    """以 admin 资产身份写入精选 StaffDeck 画廊种子数据，供演示环境直接可用。"""
 
     data = _load_seed_fixtures((FIXTURE_PATH, EXPANDED_FIXTURE_PATH))
     if not data:
@@ -119,6 +119,7 @@ def seed_staffdeck_admin_gallery(session: Session) -> None:
 
 
 def _load_seed_fixtures(paths: Iterable[Path]) -> JsonDict:
+    """按顺序合并多个种子 JSON：list 字段累加，其余字段以先出现者为准。"""
     merged: JsonDict = {}
     for path in paths:
         fixture = json.loads(path.read_text(encoding="utf-8"))
@@ -131,6 +132,7 @@ def _load_seed_fixtures(paths: Iterable[Path]) -> JsonDict:
 
 
 def _seed_agents(session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]) -> None:
+    """写入精选 Agent，并保留用户已改过的头像等可编辑元数据字段。"""
     for row in rows:
         source_id = str(row.get("id") or "")
         name = str(row.get("name") or "").strip()
@@ -180,6 +182,7 @@ def _seed_skills(
     resource_ids: dict[str, set[str]],
     id_maps: dict[str, dict[str, str]],
 ) -> None:
+    """写入被绑定的技能及其版本，content_json 统一补上运行期默认值。"""
     selected_ids = resource_ids.get("skill", set())
     selected_skill_ids: set[str] = set()
     for row in skill_rows:
@@ -267,6 +270,7 @@ def _seed_general_skills(
     resource_ids: dict[str, set[str]],
     id_maps: dict[str, dict[str, str]],
 ) -> None:
+    """写入被绑定的通用技能，按 slug 去重后直接标为 published。"""
     selected_ids = resource_ids.get("general_skill", set())
     for row in rows:
         source_id = str(row.get("id") or "")
@@ -316,6 +320,7 @@ def _seed_tools(
     resource_ids: dict[str, set[str]],
     id_maps: dict[str, dict[str, str]],
 ) -> None:
+    """写入被绑定的工具；contract.archive_query 额外固定 20 秒执行超时。"""
     selected_ids = resource_ids.get("tool", set())
     for row in rows:
         source_id = str(row.get("id") or "")
@@ -373,6 +378,7 @@ def _seed_tools(
 
 
 def _apply_curated_skill_runtime_defaults(skill_id: str, content: JsonDict) -> None:
+    """为 leave_apply_v1 的 check_policy 节点补默认 query_fields，其它技能原样返回。"""
     if skill_id != "leave_apply_v1":
         return
     nodes = content.get("nodes")
@@ -392,6 +398,7 @@ def _seed_knowledge(
     resource_ids: dict[str, set[str]],
     id_maps: dict[str, dict[str, str]],
 ) -> None:
+    """写入知识库及其版本、文档、分桶、切片等整棵子树，全程共用同一张 ID 映射表。"""
     selected_ids = resource_ids.get("knowledge_base", set())
     for row in data.get("knowledge_bases", []):
         source_id = str(row.get("id") or "")
@@ -441,6 +448,7 @@ def _seed_knowledge(
 def _seed_knowledge_versions(
     session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """写入知识库版本，capability_scope 缺失时依次回退到已有记录或所属知识库。"""
     for row in rows:
         kb_id = id_maps["knowledge_base"].get(str(row.get("knowledge_base_id") or ""))
         if not kb_id:
@@ -491,6 +499,7 @@ def _seed_knowledge_versions(
 def _seed_knowledge_documents(
     session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """写入知识文档元数据；所属知识库或版本未完成映射时跳过该行。"""
     for row in rows:
         kb_id = id_maps["knowledge_base"].get(str(row.get("knowledge_base_id") or ""))
         kb_ver_id = id_maps["knowledge_base_version"].get(str(row.get("knowledge_base_version_id") or ""))
@@ -525,6 +534,7 @@ def _seed_knowledge_documents(
 def _seed_knowledge_buckets(
     session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """写入文档分桶，bucket_key 缺失时用源 ID 兜底，标题缺失时用 Untitled。"""
     for row in rows:
         kb_id = id_maps["knowledge_base"].get(str(row.get("knowledge_base_id") or ""))
         kb_ver_id = id_maps["knowledge_base_version"].get(str(row.get("knowledge_base_version_id") or ""))
@@ -558,6 +568,7 @@ def _seed_knowledge_buckets(
 def _seed_knowledge_chunks(
     session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """写入知识切片；知识库、版本、文档、分桶任一缺失即跳过该行。"""
     for row in rows:
         kb_id = id_maps["knowledge_base"].get(str(row.get("knowledge_base_id") or ""))
         kb_ver_id = id_maps["knowledge_base_version"].get(str(row.get("knowledge_base_version_id") or ""))
@@ -589,6 +600,7 @@ def _seed_knowledge_chunks(
 def _seed_knowledge_concepts(
     session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """写入 OKF 概念，按源 ID 或同版本内 concept_id 命中已有记录时就地更新。"""
     for row in rows:
         kb_id = id_maps["knowledge_base"].get(str(row.get("knowledge_base_id") or ""))
         kb_ver_id = id_maps["knowledge_base_version"].get(str(row.get("knowledge_base_version_id") or ""))
@@ -630,6 +642,7 @@ def _seed_knowledge_concepts(
 def _seed_knowledge_discovery(
     session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """写入知识发现建议；只要求知识库与版本已映射，分桶可以为空。"""
     for row in rows:
         kb_id = id_maps["knowledge_base"].get(str(row.get("knowledge_base_id") or ""))
         kb_ver_id = id_maps["knowledge_base_version"].get(str(row.get("knowledge_base_version_id") or ""))
@@ -662,6 +675,7 @@ def _seed_knowledge_discovery(
 def _seed_knowledge_jobs(
     session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """写入知识入库任务记录，保留 fixture 中的阶段、进度与起止时间。"""
     for row in rows:
         kb_id = id_maps["knowledge_base"].get(str(row.get("knowledge_base_id") or ""))
         kb_ver_id = id_maps["knowledge_base_version"].get(str(row.get("knowledge_base_version_id") or ""))
@@ -694,6 +708,7 @@ def _seed_knowledge_jobs(
 def _seed_agent_resource_bindings(
     session: Session, rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """为 Agent 建立资源绑定，资源 ID 先经映射表转换，元数据写入 agent 私有作用域。"""
     for row in rows:
         agent_id = id_maps["agent"].get(str(row.get("agent_id") or ""))
         resource_type = str(row.get("resource_type") or "")
@@ -731,6 +746,7 @@ def _seed_skill_branches(
     version_rows: Iterable[JsonDict],
     id_maps: dict[str, dict[str, str]],
 ) -> None:
+    """写入 Agent 技能分支及其版本，版本只在对应分支存在时才创建。"""
     branch_keys: set[tuple[str, str]] = set()
     for row in branch_rows:
         agent_id = id_maps["agent"].get(str(row.get("agent_id") or ""))
@@ -802,6 +818,7 @@ def _seed_skill_branches(
 def _seed_knowledge_branches(
     session: Session, binding_rows: Iterable[JsonDict], id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """按知识库绑定创建 Agent 知识分支，并把知识库 current_version 对齐到带种子内容的版本。"""
     for row in binding_rows:
         if row.get("resource_type") != "knowledge_base":
             continue
@@ -843,6 +860,7 @@ def _seed_knowledge_branches(
 
 
 def _knowledge_version_with_seed_content(session: Session, kb_id: str, agent_id: str) -> str:
+    """选定该 Agent 可见的版本号：优先 owner_agent_id 或分支命名，其次回退到首个文档版本。"""
     documents = session.exec(
         select(KnowledgeDocument).where(
             KnowledgeDocument.tenant_id == TENANT_ID,
@@ -869,6 +887,7 @@ def _knowledge_version_with_seed_content(session: Session, kb_id: str, agent_id:
 
 
 def _publish_gallery_resources(session: Session, id_maps: dict[str, dict[str, str]]) -> None:
+    """把种子技能、通用技能、工具、知识库统一标记为开放画廊资源并补齐画廊绑定。"""
     metadata = _open_gallery_seed_metadata({})
     for resource_type, model, map_key in (
         ("skill", Skill, "skill"),
@@ -897,6 +916,7 @@ def _publish_gallery_resources(session: Session, id_maps: dict[str, dict[str, st
 def _sync_seed_agents_to_current_admin(
     session: Session, id_maps: dict[str, dict[str, str]]
 ) -> None:
+    """把种子 Agent 的归属改写为当前 admin 用户，避免演示数据挂在过期账号下。"""
     admin = session.exec(
         select(User).where(User.tenant_id == TENANT_ID, User.username == ADMIN_USERNAME)
     ).first()
@@ -928,6 +948,7 @@ def _sync_seed_agents_to_current_admin(
 
 
 def _resource_ids_by_type(rows: Iterable[JsonDict]) -> dict[str, set[str]]:
+    """把绑定行按 resource_type 聚成资源 ID 集合，供各写入步骤筛选。"""
     result: dict[str, set[str]] = {}
     for row in rows:
         resource_type = str(row.get("resource_type") or "")
@@ -940,6 +961,7 @@ def _resource_ids_by_type(rows: Iterable[JsonDict]) -> dict[str, set[str]]:
 def _mapped_resource_id(
     resource_type: str, source_id: str, id_maps: dict[str, dict[str, str]]
 ) -> str | None:
+    """把 fixture 里的资源源 ID 翻译成落库后的 ID；不支持的类型返回 None。"""
     map_key = {
         "skill": "skill",
         "general_skill": "general_skill",
@@ -952,6 +974,7 @@ def _mapped_resource_id(
 
 
 def _agent_metadata(value: Any) -> JsonDict:
+    """生成 Agent 种子元数据：打上画廊发布标记，并清除共享作用域与可见性字段。"""
     metadata = _seed_metadata(value)
     metadata.update(
         {
@@ -969,6 +992,7 @@ def _agent_metadata(value: Any) -> JsonDict:
 
 
 def _open_gallery_seed_metadata(value: Any) -> JsonDict:
+    """在开放画廊元数据上补 seed_source 与 managed_by_seed，便于日后识别种子资源。"""
     metadata = open_gallery_metadata(_seed_metadata(value))
     metadata["seed_source"] = SEED_SOURCE
     metadata["managed_by_seed"] = True
@@ -976,6 +1000,7 @@ def _open_gallery_seed_metadata(value: Any) -> JsonDict:
 
 
 def _seed_metadata(value: Any) -> JsonDict:
+    """把任意 JSON 值规范成字典，并覆盖写入 admin 作为 owner/creator 的归属字段。"""
     metadata = _json_object(value)
     metadata.update(
         {
@@ -997,6 +1022,7 @@ def _seed_update_target(
     existing_by_key: ModelT | None,
     source_id: str,
 ) -> ModelT | None:
+    """决定本行该更新哪条已有记录；未受种子管理的记录返回 None，以免覆盖用户数据。"""
     if (
         existing_by_id is not None
         and existing_by_key is not None
@@ -1010,6 +1036,7 @@ def _seed_update_target(
 
 
 def _is_seed_managed(row: object, source_id: str) -> bool:
+    """判断记录是否由种子创建：ID 与源 ID 相同，或元数据带有种子标记。"""
     if getattr(row, "id", None) == source_id:
         return True
     metadata = getattr(row, "metadata_json", None) or {}
@@ -1019,6 +1046,7 @@ def _is_seed_managed(row: object, source_id: str) -> bool:
 
 
 def _json_object(value: Any) -> JsonDict:
+    """把 dict 或 JSON 字符串安全解析成 dict，非法输入一律返回空 dict。"""
     if isinstance(value, dict):
         return dict(value)
     if isinstance(value, str) and value.strip():
@@ -1031,6 +1059,7 @@ def _json_object(value: Any) -> JsonDict:
 
 
 def _json_list(value: Any) -> list[Any]:
+    """把 list 或 JSON 字符串安全解析成 list，非法输入一律返回空 list。"""
     if isinstance(value, list):
         return list(value)
     if isinstance(value, str) and value.strip():
@@ -1043,6 +1072,7 @@ def _json_list(value: Any) -> list[Any]:
 
 
 def _parse_datetime(value: Any) -> datetime | None:
+    """把 datetime 或 ISO 8601 字符串转成 datetime，无法解析时返回 None。"""
     if isinstance(value, datetime):
         return value
     if isinstance(value, str) and value.strip():
@@ -1054,5 +1084,6 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 
 def _apply_payload(row: Any, payload: JsonDict) -> None:
+    """把 payload 中的每个键值对逐个 setattr 到目标 ORM 记录上。"""
     for key, value in payload.items():
         setattr(row, key, value)

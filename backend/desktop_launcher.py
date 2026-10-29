@@ -39,6 +39,7 @@ LARK_PACKAGING_SMOKE_IMPORTS = (
 
 
 def build_server_config() -> dict:
+    """汇总启动配置:ASGI 应用引用、监听地址、可用端口与公网 URL。"""
     host = os.environ.get("ULTRARAG_HOST", "127.0.0.1")
     return {
         "app": "single_port_app:app",
@@ -49,16 +50,19 @@ def build_server_config() -> dict:
 
 
 def _network_config_path() -> Path:
+    """返回用户数据目录下 network.json 的路径。"""
     return Path(user_data_dir()) / "network.json"
 
 
 def user_data_dir() -> Path:
+    """返回平台对应的 StaffDeck 用户数据目录。"""
     from app import paths
 
     return paths.user_data_dir()
 
 
 def _load_network_config() -> dict[str, str]:
+    """读取已保存的网络配置;文件缺失或内容损坏时返回空配置。"""
     try:
         payload = json.loads(_network_config_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -67,6 +71,7 @@ def _load_network_config() -> dict[str, str]:
 
 
 def _save_network_config(mode: str, host: str, port: int, public_url: str = "") -> Path:
+    """校验网络模式后写入模式、监听地址、端口与公网 URL,并返回配置路径。"""
     if mode not in NETWORK_MODES:
         raise ValueError(f"网络模式必须是 local、lan 或 public，当前为 {mode!r}")
     if mode == "local":
@@ -86,6 +91,7 @@ def _save_network_config(mode: str, host: str, port: int, public_url: str = "") 
 
 
 def _infer_public_url(port: int) -> str:
+    """用主机名或默认路由出口 IP 推断局域网可访问的 URL,推断不出时返回空串。"""
     candidates: list[str] = []
     try:
         candidates.append(socket.gethostbyname(socket.gethostname()))
@@ -111,7 +117,7 @@ def _infer_public_url(port: int) -> str:
 
 
 def _apply_network_config(argv: list[str]) -> list[str]:
-    """Apply persisted/CLI network settings before importing the ASGI app."""
+    """在导入 ASGI 应用前把命令行与已保存配置写入环境变量,并返回剩余参数。"""
     saved = _load_network_config()
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--mode", choices=sorted(NETWORK_MODES))
@@ -139,6 +145,7 @@ def _apply_network_config(argv: list[str]) -> list[str]:
 
 
 def _setup_network(argv: list[str]) -> int:
+    """执行 setup 子命令:按参数或交互选择网络模式并落盘配置,返回退出码。"""
     parser = argparse.ArgumentParser(prog="staffdeck setup", description="配置 StaffDeck 网络访问方式")
     parser.add_argument("--mode", choices=sorted(NETWORK_MODES), help="local、lan 或 public")
     parser.add_argument("--port", type=int, default=5173)
@@ -165,6 +172,7 @@ def _setup_network(argv: list[str]) -> int:
 
 
 def _redirect_logs_when_frozen() -> None:
+    """打包态下把日志重定向到运行时日志文件,开发态直接跳过。"""
     if not getattr(sys, "frozen", False):
         return
     try:
@@ -176,6 +184,7 @@ def _redirect_logs_when_frozen() -> None:
 
 
 def _run_packaging_smoke() -> int:
+    """校验 lark-channel-sdk 版本与关键符号,供发布前打包冒烟检查。"""
     from feishu_connector_worker import SDK_CONTRACT_VERSION
 
     actual_version = importlib_metadata.version("lark-channel-sdk")
@@ -192,6 +201,7 @@ def _run_packaging_smoke() -> int:
 
 
 def apply_runtime_env(cfg: dict | None = None) -> None:
+    """在导入 app.* 之前写入 TOOL_BASE_URL、CORS 与 .env 路径等运行时环境变量。"""
     # 时序契约：必须在任何 app.config 被 import 之前调用；仅 frozen 态断言，
     # 开发/测试进程通常已 import 过 app.config，无条件断言会误炸。
     if getattr(sys, "frozen", False):
@@ -212,12 +222,14 @@ def apply_runtime_env(cfg: dict | None = None) -> None:
 
 
 def port_in_use(host: str, port: int) -> bool:
+    """探测指定主机端口是否已可建立 TCP 连接。"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.5)
         return sock.connect_ex((host, port)) == 0
 
 
 def _env_int(name: str, default: int) -> int:
+    """读取整数型环境变量:缺省时用默认值,非法值抛 RuntimeError。"""
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
@@ -228,6 +240,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _port_candidates() -> list[int]:
+    """返回候选端口列表,显式端口排最前,区间起止写反时自动纠正。"""
     start = _env_int("ULTRARAG_PORT_RANGE_START", DEFAULT_PORT_RANGE_START)
     end = _env_int("ULTRARAG_PORT_RANGE_END", DEFAULT_PORT_RANGE_END)
     if start > end:
@@ -242,6 +255,7 @@ def _port_candidates() -> list[int]:
 
 
 def find_available_port(host: str) -> int:
+    """返回候选端口里第一个未占用的端口,全部占用时抛 RuntimeError。"""
     for port in _port_candidates():
         if not port_in_use(host, port):
             return port
@@ -250,6 +264,7 @@ def find_available_port(host: str) -> int:
 
 
 def _resource_path(*parts: str) -> str | None:
+    """按解压目录、可执行文件旁、源码目录的顺序查找随包资源,找不到返回 None。"""
     candidates: list[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
@@ -269,10 +284,12 @@ def _resource_path(*parts: str) -> str | None:
 
 
 def _staffdeck_icon_png_path() -> str | None:
+    """返回应用图标 PNG 的绝对路径,资源缺失时返回 None。"""
     return _resource_path(*STAFFDECK_ICON_PNG)
 
 
 def _health_ok(url: str) -> bool:
+    """请求 /api/health,判断该地址是否为健康的 StaffDeck 实例。"""
     import urllib.request
 
     try:
@@ -284,6 +301,7 @@ def _health_ok(url: str) -> bool:
 
 
 def _find_existing_app_url(host: str) -> str | None:
+    """扫描候选端口,返回第一个通过健康检查的已运行实例地址。"""
     for port in _port_candidates():
         if not port_in_use(host, port):
             continue
@@ -294,6 +312,7 @@ def _find_existing_app_url(host: str) -> str | None:
 
 
 def _wait_for_existing_app_url(host: str, attempts: int = 20, delay: float = 0.3) -> str | None:
+    """轮询等待已运行实例就绪,超时返回 None。"""
     for _ in range(attempts):
         url = _find_existing_app_url(host)
         if url:
@@ -303,6 +322,7 @@ def _wait_for_existing_app_url(host: str, attempts: int = 20, delay: float = 0.3
 
 
 def _acquire_macos_instance_lock() -> bool:
+    """用临时文件锁保证 macOS 只跑一个桌面实例;非 Dock 模式直接返回成功。"""
     if not _use_macos_dock_app():
         return True
 
@@ -328,6 +348,7 @@ def _acquire_macos_instance_lock() -> bool:
 
 
 def _open_browser_when_ready(url: str) -> None:
+    """轮询健康检查,服务就绪后用浏览器打开 chat 页面。"""
     for _ in range(120):
         if _health_ok(url):
             _open_browser(url + "/chat/")
@@ -336,12 +357,12 @@ def _open_browser_when_ready(url: str) -> None:
 
 
 def _open_browser(target: str) -> None:
-    """Open StaffDeck in the system browser on platforms without an embedded window."""
+    """在没有内嵌窗口的平台上用系统默认浏览器打开指定地址。"""
     webbrowser.open(target)
 
 
 def _is_external_web_url(target: str, local_url: str) -> bool:
-    """Return whether a web URL should leave the embedded StaffDeck window."""
+    """判断目标地址是否属于内嵌窗口之外的站点,需交系统浏览器打开。"""
     target_parts = urlsplit(target)
     local_parts = urlsplit(local_url)
     if target_parts.scheme not in {"http", "https"} or not target_parts.hostname:
@@ -359,6 +380,7 @@ def _is_external_web_url(target: str, local_url: str) -> bool:
 
 
 def _four_char_code(value: str) -> int:
+    """把四字符标识打包成 Apple Event 使用的 32 位整数。"""
     result = 0
     for byte in value.encode("macroman"):
         result = (result << 8) | byte
@@ -366,6 +388,7 @@ def _four_char_code(value: str) -> int:
 
 
 def _use_macos_dock_app() -> bool:
+    """判断当前是否为 macOS 打包态且未开启 headless。"""
     if _env_flag("STAFFDECK_HEADLESS"):
         return False
     # 仅 macOS 打包态用 Cocoa 壳和内嵌 WebView。
@@ -373,22 +396,26 @@ def _use_macos_dock_app() -> bool:
 
 
 def _use_windows_taskbar_app() -> bool:
+    """判断当前是否为 Windows 打包态且未开启 headless。"""
     if _env_flag("STAFFDECK_HEADLESS"):
         return False
     return sys.platform == "win32" and getattr(sys, "frozen", False)
 
 
 def _env_flag(name: str) -> bool:
+    """按 1/true/yes/on 解析布尔型环境变量。"""
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _is_windows_restore_command(message: int, wparam: int) -> bool:
+    """判断窗口消息是否为任务栏点击触发的还原命令。"""
     wm_syscommand = 0x0112
     sc_restore = 0xF120
     return message == wm_syscommand and (wparam & 0xFFF0) == sc_restore
 
 
 def _serve(cfg: dict) -> None:
+    """按打包态选择日志配置启动 uvicorn,运行 ASGI 服务。"""
     import uvicorn
 
     if getattr(sys, "frozen", False):
@@ -410,7 +437,7 @@ def _serve(cfg: dict) -> None:
 
 
 def _macos_drag_region_frame(width: float, height: float) -> tuple[float, float, float, float]:
-    """Keep native dragging on the empty top center without covering web controls."""
+    """计算窗口顶部中间的拖动区域,避开网页控件又保留原生拖动。"""
     origin_x = min(width, MACOS_DRAG_REGION_LEFT_INSET)
     right_edge = max(origin_x, width - MACOS_DRAG_REGION_RIGHT_INSET)
     return (
@@ -422,6 +449,7 @@ def _macos_drag_region_frame(width: float, height: float) -> tuple[float, float,
 
 
 def _point_is_in_macos_drag_region(x: float, y: float, width: float, height: float) -> bool:
+    """判断窗口坐标是否落在顶部拖动区域内。"""
     origin_x, origin_y, region_width, region_height = _macos_drag_region_frame(width, height)
     return (
         origin_x <= x < origin_x + region_width
@@ -430,6 +458,7 @@ def _point_is_in_macos_drag_region(x: float, y: float, width: float, height: flo
 
 
 def preload_server_app(cfg: dict) -> None:
+    """预导入 ASGI 应用,把配置里的字符串引用替换成真实对象。"""
     app_ref = cfg.get("app")
     if not isinstance(app_ref, str):
         return
@@ -441,7 +470,7 @@ def preload_server_app(cfg: dict) -> None:
 
 
 def _create_macos_webview_window(AppKit, Foundation, WebKit, target: str):
-    """Create the native macOS window used by both arm64 and x86_64 bundles."""
+    """创建 arm64 与 x86_64 包共用的原生 macOS 窗口,返回窗口与内嵌 WebView。"""
     try:
         import objc
     except ImportError:
@@ -456,7 +485,9 @@ def _create_macos_webview_window(AppKit, Foundation, WebKit, target: str):
     if _MACOS_WINDOW_CLASS is None:
 
         class StaffDeckWindow(AppKit.NSWindow):
+            """自定义 NSWindow:在顶部空白区接管左键拖动,双击时缩放。"""
             def sendEvent_(self, event):  # noqa: N802
+                """拖动区域内把左键转为窗口拖动或缩放,其余事件交回系统处理。"""
                 if event.type() == AppKit.NSEventTypeLeftMouseDown:
                     location = event.locationInWindow()
                     size = self.contentView().bounds().size
@@ -515,7 +546,7 @@ def _create_macos_webview_window(AppKit, Foundation, WebKit, target: str):
 
 
 def _create_macos_main_menu(AppKit, app_delegate):
-    """Create the standard app and edit menus used by the native macOS shell."""
+    """构建原生 macOS 外壳使用的标准应用菜单与编辑菜单。"""
     main_menu = AppKit.NSMenu.alloc().initWithTitle_(APP_NAME)
 
     app_menu_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -587,7 +618,7 @@ def _create_macos_main_menu(AppKit, app_delegate):
 
 
 def _run_macos_dock_app(cfg: dict, url: str) -> int:
-    """Run the local service behind a native WKWebView window on macOS."""
+    """在 macOS 上用原生 WKWebView 窗口承载本地服务,并进入 Cocoa 事件循环。"""
     import AppKit
     import Foundation
     import WebKit
@@ -596,6 +627,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
     global _MACOS_DELEGATE_REF
 
     def load_app_icon(point_size: float | None = None):
+        """加载随包图标,可按需缩放到指定点数,缺失时返回 None。"""
         icon_path = _staffdeck_icon_png_path()
         if not icon_path:
             return None
@@ -605,12 +637,14 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
         return image
 
     class WebViewNavigationDelegate(AppKit.NSObject):
+        """决定 WebView 导航去向:站外链接交系统浏览器,站内继续内嵌加载。"""
         def webView_decidePolicyForNavigationAction_decisionHandler_(  # noqa: N802
             self,
             _webview,
             navigation_action,
             decision_handler,
         ):
+            """站外 http(s) 地址取消内嵌导航并外部打开,其余导航放行。"""
             request_url = navigation_action.request().URL()
             target = str(request_url.absoluteString()) if request_url is not None else ""
             if _is_external_web_url(target, url):
@@ -620,7 +654,9 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             decision_handler(WebKit.WKNavigationActionPolicyAllow)
 
     class AppDelegate(AppKit.NSObject):
+        """macOS 应用代理:启动服务、装状态栏菜单、管理窗口与 Dock 图标。"""
         def applicationDidFinishLaunching_(self, _notification):  # noqa: N802
+            """启动完成后初始化状态、注册 URL Scheme 与状态栏菜单并启动服务。"""
             self.dock_visible = True
             self.server_started = False
             self.main_window = None
@@ -631,30 +667,37 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             print(f"{APP_NAME} 启动中，就绪后将显示应用窗口：{url}/chat/")
 
         def handleGetURLEvent_withReplyEvent_(self, event, _reply_event):  # noqa: N802
+            """处理 staffdeck:// 唤起事件,打印地址并在服务就绪后显示窗口。"""
             direct_object = event.descriptorForKeyword_(_four_char_code("----"))
             deep_link = direct_object.stringValue() if direct_object is not None else ""
             print(f"收到 {APP_NAME} URL Scheme 唤起：{deep_link or '<empty>'}")
             self._show_window_when_ready()
 
         def applicationShouldHandleReopen_hasVisibleWindows_(self, _app, _flag):  # noqa: N802
+            """点击 Dock 图标时重新显示主窗口并返回 True。"""
             self.showMainWindow_(url + "/chat/")
             return True
 
         def applicationShouldTerminateAfterLastWindowClosed_(self, _app):
+            """关闭最后一个窗口后不退出应用,服务继续后台运行。"""
             return False
 
         def applicationShouldTerminate_(self, _app):  # noqa: N802
+            """同意退出请求,交给系统立即终止进程。"""
             return AppKit.NSTerminateNow
 
         def applicationDockMenu_(self, _sender):  # noqa: N802
+            """右键 Dock 图标时构建并返回控制菜单。"""
             # 右键 Dock 图标时展示同一套控制入口。
             self.dock_context_menu, self.dock_context_dock_item = self._build_control_menu()
             return self.dock_context_menu
 
         def openStaffDeck_(self, _sender):  # noqa: N802
+            """菜单项入口:打开 StaffDeck 主窗口。"""
             self.showMainWindow_(url + "/chat/")
 
         def showMainWindow_(self, target):
+            """懒建主窗口与导航代理,已存在时仅前置并激活。"""
             if self.main_window is None:
                 self.main_window, self.main_webview = _create_macos_webview_window(
                     AppKit,
@@ -669,9 +712,11 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
 
         def restartStaffDeck_(self, _sender):  # noqa: N802
+            """用当前解释器与启动参数重新执行进程以重启服务。"""
             os.execv(sys.executable, [sys.executable] + sys.argv[1:])
 
         def toggleDockIcon_(self, _sender):  # noqa: N802
+            """在显示与隐藏 Dock 图标间切换,并同步状态栏菜单标题。"""
             app = AppKit.NSApplication.sharedApplication()
             if self.dock_visible:
                 app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
@@ -686,6 +731,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
                     self.status_dock_item.setTitle_("隐藏 Dock 图标")
 
         def showAbout_(self, _sender):  # noqa: N802
+            """弹出关于对话框,展示版本号与本地服务地址。"""
             alert = AppKit.NSAlert.alloc().init()
             alert.setMessageText_(APP_NAME)
             alert.setInformativeText_(f"版本：{APP_VERSION}\n本地服务：{url}")
@@ -693,9 +739,11 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             alert.runModal()
 
         def quitStaffDeck_(self, _sender):  # noqa: N802
+            """菜单项入口:终止应用。"""
             AppKit.NSApplication.sharedApplication().terminate_(self)
 
         def _start_server(self) -> None:
+            """在后台线程启动 uvicorn 以免阻塞事件循环,且只启动一次。"""
             if self.server_started:
                 return
             self.server_started = True
@@ -705,7 +753,9 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             self._show_window_when_ready()
 
         def _show_window_when_ready(self) -> None:
+            """起后台线程等待服务就绪,再回主线程显示窗口。"""
             def wait_and_show() -> None:
+                """轮询健康检查,就绪后切回主线程显示主窗口。"""
                 for _ in range(120):
                     if _health_ok(url):
                         AppHelper.callAfter(self.showMainWindow_, url + "/chat/")
@@ -715,6 +765,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             threading.Thread(target=wait_and_show, daemon=True).start()
 
         def _install_url_scheme_handler(self) -> None:
+            """注册 Apple Event 处理器,接收 staffdeck:// URL Scheme 唤起。"""
             manager = AppKit.NSAppleEventManager.sharedAppleEventManager()
             manager.setEventHandler_andSelector_forEventClass_andEventID_(
                 self,
@@ -724,6 +775,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             )
 
         def _menu_item(self, title: str, action: str | None = None, enabled: bool = True):
+            """创建一个菜单项,可选指定动作与启用状态。"""
             item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
             item.setEnabled_(enabled)
             if action:
@@ -732,9 +784,11 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             return item
 
         def _dock_toggle_title(self) -> str:
+            """按 Dock 当前可见状态返回对应的切换标题。"""
             return "隐藏 Dock 图标" if self.dock_visible else "显示 Dock 图标"
 
         def _build_control_menu(self):
+            """构建含状态、版本、端口与操作项的控制菜单,同时返回 Dock 切换项。"""
             menu = AppKit.NSMenu.alloc().initWithTitle_(APP_NAME)
             menu.addItem_(self._menu_item("状态：运行中", enabled=False))
             menu.addItem_(self._menu_item(f"版本：{APP_VERSION}", enabled=False))
@@ -750,6 +804,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             return menu, dock_item
 
         def _install_status_menu(self) -> None:
+            """创建状态栏图标(优先用应用图标)并挂上控制菜单。"""
             self.status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
                 AppKit.NSSquareStatusItemLength
             )
@@ -785,7 +840,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
 
 
 def _run_windows_taskbar_app(cfg: dict, url: str) -> int:
-    """Run the server behind a native window so StaffDeck owns a taskbar icon."""
+    """用原生窗口承载服务,让 StaffDeck 在 Windows 任务栏拥有独立图标。"""
     import ctypes
     from ctypes import wintypes
 
@@ -813,6 +868,7 @@ def _run_windows_taskbar_app(cfg: dict, url: str) -> int:
     )
 
     class WNDCLASSW(ctypes.Structure):
+        """Windows 窗口类结构体,声明窗口过程、图标、光标与背景等字段。"""
         _fields_ = [
             ("style", wintypes.UINT),
             ("lpfnWndProc", WNDPROC),
@@ -879,6 +935,7 @@ def _run_windows_taskbar_app(cfg: dict, url: str) -> int:
 
     @WNDPROC
     def window_proc(hwnd, message, wparam, lparam):
+        """窗口过程:任务栏还原时打开浏览器,收到销毁消息时退出消息循环。"""
         if _is_windows_restore_command(message, wparam):
             print(f"Taskbar activated; opening {APP_NAME} in the system default browser.")
             _open_browser(url + "/chat/")
@@ -949,6 +1006,7 @@ def _run_windows_taskbar_app(cfg: dict, url: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """解析子命令与网络参数、处理单实例,再按平台选择原生外壳或纯服务启动。"""
     raw_args = list(sys.argv[1:] if argv is None else argv)
     if raw_args == ["--packaging-smoke"]:
         return _run_packaging_smoke()
@@ -995,6 +1053,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_frozen_safe_main() -> int:
+    """打包态入口:先初始化 multiprocessing.freeze_support,再调用 main。"""
     import multiprocessing
 
     multiprocessing.freeze_support()

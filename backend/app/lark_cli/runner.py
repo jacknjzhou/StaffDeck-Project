@@ -25,7 +25,10 @@ _SAFE_KEY_PATTERN = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 class LarkCliRunError(Exception):
+    """lark-cli 调用失败，携带稳定错误码 code 与可直接展示给用户的中文 message。"""
+
     def __init__(self, code: str, message: str) -> None:
+        """记录错误码与文案，并把文案同时作为 Exception 的消息。"""
         super().__init__(message)
         self.code = code
         self.message = message
@@ -33,6 +36,8 @@ class LarkCliRunError(Exception):
 
 @dataclass(frozen=True)
 class LarkCliResult:
+    """一次 lark-cli 调用的结果：退出码、双流输出与解析出的 JSON envelope。"""
+
     exit_code: int
     stdout: str
     stderr: str
@@ -40,6 +45,7 @@ class LarkCliResult:
 
 
 def user_home_dir(tenant_id: str, user_key: str) -> Path:
+    """取（必要时新建）该租户用户的专属 HOME，权限收紧到仅属主可读写执行。"""
     home = (
         paths.user_data_dir()
         / "lark_cli"
@@ -109,6 +115,11 @@ def run_lark_cli(
     stdin_text: str | None = None,
     redact: tuple[str, ...] = (),
 ) -> LarkCliResult:
+    """以最小环境和限时执行一次 lark-cli 命令。
+
+    超时会杀掉整个进程组并抛 LarkCliRunError(LARK_CLI_TIMEOUT)；两路输出各截断到
+    _MAX_OUTPUT_CHARS 并对 redact 中的密钥打码，再从输出里解析 JSON envelope。
+    """
     env = process_environment(home)
     process = subprocess.Popen(
         [str(binary), *argv],
@@ -164,6 +175,7 @@ def process_environment(home: Path) -> dict[str, str]:
 
 
 def _kill_process_tree(process: subprocess.Popen[str]) -> None:
+    """杀掉子进程及整个进程组；POSIX 用 killpg，失败或非 POSIX 退回 kill。"""
     if os.name == "posix":
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -203,6 +215,7 @@ def _parse_envelope(text: str) -> dict[str, object] | None:
 
 
 def _first_error_message(result: LarkCliResult) -> str | None:
+    """从 envelope.error.message 取第一条错误文案；结构不符时返回 None。"""
     envelope = result.envelope
     if isinstance(envelope, dict):
         error = envelope.get("error")
@@ -212,6 +225,7 @@ def _first_error_message(result: LarkCliResult) -> str | None:
 
 
 def _redact(text: str, secrets: tuple[str, ...]) -> str:
+    """把 secrets 中的非空值替换成 ***，避免密钥随输出进入日志或接口响应。"""
     for secret in secrets:
         if secret:
             text = text.replace(secret, "***")
@@ -219,5 +233,6 @@ def _redact(text: str, secrets: tuple[str, ...]) -> str:
 
 
 def _safe_component(value: str) -> str:
+    """把租户/用户键清洗成可作路径名的片段，空值回落 default，最长 80 字符。"""
     text = _SAFE_KEY_PATTERN.sub("_", str(value or "").strip()) or "default"
     return text[:80]

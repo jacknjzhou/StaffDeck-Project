@@ -4,6 +4,7 @@ import { Slot } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/** 按钮样式生成器：按 variant（外观）与 size（尺寸）组合输出 Tailwind 类名。 */
 const buttonVariants = cva(
   "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
@@ -41,6 +42,7 @@ const buttonVariants = cva(
   }
 )
 
+/** 通用按钮组件，支持 variant/size 变体；asChild 为真时把样式与行为下放给唯一子元素。 */
 const Button = React.forwardRef<
   HTMLButtonElement,
   React.ComponentProps<"button"> &

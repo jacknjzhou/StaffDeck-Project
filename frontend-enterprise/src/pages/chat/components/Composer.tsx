@@ -61,6 +61,12 @@ import {
 import type { UseChatSession } from '../useChatSession';
 import SlashCommandChip from './SlashCommandChip';
 
+/**
+ * 聊天输入区：负责输入框、附件、斜杠指令菜单、模型选择与发送/停止按钮。
+ *
+ * - 输入内容、附件与会话状态来自 useChatSession，组件只维护斜杠菜单等局部 UI 状态。
+ * - Enter 发送、Shift+Enter 换行，输入法组合输入期间不会误触发发送。
+ */
 export default function Composer({ chat }: { chat: UseChatSession }) {
   const { t } = useI18n();
   const {
@@ -111,6 +117,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
   const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [activeSlashCommand, setActiveSlashCommand] = useState<ChatSlashCommand | null>(null);
+  /** 根据当前输入实时过滤可用的斜杠指令，供下拉菜单展示。 */
   const slashMatches = useMemo(
     () => matchingSlashCommands(input, slashCommands),
     [input, slashCommands],
@@ -120,6 +127,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
   );
   const composerText = slashCommandComposerText(input, activeSlashCommand);
 
+  /** 输入变化后按内容重算 textarea 高度，最高 200px，超出部分在输入框内滚动。 */
   useEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
@@ -127,17 +135,20 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
     element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
   }, [input]);
 
+  /** 取消定时任务意图时，同步复位该意图标签的悬停/聚焦状态。 */
   useEffect(() => {
     if (composerIntent !== 'scheduled_task') {
       setScheduleIntentHovered(false);
     }
   }, [composerIntent]);
 
+  /** 输入变化时把斜杠菜单的选中项复位到首项，并清除「已关闭」标记。 */
   useEffect(() => {
     setSlashSelectionIndex(0);
     setSlashMenuDismissed(false);
   }, [input]);
 
+  /** 输入不再以已选指令开头（例如用户删改了指令）时，清空当前选中的斜杠指令。 */
   useEffect(() => {
     if (!activeSlashCommand) return;
     if (!input.startsWith(selectedSlashCommandText(activeSlashCommand))) {
@@ -145,6 +156,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
     }
   }, [activeSlashCommand, input]);
 
+  /** 让斜杠菜单跟随键盘选择滚动，保证当前高亮项始终在可视区域内。 */
   useEffect(() => {
     if (!slashMenuOpen) return;
     const menu = slashMenuRef.current;
@@ -160,6 +172,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
     );
   }, [slashMatches.length, slashMenuOpen, slashSelectionIndex]);
 
+  /** 选中第 index 个斜杠指令：写入输入框、关闭候选菜单并把焦点交还输入框。 */
   const selectSlashCommand = (index: number) => {
     const command = slashMatches[index];
     if (!command) return;
@@ -169,6 +182,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
+  /** 移除已选中的斜杠指令，把剩余正文还原到输入框并重新聚焦。 */
   const removeActiveSlashCommand = () => {
     if (!activeSlashCommand) return;
     setActiveSlashCommand(null);
@@ -179,6 +193,7 @@ export default function Composer({ chat }: { chat: UseChatSession }) {
   const hasSendContent = Boolean(input.trim() || readyComposerAttachments.length > 0);
   const sendDisabled = !hasSendContent || uploadingComposerAttachment;
 
+  /** 表单提交：阻止浏览器默认跳转并按当前输入异步发送消息。 */
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void send();

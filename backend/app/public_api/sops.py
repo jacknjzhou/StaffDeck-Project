@@ -49,10 +49,12 @@ router = APIRouter(tags=["sops"])
 
 
 def _draft_etag(content: dict[str, Any]) -> str:
+    """按草稿内容计算 ETag，用于 If-Match 并发控制。"""
     return etag_for(content)
 
 
 def _draft_payload(row: APISOPDraft) -> dict[str, Any]:
+    """把草稿行序列化为对外返回的字典，含 etag 与 ISO 时间戳。"""
     return {
         "id": row.id,
         "agent_id": row.agent_id,
@@ -72,6 +74,7 @@ def _draft_payload(row: APISOPDraft) -> dict[str, Any]:
 
 
 def _next_version(version: str | None) -> str:
+    """把基线版本号的补丁位加一，格式非法时回落到 1.0.0。"""
     parts = str(version or "0.0.0").split(".")
     try:
         major, minor, patch = (int(parts[index]) if index < len(parts) else 0 for index in range(3))
@@ -81,6 +84,7 @@ def _next_version(version: str | None) -> str:
 
 
 def _runtime_skill(db: Session, tenant_id: str, skill_id: str) -> Skill | None:
+    """按租户与 skill_id 取运行时技能记录，不存在时返回 None。"""
     return db.exec(
         select(Skill).where(Skill.tenant_id == tenant_id, Skill.skill_id == skill_id)
     ).first()
@@ -97,6 +101,11 @@ def _new_draft(
     warnings: list[str] | None = None,
     base_version: str | None = None,
 ) -> APISOPDraft:
+    """新建一份 SOP 草稿并落库。
+
+    先用 SkillCard 校验并规范化内容，再按基线版本或线上版本递增出版本号；
+    写入后返回已刷新的行，供路由层组装响应。
+    """
     card = SkillCard.model_validate(content)
     normalized = card.model_dump(mode="json")
     runtime = _runtime_skill(db, tenant_id, card.skill_id)
@@ -127,6 +136,10 @@ def _owned_draft(
     sop_id: str,
     draft_id: str | None = None,
 ) -> APISOPDraft:
+    """取出当前租户、员工与 SOP 下最新的草稿行，找不到时抛 404。
+
+    指定 draft_id 时只匹配该草稿，否则按 updated_at 取最近一条。
+    """
     statement = select(APISOPDraft).where(
         APISOPDraft.tenant_id == principal.tenant_id,
         APISOPDraft.agent_id == agent_id,
@@ -142,6 +155,7 @@ def _owned_draft(
 
 
 def _require_etag(row: APISOPDraft, if_match: str | None) -> None:
+    """校验 If-Match：缺失抛 428，与草稿 etag 不一致抛 412。"""
     if not if_match:
         raise PublicAPIError(428, "IF_MATCH_REQUIRED", "If-Match is required for this update.")
     if if_match != row.etag:
@@ -149,6 +163,11 @@ def _require_etag(row: APISOPDraft, if_match: str | None) -> None:
 
 
 def _validate_capability_refs(db: Session, row: APISOPDraft, card: SkillCard) -> list[dict[str, str]]:
+    """校验 SOP 节点引用的技能、知识库与工具在当前员工下是否可用。
+
+    逐个引用检查资源存在性、租户归属、激活状态与 AgentResourceBinding，
+    不可用的引用汇总成 CAPABILITY_UNAVAILABLE 字段错误返回。
+    """
     errors: list[dict[str, str]] = []
     type_models = {
         "general_skill": GeneralSkill,
@@ -192,6 +211,11 @@ def _validate_capability_refs(db: Session, row: APISOPDraft, card: SkillCard) ->
 
 
 def validate_draft(db: Session, row: APISOPDraft) -> dict[str, Any]:
+    """校验草稿内容并把结果写回 validation_json。
+
+    覆盖 Schema 校验、能力引用可用性与子 SOP 嵌套合法性，返回
+    valid/errors/warnings 结构并刷新校验时间。
+    """
     try:
         card = skill_card_from_persisted(row.content_json)
         field_errors: list[dict[str, str]] = _validate_capability_refs(db, row, card)
@@ -237,6 +261,7 @@ def list_sops(
     principal: PublicPrincipal = Depends(require_scopes("sops:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """列出该员工已发布的 SOP 与全部草稿（含未校验的）。"""
     enforce_agent_access(principal, agent_id)
     ensure_public_agent(db, principal, agent_id)
     published = internal_skills.list_skills(principal.tenant_id, db, agent_id)
@@ -262,6 +287,7 @@ def create_structured_sop(
     principal: PublicPrincipal = Depends(require_scopes("sops:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """按结构化内容创建 SOP 草稿，支持幂等重放并回填 ETag。"""
     enforce_agent_access(principal, agent_id, write=True)
     ensure_public_agent(db, principal, agent_id)
     replay = replay_idempotent_response(db, principal, request, body.model_dump(mode="json"))
@@ -302,6 +328,7 @@ def generate_sop(
     principal: PublicPrincipal = Depends(require_scopes("sops:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """提交 SOP 生成任务，实际蒸馏由后台作业处理器完成。"""
     enforce_agent_access(principal, agent_id, write=True)
     ensure_public_agent(db, principal, agent_id)
     replay = replay_idempotent_response(db, principal, request, body.model_dump(mode="json"))
@@ -322,6 +349,7 @@ def generate_sop(
 
 @register_job_handler("sop.generate")
 def execute_sop_generate(db: Session, job: APIJob) -> dict[str, Any]:
+    """sop.generate 作业处理器：蒸馏原始素材生成草稿，并返回工具建议。"""
     payload = dict(job.request_json or {})
     update_job(db, job, stage="learning", progress=0.15, event_type="sop.generate.learning")
     request = SkillDistillRequest(
@@ -356,6 +384,7 @@ def rewrite_sop(
     principal: PublicPrincipal = Depends(require_scopes("sops:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """提交 SOP 改写任务，以指定草稿或线上版本作为改写基线。"""
     enforce_agent_access(principal, agent_id, write=True)
     ensure_public_agent(db, principal, agent_id)
     replay = replay_idempotent_response(db, principal, request, body.model_dump(mode="json"))
@@ -388,6 +417,7 @@ def rewrite_sop(
 
 @register_job_handler("sop.rewrite")
 def execute_sop_rewrite(db: Session, job: APIJob) -> dict[str, Any]:
+    """sop.rewrite 作业处理器：按指令改写 SOP，返回新草稿与变更路径。"""
     payload = dict(job.request_json or {})
     update_job(db, job, stage="rewriting", progress=0.15, event_type="sop.rewrite.rewriting")
     request = SkillRewriteRequest(
@@ -430,6 +460,7 @@ def get_sop_draft(
     principal: PublicPrincipal = Depends(require_scopes("sops:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """读取指定草稿并回填当前 ETag。"""
     row = _owned_draft(db, principal, agent_id, sop_id, draft_id)
     response.headers["ETag"] = row.etag
     return _draft_payload(row)
@@ -446,6 +477,7 @@ def replace_sop_draft(
     principal: PublicPrincipal = Depends(require_scopes("sops:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """整体替换草稿内容，需通过 If-Match 校验且 skill_id 不可变更。"""
     enforce_agent_access(principal, agent_id, write=True)
     row = _owned_draft(db, principal, agent_id, sop_id, draft_id)
     _require_etag(row, if_match)
@@ -482,6 +514,7 @@ def patch_sop_draft(
     principal: PublicPrincipal = Depends(require_scopes("sops:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """以 JSON Patch 局部更新草稿，补丁或结果非法时返回 INVALID_JSON_PATCH。"""
     enforce_agent_access(principal, agent_id, write=True)
     row = _owned_draft(db, principal, agent_id, sop_id, draft_id)
     _require_etag(row, if_match)
@@ -513,6 +546,7 @@ def validate_sop_route(
     principal: PublicPrincipal = Depends(require_scopes("sops:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """对该草稿执行一次校验并返回校验结果。"""
     enforce_agent_access(principal, agent_id, write=True)
     row = _owned_draft(db, principal, agent_id, sop_id, draft_id)
     return validate_draft(db, row)
@@ -526,6 +560,7 @@ def publish_sop(
     principal: PublicPrincipal = Depends(require_scopes("sops:publish")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """校验并发布草稿：校验失败拒绝发布，成功后同步运行时技能版本。"""
     enforce_agent_access(principal, agent_id, write=True)
     row = _owned_draft(db, principal, agent_id, sop_id, body.draft_id)
     validation = validate_draft(db, row)
@@ -573,6 +608,7 @@ def archive_sop(
     principal: PublicPrincipal = Depends(require_scopes("sops:publish")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """归档该员工的 SOP 运行时技能并返回归档后的技能。"""
     enforce_agent_access(principal, agent_id, write=True)
     archived = internal_skills.archive_skill(
         sop_id,
@@ -591,6 +627,7 @@ def list_sop_versions(
     principal: PublicPrincipal = Depends(require_scopes("sops:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """列出该 SOP 的全部历史版本。"""
     enforce_agent_access(principal, agent_id)
     rows = internal_skills.list_skill_versions(sop_id, principal.tenant_id, db, agent_id)
     return {"data": [row.model_dump(mode="json", exclude={"tenant_id"}) for row in rows]}
@@ -603,6 +640,7 @@ def _version_payload(
     sop_id: str,
     version: str,
 ) -> dict[str, Any]:
+    """按版本号取出单个历史版本的内容，不存在时抛 404。"""
     rows = internal_skills.list_skill_versions(sop_id, principal.tenant_id, db, agent_id)
     for row in rows:
         if row.version == version:
@@ -618,11 +656,17 @@ def get_sop_version(
     principal: PublicPrincipal = Depends(require_scopes("sops:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """读取 SOP 指定版本的快照。"""
     enforce_agent_access(principal, agent_id)
     return _version_payload(db, principal, agent_id, sop_id, version)
 
 
 def _json_diff(before: Any, after: Any, path: str = "") -> list[dict[str, Any]]:
+    """递归比较两个 JSON 值，产出 RFC 6902 风格的变更列表。
+
+    字典按键合并递归比较，缺失键记为 add/remove，其余差异落到 replace；
+    路径片段的 ~ 与 / 按 JSON Pointer 规则转义。
+    """
     if before == after:
         return []
     if isinstance(before, dict) and isinstance(after, dict):
@@ -649,6 +693,7 @@ def diff_sop_version(
     principal: PublicPrincipal = Depends(require_scopes("sops:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """比较两个版本的内容差异并返回变更列表。"""
     before = _version_payload(db, principal, agent_id, sop_id, compare_to)
     after = _version_payload(db, principal, agent_id, sop_id, version)
     return {
@@ -667,6 +712,7 @@ def rollback_sop_version(
     principal: PublicPrincipal = Depends(require_scopes("sops:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """以历史版本内容新建草稿完成回滚，不直接改动线上版本。"""
     enforce_agent_access(principal, agent_id, write=True)
     selected = _version_payload(db, principal, agent_id, sop_id, version)
     row = _new_draft(

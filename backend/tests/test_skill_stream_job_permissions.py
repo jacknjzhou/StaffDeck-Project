@@ -7,6 +7,7 @@ from app.skills.stream_jobs import SkillStreamJobStore
 
 
 def _user(user_id: str, username: str, tenant_id: str = "tenant_demo") -> User:
+    """构造测试用 User 对象，便于按不同用户身份校验访问权限。"""
     return User(
         id=user_id,
         tenant_id=tenant_id,
@@ -16,6 +17,7 @@ def _user(user_id: str, username: str, tenant_id: str = "tenant_demo") -> User:
 
 
 def test_skill_stream_jobs_are_private_to_the_creating_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证流式任务只对创建者可见，其他用户（含跨租户）访问均返回 404。"""
     store = SkillStreamJobStore()
     owner = _user("user_owner", "owner")
     other = _user("user_other", "other")

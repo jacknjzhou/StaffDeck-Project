@@ -26,23 +26,31 @@ class Span:
 
 @dataclass
 class Heading:
+    """表示 ATX 标题块，level 为 1-6 的层级，spans 为标题内的行内片段。"""
+
     level: int
     spans: list[Span]
 
 
 @dataclass
 class Paragraph:
+    """表示普通段落块，spans 为合并后的行内片段。"""
+
     spans: list[Span]
 
 
 @dataclass
 class CodeBlock:
+    """表示代码块（围栏、缩进或顶格代码），language 未知时为空字符串。"""
+
     language: str
     text: str
 
 
 @dataclass
 class ListItem:
+    """表示单个列表项，ordered 区分有序/无序，index 为有序项序号。"""
+
     ordered: bool
     index: int
     spans: list[Span]
@@ -50,12 +58,15 @@ class ListItem:
 
 @dataclass
 class Quote:
+    """表示引用块，连续引用行已合并为一组 spans。"""
+
     spans: list[Span]
 
 
 @dataclass
 class ThematicBreak:
-    pass
+    """表示分隔线块，渲染时输出一条横线。"""
+
 
 
 @dataclass
@@ -337,6 +348,7 @@ def _parse_inline(text: str) -> list[Span]:
     code_segments: list[str] = []
 
     def _stash_code(match: re.Match[str]) -> str:
+        """把行内代码替换为占位符，原文按序暂存到 code_segments。"""
         code_segments.append(match.group(1))
         return f"\x00CODE{len(code_segments) - 1}\x00"
 
@@ -445,6 +457,10 @@ def render_feishu_post(blocks: list[Block]) -> dict:
 
 
 def _span_to_feishu_tag(span: Span) -> dict:
+    """把单个行内片段转成飞书 post 的 text/a 节点。
+
+    链接优先于代码样式；粗体、斜体合并写入 style 列表，代码以 style=["code"] 标记。
+    """
     styles = span.styles
     style_flags = []
     if "bold" in styles:
@@ -464,6 +480,7 @@ def _span_to_feishu_tag(span: Span) -> dict:
 
 
 def _spans_to_feishu_tags(spans: list[Span]) -> list[dict]:
+    """批量转换行内片段，跳过既无文本也无链接的空片段。"""
     tags: list[dict] = []
     for span in spans:
         if not span.text and not span.href:
@@ -473,6 +490,10 @@ def _spans_to_feishu_tags(spans: list[Span]) -> list[dict]:
 
 
 def _block_to_feishu_row(block: Block) -> list[dict] | None:
+    """按块类型生成飞书 post 的一行 tag；未知块类型返回 None。
+
+    标题统一加粗，引用加前缀竖线，列表补项目符号/序号，表格降级为纯文本行。
+    """
     if isinstance(block, Heading):
         tags = _spans_to_feishu_tags(block.spans)
         for tag in tags:
@@ -596,6 +617,7 @@ def split_markdown_by_lines(text: str, limit: int) -> list[str]:
         return 1 + len(fence_state[0])
 
     def _flush() -> None:
+        """把已累积的行收尾成一个 chunk；若正处围栏内则补上闭合围栏。"""
         nonlocal current_lines, current_len
         if not current_lines:
             return

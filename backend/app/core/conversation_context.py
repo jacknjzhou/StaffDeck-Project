@@ -20,6 +20,8 @@ SummaryBuilder = Callable[[str, str, int], str]
 
 @dataclass(frozen=True)
 class ConversationContextSettings:
+    """对话上下文压缩参数：token 预算、触发比例、近期轮数上限与两级摘要前缀。"""
+
     token_budget: int = DEFAULT_CONTEXT_TOKEN_BUDGET
     compaction_trigger_ratio: float = COMPACTION_TRIGGER_RATIO
     recent_round_limit: int = RECENT_ROUND_LIMIT
@@ -30,6 +32,11 @@ class ConversationContextSettings:
     medium_summary_prefix: str = MEDIUM_SUMMARY_PREFIX
 
     def normalized(self) -> ConversationContextSettings:
+        """返回各字段夹取到合法区间的副本，非法或缺失值回落到默认值。
+
+        token 预算上限 262144，触发比例限制在 0.10~0.95，近期轮数限制在 1~50，
+        两级摘要预算都不超过总预算；allowed_roles 只保留 user 与 assistant。
+        """
         token_budget = max(1, min(int(self.token_budget), 262_144))
         long_budget = max(1, min(int(self.long_summary_token_budget), token_budget))
         medium_budget = max(1, min(int(self.medium_summary_token_budget), token_budget))
@@ -58,6 +65,13 @@ def build_conversation_context(
     context_state: dict[str, Any] | None = None,
     summary_builder: SummaryBuilder | None = None,
 ) -> dict[str, object]:
+    """把历史消息压缩并裁剪成可放进一次模型调用的上下文。
+
+    先用 summarized_through_message_id 跳过已摘要部分，投影出摘要与近期消息；
+    估算 token 达到 token_budget * compaction_trigger_ratio 时，把较早的消息滚动
+    折叠进长期/近期摘要并推进游标；最后按预算整条丢弃或截断末条消息。
+    返回 messages、compacted_summary、context_state、metadata 四项。
+    """
     resolved = (settings or ConversationContextSettings()).normalized()
     if token_budget is not None:
         resolved = replace(resolved, token_budget=token_budget).normalized()
@@ -126,6 +140,7 @@ def build_conversation_context(
 
 
 def _normalize_state(value: dict[str, Any] | None) -> dict[str, Any]:
+    """把持久化的上下文状态收敛成固定的四个字段，缺失值补空串或 0。"""
     source = value if isinstance(value, dict) else {}
     return {
         "long_term_summary": str(source.get("long_term_summary") or "").strip(),
@@ -141,6 +156,10 @@ def _normalize_messages(
     messages: list[dict[str, Any]],
     allowed_roles: frozenset[str],
 ) -> list[dict[str, Any]]:
+    """过滤出允许角色且有正文的消息，并补齐内部 id 与时间字段。
+
+    只有 user 消息带 images 列表时才保留图片，其余内部字段一律不向外传递。
+    """
     normalized: list[dict[str, Any]] = []
     for index, message in enumerate(messages):
         role = str(message.get("role") or "").strip()
@@ -163,6 +182,11 @@ def _normalize_messages(
 def _messages_after_cursor(
     messages: list[dict[str, Any]], state: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], int]:
+    """返回游标之后尚未摘要的消息及已摘要条数。
+
+    游标在历史里找不到说明底层会话已被替换，此时清空两级摘要与计数，
+    从零开始重建，避免把旧摘要套到新历史上。
+    """
     cursor = str(state.get("summarized_through_message_id") or "")
     if not cursor:
         return messages, 0
@@ -182,6 +206,11 @@ def _project_messages(
     recent: list[dict[str, Any]],
     settings: ConversationContextSettings,
 ) -> list[dict[str, Any]]:
+    """把两级摘要与近期消息投影成模型可见的消息列表。
+
+    摘要以 user 角色插入在最前，缺某一级时补占位文案；近期消息只保留
+    role、content、images，内部埋点字段不外泄。
+    """
     projected: list[dict[str, Any]] = []
     long_summary = str(state.get("long_term_summary") or "").strip()
     medium_summary = str(state.get("medium_term_summary") or "").strip()
@@ -210,6 +239,7 @@ def _project_messages(
 
 
 def _public_message(message: dict[str, Any]) -> dict[str, Any]:
+    """只挑出 role、content、images 三个对外字段，丢掉其余内部元数据。"""
     return {
         key: value
         for key, value in message.items()
@@ -220,6 +250,10 @@ def _public_message(message: dict[str, Any]) -> dict[str, Any]:
 def _recent_rounds(
     messages: list[dict[str, Any]], round_limit: int
 ) -> list[dict[str, Any]]:
+    """按用户消息切出最近 round_limit 轮，连同其后的助手回复一起保留。
+
+    没有用户消息时退化为按条数取尾部；轮次不足时原样返回全部消息。
+    """
     user_indexes = [
         index for index, message in enumerate(messages) if message.get("role") == "user"
     ]
@@ -231,6 +265,7 @@ def _recent_rounds(
 
 
 def _joined_existing_history(state: dict[str, Any]) -> str:
+    """把长期与近期摘要用换行拼成一段历史文本，空摘要自动跳过。"""
     return "\n".join(
         value
         for value in (
@@ -247,6 +282,10 @@ def _summarize(
     token_budget: int,
     summary_builder: SummaryBuilder | None,
 ) -> str:
+    """优先用注入的 summary_builder 生成摘要，异常或空结果时回退到本地压缩。
+
+    无论走哪条路径，返回值都按 token_budget 截断；来源为空时直接返回空串。
+    """
     if not source.strip():
         return ""
     if summary_builder:
@@ -260,6 +299,7 @@ def _summarize(
 
 
 def _transcript(messages: list[dict[str, Any]]) -> str:
+    """把消息列表渲染成 `role: content` 的纯文本记录，供摘要使用。"""
     return "\n".join(
         f"{message['role']}: {' '.join(str(message['content']).split())}"
         for message in messages
@@ -267,6 +307,7 @@ def _transcript(messages: list[dict[str, Any]]) -> str:
 
 
 def _compact_transcript(source: str, token_budget: int) -> str:
+    """逐行累积到 token_budget 以内，最后再整体做一次截断兜底。"""
     lines = [" ".join(line.split()) for line in source.splitlines() if line.strip()]
     selected: list[str] = []
     for line in lines:
@@ -283,6 +324,10 @@ def _fit_projected_messages(
     token_budget: int,
     settings: ConversationContextSettings,
 ) -> list[dict[str, Any]]:
+    """在预算内修剪消息列表：先删最旧的消息，仍超预算就截断末条内容。
+
+    开头最多两条摘要消息受保护不删，并且始终至少保留一条消息。
+    """
     projected = list(messages)
     summary_count = sum(
         1
@@ -301,11 +346,13 @@ def _fit_projected_messages(
 
 
 def _trim_message(message: dict[str, Any], token_budget: int) -> dict[str, Any]:
+    """按给定预算截短单条消息的 content，role 等其它字段原样保留。"""
     content_budget = max(1, token_budget - _estimate_tokens(str(message["role"])) - 6)
     return {**message, "content": _trim_text_to_tokens(str(message["content"]), content_budget)}
 
 
 def _trim_text_to_tokens(text: str, token_budget: int) -> str:
+    """把文本截到 token 预算内；超长时按 UTF-8 字节安全截断并补省略号。"""
     if _estimate_tokens(text) <= token_budget:
         return text
     encoded = text.encode("utf-8")
@@ -315,20 +362,24 @@ def _trim_text_to_tokens(text: str, token_budget: int) -> str:
 
 
 def _messages_tokens(messages: list[dict[str, Any]]) -> int:
+    """累加一组消息的估算 token 数。"""
     return sum(_message_tokens(message) for message in messages)
 
 
 def _message_tokens(message: dict[str, Any]) -> int:
+    """估算单条消息的 token：role 与 content 各算一次，另加 6 的固定开销。"""
     return _estimate_tokens(str(message["role"])) + _estimate_tokens(
         str(message["content"])
     ) + 6
 
 
 def _estimate_tokens(text: str) -> int:
+    """按 UTF-8 字节数除以 4 粗估 token，最少记为 1。"""
     return max(1, math.ceil(len(text.encode("utf-8")) / 4))
 
 
 def _string_time(value: object) -> str | None:
+    """把时间对象或字符串规范成 ISO 文本；None 与空值返回 None。"""
     if value is None:
         return None
     isoformat = getattr(value, "isoformat", None)

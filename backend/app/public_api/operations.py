@@ -18,6 +18,7 @@ def list_audit_logs(
     principal: PublicPrincipal = Depends(require_scopes("audit:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """按创建时间倒序返回本租户最近 limit 条 API 审计日志，next_cursor 恒为空。"""
     rows = db.exec(
         select(APIAuditLog)
         .where(APIAuditLog.tenant_id == principal.tenant_id)
@@ -49,6 +50,7 @@ def get_usage(
     principal: PublicPrincipal = Depends(require_scopes("usage:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """汇总本租户的用量：审计请求数、平均耗时以及按状态分组的作业数量。"""
     request_count = db.exec(
         select(func.count(APIAuditLog.id)).where(APIAuditLog.tenant_id == principal.tenant_id)
     ).one()
@@ -73,6 +75,7 @@ def list_handoffs(
     principal: PublicPrincipal = Depends(require_scopes("operations:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """返回指定智能体最近 100 条人工转接请求；先校验凭证对该智能体的访问权限。"""
     enforce_agent_access(principal, agent_id)
     rows = db.exec(
         select(HumanHandoffRequest)
@@ -92,6 +95,7 @@ def list_feedback(
     principal: PublicPrincipal = Depends(require_scopes("operations:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """经该智能体名下的会话关联，返回最近 100 条消息反馈。"""
     enforce_agent_access(principal, agent_id)
     session_ids = select(ChatSession.id).where(
         ChatSession.tenant_id == principal.tenant_id,

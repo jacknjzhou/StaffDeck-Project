@@ -34,6 +34,7 @@ CALLBACK_TIMESTAMP_MAX_AGE_SECONDS = 5 * 60
 
 
 def _callback_signature(token: str, timestamp: str, nonce: str, ciphertext: str) -> str:
+    """计算微信客服回调签名：四个值字典序排序拼接后取 SHA1 十六进制摘要。"""
     values = sorted((token, timestamp, nonce, ciphertext))
     return hashlib.sha1("".join(values).encode("utf-8")).hexdigest()
 
@@ -45,6 +46,11 @@ def _verify_callback(
     nonce: str,
     ciphertext: str,
 ) -> None:
+    """校验回调的时间戳与签名，不通过时抛 403 的 HTTPException。
+
+    时间戳与服务器时间相差超过 5 分钟（含时钟超前）即拒绝，避免重放；
+    签名比较使用 hmac.compare_digest，保持常量时间。
+    """
     try:
         callback_timestamp = int(timestamp)
     except (TypeError, ValueError) as exc:
@@ -75,6 +81,10 @@ def _verify_callback(
 
 
 def _decrypt_callback_message(ciphertext: str, aes_key: str, corp_id: str) -> str:
+    """用 EncodingAESKey 解出回调明文，并校验 PKCS#7 填充与 receive_id。
+
+    任何格式异常都折算成 403，避免把底层解密细节暴露给调用方。
+    """
     try:
         key = base64.urlsafe_b64decode(aes_key + "=")
         if len(key) != 32:
@@ -100,6 +110,10 @@ def _decrypt_callback_message(ciphertext: str, aes_key: str, corp_id: str) -> st
 def _callback_binding(
     binding_id: str, *, allow_pending: bool = False
 ) -> tuple[ChannelBinding, dict[str, str]]:
+    """按 binding_id 取出微信客服绑定并解密其凭据；状态不符时抛 404。
+
+    allow_pending 为 True 时同时接受 pending 绑定，供回调 URL 校验阶段使用。
+    """
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         allowed_status = {"active"}
@@ -133,11 +147,13 @@ def verify_callback_url(
 
 
 def _xml_text(root: ET.Element, name: str) -> str:
+    """取 XML 子节点的去空白文本，节点不存在时返回空串。"""
     node = root.find(name)
     return str(node.text or "").strip() if node is not None else ""
 
 
 def _parse_callback_xml(data: str | bytes) -> ET.Element:
+    """解析回调 XML，禁止 DTD、实体与外部引用以阻断 XXE。"""
     return ET.fromstring(
         data,
         forbid_dtd=True,
@@ -147,6 +163,7 @@ def _parse_callback_xml(data: str | bytes) -> ET.Element:
 
 
 def _save_account_cursor(account_id: str, cursor: str) -> None:
+    """持久化客服账号的同步游标，同时把绑定标记为已连接并清除上次错误。"""
     with Session(engine) as db:
         account = db.get(WeChatKfAccount, account_id)
         if not account:
@@ -166,6 +183,7 @@ def _save_account_cursor(account_id: str, cursor: str) -> None:
 
 
 def _save_account_error(account_id: str, error: str) -> None:
+    """记录客服账号最近一次同步失败原因，只保留前 500 个字符。"""
     with Session(engine) as db:
         account = db.get(WeChatKfAccount, account_id)
         if not account:

@@ -6,6 +6,10 @@ from app.skills.skill_schema import SkillCard
 
 
 def skill_card_with_unique_step_ids(card: SkillCard) -> tuple[SkillCard, list[str]]:
+    """对技能卡的节点 ID 去重，并同步改写起点、终点与连线上的引用。
+
+    返回去重后的技能卡与修正说明列表；未发生改写时说明列表为空。
+    """
     content = card.model_dump(mode="json")
     nodes, warnings = ensure_unique_node_ids(content.get("nodes", []))
     id_map = {
@@ -32,6 +36,7 @@ def skill_card_with_unique_step_ids(card: SkillCard) -> tuple[SkillCard, list[st
 
 
 def ensure_unique_step_ids(steps: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """按 `step_id` 字段对步骤列表去重，返回归一化步骤与修正说明。"""
     return ensure_unique_node_ids(steps, id_field="step_id", label="步骤")
 
 
@@ -40,6 +45,11 @@ def ensure_unique_node_ids(
     id_field: str = "node_id",
     label: str = "节点",
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    """保证节点 ID 唯一：缺失的按序号补全，重复的追加数字后缀。
+
+    返回归一化后的节点列表与修正说明；列表中的非字典项会被直接丢弃，
+    修正说明只覆盖真正发生变化的条目。
+    """
     used: set[str] = set()
     normalized_nodes: list[dict[str, Any]] = []
     warnings: list[str] = []

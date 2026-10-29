@@ -31,10 +31,12 @@ const PYTHON_BUILTINS = new Set([
   'Exception', 'ValueError', 'TypeError',
 ]);
 
+/** 将非空纯文本片段追加到 token 列表，空字符串直接忽略。 */
 function appendPlain(tokens: CodeToken[], text: string) {
   if (text) tokens.push({ text, type: 'plain' });
 }
 
+/** 将 JSON 文本切分为属性名、字符串、布尔值、数字与标点 token。 */
 function tokenizeJson(code: string): CodeToken[] {
   const tokens: CodeToken[] = [];
   const pattern = /("(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}\[\]:,])/g;
@@ -60,6 +62,11 @@ function tokenizeJson(code: string): CodeToken[] {
   return tokens;
 }
 
+/**
+ * 按 Python 语法把源码切分为注释、字符串、数字、关键字、内建名等 token。
+ *
+ * `def`/`class` 之后的标识符会被标记为函数名；未命中的片段保持 plain。
+ */
 function tokenizePython(code: string): CodeToken[] {
   const tokens: CodeToken[] = [];
   const pattern = /(#.*$|"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*\b|[+\-*/%=<>!&|^~]+|[(){}\[\],.:;])/gm;
@@ -90,6 +97,7 @@ function tokenizePython(code: string): CodeToken[] {
   return tokens;
 }
 
+/** 将 Markdown 文本切分为标题、列表符号、行内代码、链接与数字 token。 */
 function tokenizeMarkdown(code: string): CodeToken[] {
   const tokens: CodeToken[] = [];
   const pattern = /(^#{1,6}\s.*$|^[-*+]\s+|^>\s.*$|`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^)]+\)|https?:\/\/[^\s)]+|\b\d+(?:\.\d+)?\b)/gm;
@@ -112,6 +120,7 @@ function tokenizeMarkdown(code: string): CodeToken[] {
   return tokens;
 }
 
+/** 按语言名分派到对应的分词器，未知语言回退为 Python 分词。 */
 function tokenize(code: string, language?: string): CodeToken[] {
   const normalized = (language || '').toLowerCase();
   if (['text', 'txt', 'log', 'stdout', 'stderr', 'plain'].includes(normalized)) return [{ text: code, type: 'plain' }];
@@ -121,6 +130,11 @@ function tokenize(code: string, language?: string): CodeToken[] {
   return tokenizePython(code);
 }
 
+/**
+ * 把源码渲染为带高亮 class 的 React 节点数组。
+ *
+ * 纯文本片段原样返回，其余片段包在 `span.code-token` 中交给外部样式上色。
+ */
 export function renderCodeTokens(code: string, language?: string) {
   const tokens = tokenize(code, language);
   return tokens.map((token, index): ReactNode => (
@@ -130,6 +144,7 @@ export function renderCodeTokens(code: string, language?: string) {
   ));
 }
 
+/** 代码块组件：按语言做轻量语法高亮，并在 `pre` 上透出 data-language。 */
 export default function CodeBlock({ code, language, className }: { code: string; language?: string; className?: string }) {
   return (
     <pre className={['code-block-vscode', className].filter(Boolean).join(' ')} data-language={language || undefined}>

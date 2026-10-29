@@ -24,10 +24,14 @@ _RUNTIME_PREPARE_LOCK = threading.RLock()
 
 
 class GeneralSkillRuntimeError(RuntimeError):
-    pass
+    """通用技能运行环境准备失败（创建 venv、安装依赖或依赖声明非法）时抛出。"""
 
 
 def ensure_runtime_python() -> Path:
+    """返回可用的通用技能解释器路径，必要时创建 venv 并按配置补齐依赖。
+
+    进程内用 RLock、跨进程用文件锁串行化准备过程，避免并发首次启动重复建环境。
+    """
     with _RUNTIME_PREPARE_LOCK:
         settings = get_settings()
         python_path = _resolve_runtime_python(
@@ -47,6 +51,7 @@ def runtime_environment(
     *,
     python_path: Path | None = None,
 ) -> dict[str, str]:
+    """在基础环境上注入通用技能运行环境：venv 的 bin 目录进 PATH，并导出解释器变量。"""
     python_path = python_path or ensure_runtime_python()
     env = dict(base_env or os.environ)
     bin_dir = python_path.parent
@@ -58,10 +63,12 @@ def runtime_environment(
 
 
 def _backend_dir() -> Path:
+    """返回 backend 目录，作为 pip 安装的工作目录与默认 venv 的定位基准。"""
     return Path(__file__).resolve().parents[2]
 
 
 def _bundled_python() -> Path:
+    """定位安装包内附带的 python-build-standalone 解释器，按平台区分目录布局。"""
     # 打包态：附带的 python-build-standalone 位置随平台不同。
     # - macOS .app：runtime 在 Contents/Resources/runtime（放 Resources 是为了 codesign 密封通过），
     #   sys.executable 在 Contents/MacOS/staffdeck，需跳到同级的 Resources。
@@ -76,6 +83,7 @@ def _bundled_python() -> Path:
 
 
 def _resolve_runtime_python(explicit_python: str, explicit_venv: str) -> Path:
+    """按「显式解释器 → 显式 venv → 打包内置 → backend/.venv → .runtime_venv」定序选择。"""
     if explicit_python.strip():
         return Path(explicit_python).expanduser()
     if explicit_venv.strip():
@@ -90,12 +98,14 @@ def _resolve_runtime_python(explicit_python: str, explicit_venv: str) -> Path:
 
 
 def _python_in_venv(venv_dir: Path) -> Path:
+    """返回 venv 内解释器的约定路径（Windows 在 Scripts/，其他平台在 bin/）。"""
     if sys.platform == "win32":
         return venv_dir / "Scripts" / "python.exe"
     return venv_dir / "bin" / "python"
 
 
 def _create_runtime_venv(python_path: Path) -> None:
+    """按解释器路径推导 venv 目录并创建带 pip 的虚拟环境，失败时抛错而不是静默跳过。"""
     venv_dir = python_path.parent.parent
     venv_dir.mkdir(parents=True, exist_ok=True)
     venv.EnvBuilder(with_pip=True, clear=False).create(venv_dir)
@@ -104,6 +114,10 @@ def _create_runtime_venv(python_path: Path) -> None:
 
 
 def _ensure_packages(python_path: Path, packages: list[str]) -> None:
+    """把缺失的依赖一次性装进运行环境；版本不满足或 import 名不可导入都算缺失。
+
+    安装失败时抛出带 pip stderr 的 GeneralSkillRuntimeError，便于定位网络或索引问题。
+    """
     settings = get_settings()
     requirements = [_parse_requirement(package) for package in packages]
     missing = [
@@ -143,6 +157,7 @@ def _ensure_packages(python_path: Path, packages: list[str]) -> None:
 
 
 def _can_import(python_path: Path, import_name: str) -> bool:
+    """在目标解释器里实际 import 一次，确认模块名可用（用于兜底发行名与导入名不一致）。"""
     result = subprocess.run(
         [
             str(python_path),
@@ -159,6 +174,7 @@ def _can_import(python_path: Path, import_name: str) -> bool:
 
 
 def _requirement_satisfied(python_path: Path, requirement: Requirement) -> bool:
+    """查已安装版本并比对 specifier；环境标记不适用于当前平台时按已满足处理。"""
     if requirement.marker is not None and not requirement.marker.evaluate():
         return True
     result = subprocess.run(
@@ -183,6 +199,7 @@ def _requirement_satisfied(python_path: Path, requirement: Requirement) -> bool:
 
 
 def _parse_requirement(value: str) -> Requirement:
+    """解析依赖声明，拒绝 URL 直链与非法写法，保证自动安装只走包索引。"""
     try:
         requirement = Requirement(value)
     except InvalidRequirement as exc:
@@ -193,12 +210,14 @@ def _parse_requirement(value: str) -> Requirement:
 
 
 def _import_name(package: str) -> str:
+    """把发行包名映射为可导入的模块名，未登记时把连字符换成下划线。"""
     normalized = package.strip()
     return IMPORT_NAMES.get(normalized, normalized.replace("-", "_"))
 
 
 @contextmanager
 def _runtime_prepare_file_lock(python_path: Path) -> Iterator[None]:
+    """以解释器路径哈希为名的用户级文件锁串行化建环境，跨进程避免并发写坏 venv。"""
     from app import paths
 
     digest = sha256(str(python_path.resolve()).encode("utf-8")).hexdigest()[:16]
@@ -213,6 +232,7 @@ def _runtime_prepare_file_lock(python_path: Path) -> Iterator[None]:
 
 
 def _lock_file(handle: BinaryIO) -> None:
+    """对已打开的文件句柄加独占锁；Windows 用 msvcrt，其他平台用 flock。"""
     if sys.platform == "win32":
         import msvcrt
 
@@ -229,6 +249,7 @@ def _lock_file(handle: BinaryIO) -> None:
 
 
 def _unlock_file(handle: BinaryIO) -> None:
+    """释放 _lock_file 取得的独占锁，调用方随后负责关闭句柄。"""
     if sys.platform == "win32":
         import msvcrt
 

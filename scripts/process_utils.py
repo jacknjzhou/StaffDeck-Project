@@ -7,7 +7,7 @@ import sys
 
 
 def pid_alive(pid: int, platform: str | None = None) -> bool:
-    """Return whether a process exists without sending it a signal on Windows."""
+    """判断进程是否存在；Windows 上改用 OpenProcess 查询，避免向其发送信号。"""
     platform = platform or sys.platform
     if platform != "win32":
         try:

@@ -25,6 +25,7 @@ from app.public_api.app import (
 
 
 def _make_engine() -> Any:
+    """构建共享单连接的 SQLite 引擎，保证审计 worker 与断言看到同一份库。"""
     # StaticPool keeps one shared connection: the audit worker opens its own
     # session, and a plain in-memory sqlite would hand it an empty database.
     engine = create_engine(
@@ -37,6 +38,7 @@ def _make_engine() -> Any:
 
 
 def _recorded_statements(engine: Any) -> list[str]:
+    """注册游标执行前监听器并返回语句列表，用于断言实际下发的 SQL。"""
     statements: list[str] = []
     event.listen(
         engine,
@@ -47,6 +49,7 @@ def _recorded_statements(engine: Any) -> list[str]:
 
 
 def _enqueue(engine: Any, request_id: str) -> None:
+    """向审计队列投递一条待写入记录，并附带记录所属的引擎。"""
     item: dict[str, object] = {
         "request_id": request_id,
         "method": "GET",
@@ -59,6 +62,7 @@ def _enqueue(engine: Any, request_id: str) -> None:
 
 
 def _written_row(engine: Any, request_id: str) -> APIAuditLog:
+    """按 request_id 取出已落库的审计行，供断言写入内容。"""
     with Session(engine) as db:
         return db.exec(
             select(APIAuditLog).where(APIAuditLog.request_id == request_id)  # type: ignore[arg-type,return-value]
@@ -66,6 +70,7 @@ def _written_row(engine: Any, request_id: str) -> APIAuditLog:
 
 
 def test_audit_write_skips_sqlite_pragma_on_other_dialects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证非 SQLite 方言下不再下发 PRAGMA，审计记录仍能正常写入数据库。"""
     engine = _make_engine()
     statements = _recorded_statements(engine)
     # Only the dialect label changes; the underlying connection stays sqlite so
@@ -82,6 +87,7 @@ def test_audit_write_skips_sqlite_pragma_on_other_dialects(monkeypatch: pytest.M
 
 
 def test_audit_write_keeps_sqlite_busy_guard() -> None:
+    """验证 SQLite 方言下仍保留 busy_timeout PRAGMA，审计记录正常写入。"""
     engine = _make_engine()
     statements = _recorded_statements(engine)
 

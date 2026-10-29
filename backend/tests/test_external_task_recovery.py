@@ -18,6 +18,7 @@ from test_external_business_tasks import _seed, _session
 
 
 def test_worker_recovers_from_exception_using_fresh_session(monkeypatch):
+    """验证轮询抛出异常后 worker 用新会话继续下一轮，不会退出。"""
     calls, sessions = [], []
     stop = threading.Event()
     monkeypatch.setattr(worker, "_stop_event", stop)
@@ -29,6 +30,7 @@ def test_worker_recovers_from_exception_using_fresh_session(monkeypatch):
     )
 
     def poll(db):
+        """模拟首次轮询抛错、第二次轮询时请求停止 worker。"""
         calls.append(db)
         if len(calls) == 1:
             raise RuntimeError("simulated transaction failure")
@@ -43,12 +45,14 @@ def test_worker_recovers_from_exception_using_fresh_session(monkeypatch):
 
 
 def test_worker_shutdown_does_not_spawn_overlapping_generation(monkeypatch):
+    """验证停止超时后重启不会产生重叠线程，仍复用原线程。"""
     entered, release = threading.Event(), threading.Event()
     monkeypatch.setattr(worker, "_thread", None)
     monkeypatch.setattr(worker, "_stop_event", threading.Event())
     monkeypatch.setattr(worker, "Session", lambda _: nullcontext(None))
 
     def poll(_):
+        """模拟阻塞中的轮询，用于观察停止超时后的线程复用。"""
         entered.set()
         assert release.wait(3)
 
@@ -67,9 +71,11 @@ def test_worker_shutdown_does_not_spawn_overlapping_generation(monkeypatch):
 
 @pytest.mark.parametrize("provider_id", [0, "0", 1])
 def test_http_200_task_id_without_status_is_polled_to_completion(monkeypatch, provider_id):
+    """验证响应只有 taskId 时先登记为 accepted，再轮询直到完成。"""
     submitted, urls = [], []
 
     def submit(*args, **kwargs):
+        """模拟提交接口返回成功但只带 taskId 的响应。"""
         submitted.append(1)
         return SimpleNamespace(
             status_code=200,
@@ -81,6 +87,7 @@ def test_http_200_task_id_without_status_is_polled_to_completion(monkeypatch, pr
         )
 
     def get(url, **kwargs):
+        """模拟状态查询接口返回已完成结果。"""
         urls.append(url)
         return httpx.Response(
             200, json={"status": "completed", "result": "done"}, request=httpx.Request("GET", url)
@@ -116,6 +123,7 @@ def test_http_200_task_id_without_status_is_polled_to_completion(monkeypatch, pr
 
 
 def test_one_poisoned_submission_does_not_block_other_queued_jobs(monkeypatch):
+    """验证单个任务提交抛错不会阻塞其它排队任务。"""
     with _session() as db:
         user, tool = _seed(db)
         executor = ToolExecutor(db)
@@ -128,6 +136,7 @@ def test_one_poisoned_submission_does_not_block_other_queued_jobs(monkeypatch):
         calls = []
 
         def execute(db, task):
+            """模拟执行本地任务：对指定任务抛错，其余任务置为完成。"""
             calls.append(task.id)
             if task.id == a:
                 raise RuntimeError("poisoned job")
@@ -142,6 +151,7 @@ def test_one_poisoned_submission_does_not_block_other_queued_jobs(monkeypatch):
 
 
 def test_resume_query_cannot_submit_pending_task_again():
+    """验证同一任务框架下重复调用复用已有任务，不会重复提交。"""
     with _session() as db:
         user, tool = _seed(db)
         executor = ToolExecutor(db)
@@ -166,6 +176,7 @@ def test_resume_query_cannot_submit_pending_task_again():
 
 
 def test_saved_tool_test_retries_use_same_request_id():
+    """验证工具测试重试使用同一 client_request_id，只产生一个任务。"""
     from app.api.tools import test_tool as invoke
     from app.agents.branching import ensure_open_gallery_binding
     from app.db.models import AgentProfile
@@ -185,6 +196,7 @@ def test_saved_tool_test_retries_use_same_request_id():
 
 
 def test_receipt_lookup_does_not_confuse_old_completion_with_new_submission():
+    """验证回执按 task_id 精确回溯，不会把旧完成记录当成本次提交。"""
     from app.core.harness_v2_engine import _external_task_for_result
 
     with _session() as db:
@@ -211,6 +223,7 @@ def test_receipt_lookup_does_not_confuse_old_completion_with_new_submission():
 
 
 def test_expired_queued_job_is_not_submitted(monkeypatch):
+    """验证已过期的排队任务直接标记为 expired，不再提交。"""
     with _session() as db:
         user, tool = _seed(db)
         db.add(

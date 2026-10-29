@@ -38,6 +38,7 @@ from app.db.models import (
 
 
 def _test_engine():
+    """创建内存 SQLite 测试引擎并建好全部表结构。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -48,6 +49,7 @@ def _test_engine():
 
 
 def _text_frame(**overrides) -> dict:
+    """构造一条企微回调帧，可用 overrides 覆盖 headers 或 body 字段。"""
     frame = {
         "cmd": "aibot_msg_callback",
         "headers": {"req_id": "req_1"},
@@ -70,6 +72,7 @@ def _text_frame(**overrides) -> dict:
 
 
 def _seed_wecom_binding(engine, **overrides) -> str:
+    """向测试库写入一条企微渠道绑定并返回其 id；overrides 可覆盖默认字段。"""
     with Session(engine) as db:
         if not db.get(Tenant, "tenant_demo"):
             db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -90,6 +93,7 @@ def _seed_wecom_binding(engine, **overrides) -> str:
 
 
 def _load_binding(engine, binding_id: str) -> ChannelBinding:
+    """从数据库读取绑定后解除会话关联，便于直接断言字段。"""
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)
         db.expunge(binding)
@@ -97,16 +101,21 @@ def _load_binding(engine, binding_id: str) -> ChannelBinding:
 
 
 def test_access_tokens_are_cached_per_binding_and_revision() -> None:
+    """验证 access_token 按绑定与配置版本缓存，仅当版本变化后才重新获取。"""
     calls: list[str] = []
 
     class TokenClient:
+        """模拟企微 token 接口的 HTTP 客户端，记录每次请求的 corpsecret。"""
         def __enter__(self):
+            """进入上下文管理器，返回自身以支持 with 语句。"""
             return self
 
         def __exit__(self, *_args):
-            return None
+            """退出上下文管理器，不抑制异常。"""
+            return
 
         def get(self, _url, *, params):
+            """记录本次请求的 secret 并返回固定格式的 token 响应。"""
             secret = params["corpsecret"]
             calls.append(secret)
             return SimpleNamespace(
@@ -152,6 +161,7 @@ def test_access_tokens_are_cached_per_binding_and_revision() -> None:
 
 
 def test_normalize_text_frame() -> None:
+    """验证文本帧归一化为私聊入站消息，并填充会话与上下文标识。"""
     inbound = normalize_wecom_frame(_text_frame())
     assert inbound is not None
     assert inbound.channel == "wecom"
@@ -164,6 +174,7 @@ def test_normalize_text_frame() -> None:
 
 
 def test_normalize_voice_frame_uses_transcript() -> None:
+    """验证语音帧用语音转写内容作为入站文本。"""
     frame = _text_frame(msgtype="voice", text=None, voice={"content": "我下午三点到"})
     inbound = normalize_wecom_frame(frame)
     assert inbound is not None
@@ -171,6 +182,7 @@ def test_normalize_voice_frame_uses_transcript() -> None:
 
 
 def test_normalize_image_and_file_frames() -> None:
+    """验证图片帧与文件帧分别归一化为对应类型的附件。"""
     image = normalize_wecom_frame(
         _text_frame(
             msgtype="image",
@@ -204,6 +216,7 @@ def test_normalize_image_and_file_frames() -> None:
 
 
 def test_normalize_mixed_frame_extracts_text_and_image() -> None:
+    """验证混合帧同时提取文本内容与图片附件。"""
     inbound = normalize_wecom_frame(
         _text_frame(
             msgtype="mixed",
@@ -229,6 +242,7 @@ def test_normalize_mixed_frame_extracts_text_and_image() -> None:
 
 
 def test_url_download_uses_content_disposition_filename(monkeypatch) -> None:
+    """验证 URL 下载优先采用 Content-Disposition 中的文件名。"""
     import app.channels
     import app.channels.adapters.wecom as wecom_module
     from app.channels.adapters.base import ChannelInboundAttachment
@@ -246,6 +260,7 @@ def test_url_download_uses_content_disposition_filename(monkeypatch) -> None:
     manager = SimpleNamespace(get_stream=lambda _binding_id: (object(), object()))
 
     def run_coroutine_threadsafe(coroutine, _loop):
+        """用预置结果替身替换跨线程协程调用，避免真正发起下载请求。"""
         coroutine.close()
         return SimpleNamespace(result=lambda timeout: (b"# document", "项目文档.md"))
 
@@ -263,6 +278,7 @@ def test_url_download_uses_content_disposition_filename(monkeypatch) -> None:
 
 
 def test_file_message_with_image_bytes_is_promoted_to_image(monkeypatch) -> None:
+    """验证文件消息下载出 PNG 内容后会被提升为图片附件。"""
     import app.channels.adapters.base as base_module
     import app.channels.attachment_bridge as bridge_module
     import app.session.attachment_store as attachment_store_module
@@ -295,6 +311,7 @@ def test_file_message_with_image_bytes_is_promoted_to_image(monkeypatch) -> None
     captured = {}
 
     def parse(filename, content_type, data):
+        """记录解析入参并返回图片类型的附件描述。"""
         captured.update(filename=filename, content_type=content_type, data=data)
         return ChatAttachmentRead(
             id="file-1",
@@ -326,6 +343,7 @@ def test_file_message_with_image_bytes_is_promoted_to_image(monkeypatch) -> None
 
 
 def test_wecom_replay_restores_attachment_dataclass() -> None:
+    """验证重放信封编码解码后仍能还原附件的 dataclass 结构。"""
     from app.channels.service_wecom_inbox import decode_wecom_replay_envelope, encode_wecom_replay_envelope
 
     inbound = normalize_wecom_frame(
@@ -339,6 +357,7 @@ def test_wecom_replay_restores_attachment_dataclass() -> None:
 
 
 def test_normalize_group_frame() -> None:
+    """验证群聊帧归一化出群会话标识、发送者名称与群标记。"""
     frame = _text_frame(
         chatid="wrQoP7CwAAA",
         chattype="group",
@@ -355,6 +374,7 @@ def test_normalize_group_frame() -> None:
 
 @pytest.mark.parametrize("mention", ["@StaffDeck", "@机器人", "<@bot-id>"])
 def test_normalize_group_frame_strips_leading_bot_mention(mention: str) -> None:
+    """验证群聊消息开头的 @机器人 提及会被剥离，仅保留命令正文。"""
     frame = _text_frame(
         chatid="wr_group",
         chattype="group",
@@ -366,6 +386,7 @@ def test_normalize_group_frame_strips_leading_bot_mention(mention: str) -> None:
 
 
 def test_normalize_single_frame_preserves_leading_mention() -> None:
+    """验证私聊消息保留开头的 @机器人 提及，不做剥离。"""
     inbound = normalize_wecom_frame(
         _text_frame(text={"content": "@StaffDeck /帮助"})
     )
@@ -374,6 +395,7 @@ def test_normalize_single_frame_preserves_leading_mention() -> None:
 
 
 def test_normalize_drops_self_and_invalid_frames() -> None:
+    """验证机器人自身消息与各类非法帧都会被过滤为空。"""
     self_frame = _text_frame(**{"from": {"userid": "aib_bot1"}})
     assert is_self_frame(self_frame) is True
     assert normalize_wecom_frame(self_frame) is None
@@ -389,12 +411,14 @@ def test_normalize_drops_self_and_invalid_frames() -> None:
 
 
 def test_event_id_falls_back_to_req_id() -> None:
+    """验证缺少 msgid 时事件 id 回退使用 req_id。"""
     frame = _text_frame(msgid=None, headers={"req_id": "req_fallback"})
     inbound = normalize_wecom_frame(frame)
     assert inbound is not None and inbound.event_id == "req_fallback"
 
 
 def test_wecom_callback_commits_inbox_before_return() -> None:
+    """验证回调在返回前已把入站事件提交到收件箱并进入处理队列。"""
     from app.channels.adapters.wecom import _StreamState
 
     engine = _test_engine()
@@ -421,6 +445,7 @@ def test_wecom_callback_commits_inbox_before_return() -> None:
 
 
 def test_wecom_callback_retries_inside_real_sdk_dispatch(monkeypatch) -> None:
+    """验证真实 SDK 分发路径下暂存失败会重试并最终写入收件箱。"""
     from aibot import MessageHandler
 
     import app.channels.service_wecom_inbox as inbox
@@ -437,6 +462,7 @@ def test_wecom_callback_retries_inside_real_sdk_dispatch(monkeypatch) -> None:
     attempts = {"count": 0}
 
     def flaky_stage(**kwargs):
+        """首次调用返回 NACK 以模拟暂存失败，之后转交真实实现。"""
         attempts["count"] += 1
         if attempts["count"] == 1:
             return StageResult(StageDisposition.NACK, error_code="inbox_database_error")
@@ -445,14 +471,18 @@ def test_wecom_callback_retries_inside_real_sdk_dispatch(monkeypatch) -> None:
     monkeypatch.setattr(inbox, "stage_wecom_inbound", flaky_stage)
 
     class Logger:
+        """静默日志替身，吞掉 SDK 处理过程中的全部日志输出。"""
         def warn(self, *_args):
-            return None
+            """吞掉 SDK 的 warn 日志。"""
+            return
 
         def error(self, *_args):
-            return None
+            """吞掉 SDK 的 error 日志。"""
+            return
 
         def debug(self, *_args):
-            return None
+            """吞掉 SDK 的 debug 日志。"""
+            return
 
     MessageHandler(Logger()).handle_frame(
         _text_frame(msgid="msg_retry"),
@@ -466,6 +496,7 @@ def test_wecom_callback_retries_inside_real_sdk_dispatch(monkeypatch) -> None:
 
 
 def test_wecom_inbox_retry_yields_to_global_shutdown(monkeypatch) -> None:
+    """验证全局停止后收件箱重试立即让出，不再入队。"""
     import app.channels.service_wecom_inbox as inbox
     from app.channels.adapters.wecom import _StreamState
 
@@ -489,6 +520,7 @@ def test_wecom_inbox_retry_yields_to_global_shutdown(monkeypatch) -> None:
 
 
 def test_wecom_durable_event_survives_secret_rotation() -> None:
+    """验证密钥轮换后已暂存的事件仍能照常处理完成。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(
         engine,
@@ -518,6 +550,7 @@ def test_wecom_durable_event_survives_secret_rotation() -> None:
 
 
 def test_wecom_stale_processing_event_is_recovered() -> None:
+    """验证租约过期的处理中事件会被回收并重新执行。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(
         engine,
@@ -547,6 +580,7 @@ def test_wecom_stale_processing_event_is_recovered() -> None:
 
 
 def test_wecom_stale_processing_event_recovers_after_binding_disabled() -> None:
+    """验证绑定被禁用后，租约过期事件依然能被回收完成。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(
         engine,
@@ -581,14 +615,18 @@ def test_wecom_stale_processing_event_recovers_after_binding_disabled() -> None:
 
 
 class _FakeStreamClient:
+    """记录发送内容的假流式客户端，用于断言文本拆分与回复投递。"""
     def __init__(self):
+        """初始化空的发送记录列表。"""
         self.sent: list[tuple[str, dict]] = []
 
     async def send_message(self, chatid: str, body: dict):
+        """记录一次消息发送并返回空响应。"""
         self.sent.append((chatid, body))
         return {}
 
     async def reply_stream(self, frame: dict, stream_id: str, content: str, *, finish: bool = False):
+        """记录一次流式回复的内容与结束标记并返回空响应。"""
         self.sent.append(
             (
                 frame["headers"]["req_id"],
@@ -599,6 +637,7 @@ class _FakeStreamClient:
 
 
 def _run_loop_in_thread():
+    """启动后台事件循环线程，返回循环与线程以便跨线程投递协程。"""
     loop = asyncio.new_event_loop()
     thread = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()
@@ -606,6 +645,7 @@ def _run_loop_in_thread():
 
 
 def test_send_via_run_coroutine_threadsafe_and_split(monkeypatch) -> None:
+    """验证超长文本经 run_coroutine_threadsafe 发送时按长度拆分。"""
     import app.channels
 
     client = _FakeStreamClient()
@@ -628,6 +668,7 @@ def test_send_via_run_coroutine_threadsafe_and_split(monkeypatch) -> None:
 
 
 def test_send_mentions_original_group_sender(monkeypatch) -> None:
+    """验证群聊回复引用原发送者，并在正文前带上引用抬头。"""
     import app.channels
 
     client = _FakeStreamClient()
@@ -663,6 +704,7 @@ def test_send_mentions_original_group_sender(monkeypatch) -> None:
 
 
 def test_send_raises_when_stream_not_ready(monkeypatch) -> None:
+    """验证流未就绪时发送抛出 RuntimeError。"""
     import app.channels
 
     fake_manager = SimpleNamespace(get_stream=lambda binding_id: None)
@@ -674,6 +716,7 @@ def test_send_raises_when_stream_not_ready(monkeypatch) -> None:
 
 
 def test_stream_reply_updates_one_stream_and_finishes() -> None:
+    """验证增量回复复用同一流，并以结束标记收尾。"""
     client = _FakeStreamClient()
     loop, _thread = _run_loop_in_thread()
     binding = ChannelBinding(id="binding-1", tenant_id="t", agent_id="a", channel="wecom")
@@ -709,6 +752,7 @@ def test_stream_reply_updates_one_stream_and_finishes() -> None:
 
 
 def test_split_wecom_text_respects_utf8_mobile_limit() -> None:
+    """验证文本切分遵守 UTF-8 字节上限，且拼回后内容不变。"""
     chunks = _split_wecom_text("年假余额查询" * 500)
     assert len(chunks) > 1
     assert "".join(chunks) == "年假余额查询" * 500
@@ -716,8 +760,11 @@ def test_split_wecom_text_respects_utf8_mobile_limit() -> None:
 
 
 def test_stream_reply_marks_failed_when_sdk_rejects_update() -> None:
+    """验证 SDK 拒绝更新时流式回复被标记为失败。"""
     class FailingStreamClient(_FakeStreamClient):
+        """模拟 reply_stream 抛错的流式客户端。"""
         async def reply_stream(self, *_args, **_kwargs):
+            """始终抛出 RuntimeError 以模拟 SDK 拒绝更新。"""
             raise RuntimeError("reply rejected")
 
     client = FailingStreamClient()
@@ -740,6 +787,7 @@ def test_stream_reply_marks_failed_when_sdk_rejects_update() -> None:
 
 
 def test_stream_reply_renders_safe_progress_events() -> None:
+    """验证进度事件只展示安全的工具提示，正文单独输出。"""
     client = _FakeStreamClient()
     loop, _thread = _run_loop_in_thread()
     binding = ChannelBinding(id="binding-1", tenant_id="t", agent_id="a", channel="wecom")
@@ -770,6 +818,7 @@ def test_stream_reply_renders_safe_progress_events() -> None:
 
 
 def test_stream_reply_renders_intent_skill_and_capability_names() -> None:
+    """验证意图、流程与能力事件渲染为对应的中文提示文案。"""
     reply = WeComStreamReply.__new__(WeComStreamReply)
     reply._skill_names = {}
     reply._step_names = {}
@@ -805,6 +854,7 @@ def test_stream_reply_renders_intent_skill_and_capability_names() -> None:
 
 
 def test_group_stream_reply_keeps_one_event_driven_progress_line() -> None:
+    """验证群聊流式回复只保留一行事件驱动的进度，正文独立追加。"""
     client = _FakeStreamClient()
     loop, _thread = _run_loop_in_thread()
     binding = ChannelBinding(id="binding-1", tenant_id="t", agent_id="a", channel="wecom")
@@ -832,28 +882,35 @@ def test_group_stream_reply_keeps_one_event_driven_progress_line() -> None:
 
 
 class FakeWSClient:
+    """可控的假 WebSocket 客户端，支持手动触发事件回调。"""
     def __init__(self):
+        """初始化事件处理器表与连接、断开计数。"""
         self.handlers: dict = {}
         self.connect_calls = 0
         self.disconnect_calls = 0
 
     def on(self, event: str, handler) -> None:
+        """注册事件处理器。"""
         self.handlers[event] = handler
 
     async def connect(self):
+        """记录一次连接并返回自身。"""
         self.connect_calls += 1
         return self
 
     def disconnect(self):
+        """记录一次断开。"""
         self.disconnect_calls += 1
 
     def emit_local(self, event: str, *args) -> None:
+        """在本地触发指定事件，调用已注册的处理器。"""
         handler = self.handlers.get(event)
         if handler:
             handler(*args)
 
 
 def _wait_for(condition, timeout: float = 5.0) -> bool:
+    """轮询等待条件成立，超时返回 False。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if condition():
@@ -863,6 +920,7 @@ def _wait_for(condition, timeout: float = 5.0) -> bool:
 
 
 def test_stream_manager_lifecycle_and_connected_state() -> None:
+    """验证流管理器完成启动、连接状态同步与停止的完整生命周期。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     fake = FakeWSClient()
@@ -884,6 +942,7 @@ def test_stream_manager_lifecycle_and_connected_state() -> None:
 
 
 def test_stream_manager_ingress_requires_credentials() -> None:
+    """验证缺少凭证时不会创建客户端，流线程直接退出。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, credentials_enc=None, config_json={})
     fake = FakeWSClient()
@@ -897,6 +956,7 @@ def test_stream_manager_ingress_requires_credentials() -> None:
 
 
 def test_stream_manager_reconcile_hot_start_stop() -> None:
+    """验证对账可按绑定状态热启动与热停止流。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     fake = FakeWSClient()
@@ -918,11 +978,13 @@ def test_stream_manager_reconcile_hot_start_stop() -> None:
 
 
 def test_stream_manager_dispatches_inbound_to_intake(monkeypatch) -> None:
+    """验证入站消息被分发给 intake 处理。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     processed: list = []
 
     def fake_process_inbound(binding, inbound, *, db_engine=None, staged_event_pk=None):
+        """记录被处理的入站消息并返回成功。"""
         processed.append(inbound)
         return True
 
@@ -939,11 +1001,13 @@ def test_stream_manager_dispatches_inbound_to_intake(monkeypatch) -> None:
 
 
 def test_frame_handler_returns_immediately_without_blocking(monkeypatch) -> None:
+    """验证帧处理器只做入队并立即返回，不阻塞事件循环线程。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     processed: list = []
 
     def slow_process_inbound(binding, inbound, *, db_engine=None, staged_event_pk=None):
+        """模拟耗时处理，用于观察帧处理器是否被阻塞。"""
         time.sleep(1.0)
         processed.append(inbound)
         return True
@@ -965,12 +1029,14 @@ def test_frame_handler_returns_immediately_without_blocking(monkeypatch) -> None
 
 
 def test_inbound_messages_are_processed_in_order(monkeypatch) -> None:
+    """验证单 worker 按到达顺序处理入站消息。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     processed: list[str] = []
     first_started = threading.Event()
 
     def ordered_process_inbound(binding, inbound, *, db_engine=None, staged_event_pk=None):
+        """记录处理顺序，并在首条消息上故意放慢。"""
         if inbound.event_id == "msg_first":
             first_started.set()
             time.sleep(0.3)
@@ -993,6 +1059,7 @@ def test_inbound_messages_are_processed_in_order(monkeypatch) -> None:
 
 
 def test_worker_exits_on_stop_binding() -> None:
+    """验证 stop_binding 后 worker 线程退出。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     fake = FakeWSClient()
@@ -1008,17 +1075,22 @@ def test_worker_exits_on_stop_binding() -> None:
 
 
 def test_worker_sentinel_waits_for_producer_barrier() -> None:
+    """验证哨兵入队需等生产者屏障，生产者未退出前不报告已停止。"""
     from app.channels.adapters.wecom import _StreamState
 
     class StubThread:
+        """可控存活状态的线程替身，用于模拟仍在运行的帧处理线程。"""
         def __init__(self, alive: bool):
+            """按入参记录线程存活状态。"""
             self.alive = alive
 
         def is_alive(self):
+            """返回构造时指定的存活状态。"""
             return self.alive
 
         def join(self, timeout=None):
-            return None
+            """空实现的 join，避免测试真正等待线程。"""
+            return
 
     engine = _test_engine()
     manager = WeComStreamManager(db_engine=engine)
@@ -1039,6 +1111,7 @@ def test_worker_sentinel_waits_for_producer_barrier() -> None:
 
 
 def test_stop_waits_for_inflight_callback_before_worker_sentinel(monkeypatch) -> None:
+    """验证停止时先等待在途回调完成，再投递 worker 哨兵。"""
     import app.channels.adapters.wecom as wecom_module
     from app.channels.adapters.wecom import _StreamState
 
@@ -1060,6 +1133,7 @@ def test_stop_waits_for_inflight_callback_before_worker_sentinel(monkeypatch) ->
     inbound = normalize_wecom_frame(_text_frame(msgid="msg_callback"), account_scope="corpA")
 
     def blocking_normalize(frame, account_scope=""):
+        """阻塞帧归一化直到测试放行，用于制造在途回调。"""
         callback_entered.set()
         assert release_callback.wait(timeout=5.0)
         return inbound
@@ -1100,6 +1174,7 @@ def test_stop_waits_for_inflight_callback_before_worker_sentinel(monkeypatch) ->
 
 
 def test_stream_finally_waits_for_external_callback_and_worker_consumes_it(monkeypatch) -> None:
+    """验证流退出前等待外部回调，且 worker 仍能消费其入队事件。"""
     import app.channels.adapters.wecom as wecom_module
 
     engine = _test_engine()
@@ -1111,7 +1186,9 @@ def test_stream_finally_waits_for_external_callback_and_worker_consumes_it(monke
     inbound = normalize_wecom_frame(_text_frame(msgid="msg_external_callback"))
 
     class ExternalCallbackClient(FakeWSClient):
+        """在连接时从外部线程注入消息回调的客户端。"""
         async def connect(self):
+            """记录连接并在独立线程中触发入站消息。"""
             self.connect_calls += 1
             thread = threading.Thread(
                 target=self.emit_local,
@@ -1122,11 +1199,13 @@ def test_stream_finally_waits_for_external_callback_and_worker_consumes_it(monke
             return self
 
     def blocking_normalize(frame, account_scope=""):
+        """阻塞帧归一化直到测试放行。"""
         callback_entered.set()
         assert release_callback.wait(timeout=5.0)
         return inbound
 
     def record_process(binding, item, db_engine=None, staged_event_pk=None):
+        """记录 intake 收到的入站消息并置位处理完成事件。"""
         assert item.event_id == inbound.event_id
         processed.set()
         return True
@@ -1162,13 +1241,16 @@ def test_stream_finally_waits_for_external_callback_and_worker_consumes_it(monke
 
 
 def test_unexpected_stream_exit_rejects_late_callback() -> None:
+    """验证流异常退出后，迟到的回调不会进入队列。"""
     import app.channels.adapters.wecom as wecom_module
 
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
 
     class FailingClient(FakeWSClient):
+        """连接必定失败的客户端，用于模拟流异常退出。"""
         async def connect(self):
+            """抛出 RuntimeError 以模拟流启动失败。"""
             raise RuntimeError("stream failed")
 
     client = FailingClient()
@@ -1188,6 +1270,7 @@ def test_unexpected_stream_exit_rejects_late_callback() -> None:
 
 
 def test_reconcile_does_not_stop_stream_while_revision_initializes(monkeypatch) -> None:
+    """验证配置版本尚未初始化完成时，对账不会误停流。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     with Session(engine) as db:
@@ -1220,18 +1303,22 @@ def test_reconcile_does_not_stop_stream_while_revision_initializes(monkeypatch) 
 
 
 class RecordingAgentLoop:
+    """记录 agent 循环请求的替身实现，供 intake 链路断言。"""
     calls: list = []
 
     def __init__(self, db, *, event_sink=None):
+        """保存数据库会话，忽略事件 sink。"""
         self.db = db
 
     def handle_turn(self, request):
+        """记录收到的请求并提交事务。"""
         type(self).calls.append(request)
         self.db.commit()
 
 
 @pytest.fixture(autouse=True)
 def _fake_agent_loop(monkeypatch):
+    """替换 agent 循环与微信输入态提示，并在每个用例前清空调用记录。"""
     RecordingAgentLoop.calls = []
     monkeypatch.setattr(agent_loop_module, "AgentLoop", RecordingAgentLoop)
     monkeypatch.setattr(intake_module, "_send_wechat_typing", lambda *args, **kwargs: None)
@@ -1239,6 +1326,7 @@ def _fake_agent_loop(monkeypatch):
 
 
 def test_wecom_p2p_inbound_full_chain() -> None:
+    """验证私聊入站走通暂存、处理与落库的完整链路。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -1263,6 +1351,7 @@ def test_wecom_p2p_inbound_full_chain() -> None:
 
 
 def test_wecom_group_inbound_uses_sender_name_prefix() -> None:
+    """验证群聊入站给消息加发送者前缀，并把回复投递到群 chatid。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     binding = _load_binding(engine, binding_id)
@@ -1290,6 +1379,7 @@ def test_wecom_group_inbound_uses_sender_name_prefix() -> None:
 
 
 def test_wecom_switch_command_routes_agents() -> None:
+    """验证 /切换 命令切换智能体后，后续消息路由到新智能体。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(AgentProfile(id="agent_1", tenant_id="tenant_demo", name="行政", metadata_json={}))
@@ -1319,6 +1409,7 @@ def test_wecom_switch_command_routes_agents() -> None:
 
 
 def _make_api_client(engine, observed_sessions: list[Session] | None = None):
+    """构造挂载渠道路由的测试客户端，可记录被使用的会话。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -1329,6 +1420,7 @@ def _make_api_client(engine, observed_sessions: list[Session] | None = None):
     app.include_router(channels_api.router)
 
     def override_get_session():
+        """用测试引擎提供数据库会话，并可记录创建的会话对象。"""
         with Session(engine) as session:
             if observed_sessions is not None:
                 observed_sessions.append(session)
@@ -1339,6 +1431,7 @@ def _make_api_client(engine, observed_sessions: list[Session] | None = None):
 
 
 def _seed_api_users(engine) -> dict[str, User]:
+    """写入租户、两个用户与一个智能体，返回按名称索引的用户表。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         owner = User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x")
@@ -1361,12 +1454,14 @@ def _seed_api_users(engine) -> dict[str, User]:
 
 
 def _auth(user: User) -> dict[str, str]:
+    """生成携带该用户访问令牌的鉴权请求头。"""
     from app.security.auth import create_access_token
 
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
 def test_wecom_credentials_endpoint(monkeypatch) -> None:
+    """验证凭证接口拒绝非所有者，并在加密保存凭证后激活绑定。"""
     import app.api.channels as channels_api
 
     engine = _test_engine()
@@ -1413,6 +1508,7 @@ def test_wecom_credentials_endpoint(monkeypatch) -> None:
 
 
 def test_wecom_credentials_rejects_wechat_binding() -> None:
+    """验证微信绑定不能写入企微凭证。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     with Session(engine) as db:
@@ -1442,6 +1538,7 @@ def test_wecom_credentials_rejects_wechat_binding() -> None:
 
 
 def test_create_wecom_binding_supported() -> None:
+    """验证支持创建企微渠道绑定。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     client = _make_api_client(engine)
@@ -1456,6 +1553,7 @@ def test_create_wecom_binding_supported() -> None:
 
 
 def test_channel_meta_endpoint() -> None:
+    """验证渠道元信息接口返回微信与企微的能力及凭证字段配置。"""
     engine = _test_engine()
     users = _seed_api_users(engine)
     client = _make_api_client(engine)
@@ -1480,12 +1578,15 @@ def test_channel_meta_endpoint() -> None:
 
 
 class _ConnectedFakeClient(FakeWSClient):
+    """带可控连接状态的假客户端，供对账用例模拟 SDK 实况。"""
     def __init__(self, is_connected: bool):
+        """记录构造时指定的连接状态。"""
         super().__init__()
         self.is_connected = is_connected
 
 
 def test_reconcile_aligns_connected_from_sdk_truth() -> None:
+    """验证对账按 SDK 实况回写 connected 状态。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)  # connected 默认 False
     fake = _ConnectedFakeClient(is_connected=True)
@@ -1504,6 +1605,7 @@ def test_reconcile_aligns_connected_from_sdk_truth() -> None:
 
 
 def test_reconcile_marks_not_running_binding_disconnected() -> None:
+    """验证未运行流的绑定会被对账标记为未连接。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, connected=True)
     manager = WeComStreamManager(db_engine=engine, client_factory=lambda bot_id, secret: FakeWSClient())
@@ -1515,6 +1617,7 @@ def test_reconcile_marks_not_running_binding_disconnected() -> None:
 
 
 def test_reconcile_skips_write_when_connected_unchanged(monkeypatch) -> None:
+    """验证连接状态未变化时不产生写库操作。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, connected=True)
     fake = _ConnectedFakeClient(is_connected=True)
@@ -1526,6 +1629,7 @@ def test_reconcile_skips_write_when_connected_unchanged(monkeypatch) -> None:
     original_commit = Session.commit
 
     def counting_commit(self):
+        """统计 commit 调用次数后转交原实现。"""
         commits["count"] += 1
         return original_commit(self)
 
@@ -1541,11 +1645,13 @@ def test_reconcile_skips_write_when_connected_unchanged(monkeypatch) -> None:
 
 
 def test_wecom_credentials_change_restarts_stream_with_new_client() -> None:
+    """验证更换凭证后旧流停止，新客户端以新凭证接管。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine, bot_id="bot_1")
     created: list[tuple[str, str, FakeWSClient]] = []
 
     def factory(bot_id: str, secret: str):
+        """记录每次创建的客户端及其 bot_id 与 secret。"""
         client = FakeWSClient()
         created.append((bot_id, secret, client))
         return client
@@ -1576,6 +1682,7 @@ def test_wecom_credentials_change_restarts_stream_with_new_client() -> None:
 
 
 def test_wecom_endpoint_restart_flow_via_spy_manager(monkeypatch) -> None:
+    """验证凭证更新接口按 stop、wait、ensure 的顺序重启 ingress。"""
     import app.api.channels as channels_api
     import app.channels
 
@@ -1586,16 +1693,20 @@ def test_wecom_endpoint_restart_flow_via_spy_manager(monkeypatch) -> None:
     observed_sessions: list[Session] = []
 
     class SpyManager:
+        """记录流管理器调用顺序的替身，并断言调用时无未完成事务。"""
         def stop_binding(self, bid):
+            """断言当前无活动事务后记录停止调用。"""
             assert observed_sessions
             assert observed_sessions[-1].in_transaction() is False
             calls.append(f"stop:{bid}")
 
         def wait_binding_stopped(self, bid, timeout_seconds=5.0):
+            """记录等待调用并返回已停止。"""
             calls.append(f"wait:{bid}")
             return True
 
         def ensure_binding(self, bid):
+            """记录启动调用。"""
             calls.append(f"ensure:{bid}")
 
     monkeypatch.setattr(app.channels, "get_wecom_stream_manager", lambda: SpyManager())
@@ -1618,6 +1729,7 @@ def test_wecom_endpoint_restart_flow_via_spy_manager(monkeypatch) -> None:
 
 
 def test_wecom_credentials_rejects_bot_change_without_stopping_ingress(monkeypatch) -> None:
+    """验证更换 bot 被拒绝，且不会暂停现有 ingress 或改动凭证。"""
     import app.api.channels as channels_api
     import app.channels
 
@@ -1632,7 +1744,9 @@ def test_wecom_credentials_rejects_bot_change_without_stopping_ingress(monkeypat
     calls: list[str] = []
 
     class SpyManager:
+        """只记录 pause 调用的管理器替身。"""
         def pause_binding(self, bid):
+            """记录暂停调用。"""
             calls.append(f"pause:{bid}")
 
     monkeypatch.setattr(app.channels, "get_wecom_stream_manager", lambda: SpyManager())
@@ -1660,6 +1774,7 @@ def test_wecom_credentials_rejects_bot_change_without_stopping_ingress(monkeypat
 
 
 def test_wecom_reconfigure_timeout_keeps_old_config_and_does_not_start(monkeypatch) -> None:
+    """验证重配等待超时返回冲突，保留旧配置且不重新启动。"""
     import app.api.channels as channels_api
     import app.channels
 
@@ -1674,14 +1789,18 @@ def test_wecom_reconfigure_timeout_keeps_old_config_and_does_not_start(monkeypat
     calls: list[str] = []
 
     class SpyManager:
+        """记录暂停、等待与恢复调用的管理器替身。"""
         def pause_binding(self, bid):
+            """记录暂停调用。"""
             calls.append(f"pause:{bid}")
 
         def wait_binding_stopped(self, bid, timeout_seconds=5.0):
+            """记录等待调用并返回未停止，模拟超时。"""
             calls.append(f"wait:{bid}")
             return False
 
         def resume_binding(self, bid, *, start=True):
+            """记录恢复调用及其是否重新拉起。"""
             calls.append(f"resume:{bid}:{start}")
 
     monkeypatch.setattr(app.channels, "get_wecom_stream_manager", lambda: SpyManager())
@@ -1711,6 +1830,7 @@ def test_wecom_reconfigure_timeout_keeps_old_config_and_does_not_start(monkeypat
 
 
 def test_wecom_reconfigure_commit_failure_restores_old_ingress(monkeypatch) -> None:
+    """验证提交失败时恢复旧 ingress 并保留旧凭证。"""
     import app.api.channels as channels_api
     import app.channels
 
@@ -1725,20 +1845,25 @@ def test_wecom_reconfigure_commit_failure_restores_old_ingress(monkeypatch) -> N
     calls: list[str] = []
 
     class SpyManager:
+        """记录暂停、等待与恢复调用的管理器替身。"""
         def pause_binding(self, bid):
+            """记录暂停调用。"""
             calls.append(f"pause:{bid}")
 
         def wait_binding_stopped(self, bid, timeout_seconds=5.0):
+            """记录等待调用并返回已停止。"""
             calls.append(f"wait:{bid}")
             return True
 
         def resume_binding(self, bid, *, start=True):
+            """记录恢复调用及其是否重新拉起。"""
             calls.append(f"resume:{bid}:{start}")
 
     original_commit = Session.commit
     failed = False
 
     def fail_first_commit(session):
+        """首次提交抛出完整性错误，之后转交原实现。"""
         nonlocal failed
         if not failed:
             failed = True
@@ -1773,6 +1898,7 @@ def test_wecom_reconfigure_commit_failure_restores_old_ingress(monkeypatch) -> N
 
 
 def test_wecom_reconcile_does_not_restart_paused_binding() -> None:
+    """验证被暂停的绑定不会被对账重新拉起。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     manager = WeComStreamManager(
@@ -1790,6 +1916,7 @@ def test_wecom_reconcile_does_not_restart_paused_binding() -> None:
 
 
 def test_wecom_timeout_then_reconcile_restores_old_config_once(monkeypatch) -> None:
+    """验证超时后对账只按旧配置重启一次流。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     created: list[tuple[str, str, FakeWSClient]] = []
@@ -1797,11 +1924,13 @@ def test_wecom_timeout_then_reconcile_restores_old_config_once(monkeypatch) -> N
     release_turn = threading.Event()
 
     def factory(bot_id: str, secret: str):
+        """记录每次创建的客户端及其 bot_id 与 secret。"""
         client = FakeWSClient()
         created.append((bot_id, secret, client))
         return client
 
     def blocking_process(binding, inbound, db_engine=None, staged_event_pk=None):
+        """阻塞处理直到测试放行，用于制造在途长任务。"""
         turn_started.set()
         assert release_turn.wait(timeout=5.0)
         return True
@@ -1831,6 +1960,7 @@ def test_wecom_timeout_then_reconcile_restores_old_config_once(monkeypatch) -> N
 
 
 def test_stale_wecom_callback_cannot_overwrite_new_revision_connected_state() -> None:
+    """验证旧版本的迟到回调不能覆盖新版本的连接状态。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     with Session(engine) as db:
@@ -1850,6 +1980,7 @@ def test_stale_wecom_callback_cannot_overwrite_new_revision_connected_state() ->
 def test_concurrent_wecom_secret_rotations_serialize_and_match_running_config(
     monkeypatch, tmp_path
 ) -> None:
+    """验证并发轮换密钥被串行化，且运行中的流与最终配置一致。"""
     import app.api.channels as channels_api
     import app.channels
 
@@ -1869,6 +2000,7 @@ def test_concurrent_wecom_secret_rotations_serialize_and_match_running_config(
     created: list[tuple[str, str, FakeWSClient]] = []
 
     def factory(bot_id: str, secret: str):
+        """记录每次创建的客户端及其 bot_id 与 secret。"""
         client = FakeWSClient()
         created.append((bot_id, secret, client))
         return client
@@ -1881,6 +2013,7 @@ def test_concurrent_wecom_secret_rotations_serialize_and_match_running_config(
     responses: list[tuple[int, str]] = []
 
     def rotate(secret: str) -> None:
+        """提交一次凭证轮换请求并记录响应状态与正文。"""
         response = _make_api_client(engine).post(
             f"/api/enterprise/channels/{binding_id}/wecom/credentials",
             json={
@@ -1919,6 +2052,7 @@ def test_concurrent_wecom_secret_rotations_serialize_and_match_running_config(
 
 
 def test_delete_serializes_against_concurrent_credentials_update(monkeypatch, tmp_path) -> None:
+    """验证删除与并发凭证更新互斥，绑定删除后更新返回 404。"""
     import app.api.channels as channels_api
     import app.channels
 
@@ -1940,15 +2074,19 @@ def test_delete_serializes_against_concurrent_credentials_update(monkeypatch, tm
     starts: list[bool] = []
 
     class BarrierManager:
+        """用屏障卡住等待调用的管理器替身，用于控制竞态时序。"""
         def pause_binding(self, bid):
-            return None
+            """空实现的暂停，便于让删除流程停在等待步骤。"""
+            return
 
         def wait_binding_stopped(self, bid, timeout_seconds=5.0):
+            """置位等待标记并阻塞到测试放行。"""
             delete_waiting.set()
             assert release_delete.wait(timeout=5.0)
             return True
 
         def resume_binding(self, bid, *, start=True):
+            """记录恢复时的启动参数。"""
             starts.append(start)
 
     monkeypatch.setattr(app.channels, "get_wecom_stream_manager", lambda: BarrierManager())
@@ -1956,6 +2094,7 @@ def test_delete_serializes_against_concurrent_credentials_update(monkeypatch, tm
     responses: dict[str, int] = {}
 
     def delete() -> None:
+        """在线程中发起删除请求并记录状态码。"""
         response = _make_api_client(engine).delete(
             f"/api/enterprise/channels/{binding_id}",
             params={"tenant_id": "tenant_demo"},
@@ -1964,6 +2103,7 @@ def test_delete_serializes_against_concurrent_credentials_update(monkeypatch, tm
         responses["delete"] = response.status_code
 
     def update_credentials() -> None:
+        """在线程中发起凭证更新请求并记录状态码。"""
         response = _make_api_client(engine).post(
             f"/api/enterprise/channels/{binding_id}/wecom/credentials",
             json={
@@ -1993,6 +2133,7 @@ def test_delete_serializes_against_concurrent_credentials_update(monkeypatch, tm
 
 
 def test_delete_rejects_while_durable_turn_is_running(monkeypatch) -> None:
+    """验证持久化回合仍在执行时删除返回冲突，回合结束后才能删除。"""
     import app.api.channels as channels_api
 
     engine = _test_engine()
@@ -2014,10 +2155,13 @@ def test_delete_rejects_while_durable_turn_is_running(monkeypatch) -> None:
     release_turn = threading.Event()
 
     class BlockingAgentLoop:
+        """阻塞 handle_turn 的 agent 循环替身，用于制造未完成的回合。"""
         def __init__(self, db, *, event_sink=None):
+            """保存数据库会话。"""
             self.db = db
 
         def handle_turn(self, request):
+            """置位开始标记并阻塞到测试放行后提交事务。"""
             turn_started.set()
             assert release_turn.wait(timeout=5.0)
             self.db.commit()
@@ -2056,6 +2200,7 @@ def test_delete_rejects_while_durable_turn_is_running(monkeypatch) -> None:
 
 
 def test_worker_retirement_and_reconcile_rebuild(monkeypatch) -> None:
+    """验证 stop 超时后 worker 退役清理，下一轮对账可重建单份状态。"""
     engine = _test_engine()
     binding_id = _seed_wecom_binding(engine)
     started = threading.Event()
@@ -2063,6 +2208,7 @@ def test_worker_retirement_and_reconcile_rebuild(monkeypatch) -> None:
     processed: list[str] = []
 
     def slow_process_inbound(binding, inbound, *, db_engine=None, staged_event_pk=None):
+        """阻塞处理直到测试放行，用于制造在途长任务。"""
         started.set()
         release.wait(timeout=5.0)
         processed.append(inbound.event_id)
@@ -2097,6 +2243,7 @@ def test_worker_retirement_and_reconcile_rebuild(monkeypatch) -> None:
 
 
 def test_group_without_chatid_degrades_to_p2p_with_warning(caplog) -> None:
+    """验证群聊帧缺少 chatid 时降级为私聊并记录告警日志。"""
     import logging
 
     frame = _text_frame(chattype="group", chatid="")
@@ -2118,6 +2265,7 @@ def test_group_without_chatid_degrades_to_p2p_with_warning(caplog) -> None:
 
 
 def _seed_disconnect_alert_binding(engine, *, age_minutes: float) -> str:
+    """写入带管理员会话的绑定，并按给定分钟数回拨更新时间。"""
     with Session(engine) as db:
         db.add(User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x"))
         db.add(
@@ -2152,6 +2300,7 @@ def _seed_disconnect_alert_binding(engine, *, age_minutes: float) -> str:
 
 
 def test_disconnect_timeout_alerts_once_and_clears_on_reconnect() -> None:
+    """验证断开超时只告警一次，重连后清除标记以便下次再告警。"""
     from app.db.models import ChannelDelivery
 
     engine = _test_engine()
@@ -2188,6 +2337,7 @@ def test_disconnect_timeout_alerts_once_and_clears_on_reconnect() -> None:
 
 
 def test_disconnect_timeout_not_fired_before_threshold() -> None:
+    """验证未达断开时长阈值时不发出告警。"""
     from app.db.models import ChannelDelivery
 
     engine = _test_engine()

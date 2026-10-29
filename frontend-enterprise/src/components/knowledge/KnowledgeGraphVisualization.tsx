@@ -69,6 +69,12 @@ const TYPE_COLORS: Record<string, string> = {
   Metric: '#d14c8b',
 };
 
+/**
+ * 知识库图谱可视化面板：搜索、按类型筛选、布局切换与节点详情展示。
+ *
+ * - 节点数超过上限时先要求用户缩小范围，避免一次性渲染过多节点。
+ * - 选中节点、搜索词与类型筛选共同驱动画布高亮；切换知识库会重置全部状态。
+ */
 export function KnowledgeGraphVisualization({
   concepts,
   knowledgeBaseKey,
@@ -139,28 +145,34 @@ export function KnowledgeGraphVisualization({
     ));
   }, [model, needsScopeSelection]);
 
+  /** 切换某个知识类型的筛选选中状态。 */
   const toggleType = (type: string) => {
     setSelectedTypes((current) => current.includes(type)
       ? current.filter((item) => item !== type)
       : [...current, type]);
   };
+  /** 记录当前选中的节点 id，同步给画布与右侧详情区。 */
   const handleSelectNode = useCallback((id: string | null) => {
     setSelectedNodeId(id);
   }, []);
+  /** 先关闭展开态弹窗，再回调外部打开该知识概念的完整内容。 */
   const handleViewConcept = useCallback((concept: KnowledgeConceptRead) => {
     setExpanded(false);
     onViewConcept(concept);
   }, [onViewConcept]);
+  /** 确认按当前筛选结果收敛绘制范围；候选为空或超出上限时忽略。 */
   const confirmScope = () => {
     if (scopeCandidates.length === 0 || scopeCandidates.length > KNOWLEDGE_GRAPH_NODE_LIMIT) return;
     setScopedConceptIds(new Set(scopeCandidates.map((concept) => concept.concept_id)));
   };
+  /** 退出限定范围绘制，同时清空搜索、类型筛选与选中节点。 */
   const resetScope = () => {
     setScopedConceptIds(null);
     setQuery('');
     setSelectedTypes([]);
     setSelectedNodeId(null);
   };
+  /** 重置搜索与筛选条件，选中度数最高的节点并重新适配画布。 */
   const resetView = () => {
     setQuery('');
     setSelectedTypes([]);
@@ -178,6 +190,7 @@ export function KnowledgeGraphVisualization({
     );
   }
 
+  /** 渲染图谱工作区，内嵌态与展开态共用同一套配置。 */
   const workspace = (isExpanded: boolean) => (
     <GraphWorkspace
       ref={isExpanded ? expandedCanvasRef : inlineCanvasRef}
@@ -398,6 +411,9 @@ export function KnowledgeGraphVisualization({
   );
 }
 
+/**
+ * 图谱工作区容器：把 ref 透传给画布，并在右侧展示选中节点的详情。
+ */
 const GraphWorkspace = forwardRef<GraphCanvasHandle, {
   model: KnowledgeGraphModel;
   query: string;
@@ -458,6 +474,9 @@ const GraphWorkspace = forwardRef<GraphCanvasHandle, {
   );
 });
 
+/**
+ * Cytoscape 画布：按模型构建节点与边、执行布局，并处理选中高亮与缩放标签。
+ */
 const GraphCanvas = forwardRef<GraphCanvasHandle, {
   model: KnowledgeGraphModel;
   query: string;
@@ -470,6 +489,7 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, {
   const cyRef = useRef<Core | null>(null);
   const lastLayoutRef = useRef(layout);
 
+  /** 按当前布局重新执行一次图布局（不带动画）。 */
   const runLayout = () => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -616,6 +636,7 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, {
   return <div ref={containerRef} className="kgv-canvas" role="img" aria-label="知识概念关系图" />;
 });
 
+/** 节点详情面板：展示类型、摘要、标签、上下游关系与未解析链接。 */
 function NodeDetail({
   node,
   model,
@@ -682,6 +703,7 @@ function NodeDetail({
   );
 }
 
+/** 节点摘要区块：渲染 Markdown 预览，并在内容溢出时提供展开/收起。 */
 function KnowledgeMarkdownSummary({
   node,
   model,
@@ -756,6 +778,7 @@ function KnowledgeMarkdownSummary({
   );
 }
 
+/** 关系列表：展示若干关联节点，点击可切换当前选中节点。 */
 function RelationList({
   title,
   ids,
@@ -783,6 +806,7 @@ function RelationList({
   );
 }
 
+/** 节点数超限时的范围选择引导，确认后按当前筛选结果绘制。 */
 function GraphScopeGate({
   total,
   candidateCount,
@@ -806,6 +830,7 @@ function GraphScopeGate({
   );
 }
 
+/** 图谱统计条：展示节点、关系、孤立节点与未解析链接数量。 */
 function GraphStats({ model }: { model: KnowledgeGraphModel }) {
   return (
     <div className="kgv-stats" aria-label="知识图谱统计">
@@ -817,6 +842,7 @@ function GraphStats({ model }: { model: KnowledgeGraphModel }) {
   );
 }
 
+/** 生成 Cytoscape 布局配置，按布局类型补充方向与间距参数。 */
 function layoutOptions(layout: GraphLayout, animate: boolean): LayoutOptions {
   if (layout === 'breadthfirst') {
     return { name: layout, directed: true, padding: 40, spacingFactor: 1.2, animate };
@@ -827,6 +853,7 @@ function layoutOptions(layout: GraphLayout, animate: boolean): LayoutOptions {
   return { name: layout, padding: 40, animate };
 }
 
+/** 缩放比例过低时隐藏非枢纽、非选中节点的标签，避免文字重叠。 */
 function updateSemanticLabels(cy: Core) {
   const lowZoom = cy.zoom() < 0.72;
   cy.nodes().forEach((node: NodeSingular) => {
@@ -835,6 +862,7 @@ function updateSemanticLabels(cy: Core) {
   });
 }
 
+/** 返回知识类型对应的颜色；未知类型按名称哈希稳定映射到调色板。 */
 function typeColor(type: string): string {
   if (TYPE_COLORS[type]) return TYPE_COLORS[type];
   const palette = ['#1a71ff', '#22a06b', '#8b5cf6', '#f59e0b', '#0891a5', '#d14c8b'];
@@ -842,6 +870,7 @@ function typeColor(type: string): string {
   return palette[hash % palette.length];
 }
 
+/** 按是否展开返回对应的画布 ref，供工具栏操作当前可见的画布。 */
 function activeCanvasRef(
   expanded: boolean,
   inlineRef: React.RefObject<GraphCanvasHandle | null>,

@@ -16,7 +16,7 @@ _PACKAGE_ROOT = Path(".harness/skill-packages")
 
 
 class RunSkillScriptArguments(BaseModel):
-    """Typed invocation of an existing script shipped in a GeneralSkill package."""
+    """run_skill_script 的类型化入参:脚本路径、argv、stdin、超时与输出上限。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -31,6 +31,11 @@ def run_skill_script(
     context: HarnessToolContext,
     arguments: BaseModel,
 ) -> dict[str, Any]:
+    """执行 GeneralSkill 包内已落盘的脚本,返回退出码、截断后的 stdout/stderr 等结果。
+
+    脚本必须解析到 workspace 下的 .harness/skill-packages,否则抛 SKILL_SCRIPT_NOT_ALLOWED;
+    输出上限取 max_output_bytes 与 context 结果配额四分之一中的较小值。
+    """
     if not isinstance(arguments, RunSkillScriptArguments):
         raise HarnessExecutionError("INVALID_ARGUMENTS", "Invalid skill script arguments.")
     workspace = context.workspace_root.resolve()
@@ -101,6 +106,7 @@ def run_skill_script(
 
 
 def _script_argv(script: Path, argv: list[str]) -> list[str]:
+    """按脚本后缀(.py/.sh/.ps1/.js/.mjs/.cjs)选择解释器并把 argv 拼成命令行。"""
     suffix = script.suffix.lower()
     if suffix == ".py":
         return [sys.executable, str(script), *argv]
@@ -126,6 +132,7 @@ def _script_argv(script: Path, argv: list[str]) -> list[str]:
 
 
 def register_skill_script_tools(registry: HarnessRegistry) -> HarnessRegistry:
+    """把 run_skill_script 注册为 Harness 工具并返回同一个 registry。"""
     registry.register(
         name="run_skill_script",
         description=(

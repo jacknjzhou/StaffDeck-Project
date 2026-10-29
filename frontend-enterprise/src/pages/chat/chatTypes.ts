@@ -83,10 +83,12 @@ export type ComposerAttachment = ChatAttachmentRead & {
 export type ComposerInteractionMode = 'normal' | 'scheduled_task';
 export type DraftScheduleType = 'once' | 'daily' | 'weekly' | 'monthly';
 
+/** 创建空的会话消息槽位，服务端消息与实时消息均为空数组。 */
 export function createEmptySlot(): SessionSlot {
   return { serverMessages: [], realtimeMessages: [] };
 }
 
+/** 创建初始流式状态槽位：未加载、无计时器、无累积内容且无进行中的回合。 */
 export function createStreamSlot(): StreamSlot {
   return {
     loading: false,
@@ -101,6 +103,7 @@ export function createStreamSlot(): StreamSlot {
   };
 }
 
+/** 创建空的单轮思考轨迹，起始时间取当前时间戳。 */
 export function createTurnTrace(): TurnTrace {
   return { lines: [], startedAt: Date.now() };
 }

@@ -15,6 +15,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 
 def test_resolve_secret_header(monkeypatch):
+    """验证请求头中的 ${secret.X} 占位符会从环境变量解析为明文。"""
     monkeypatch.setenv("ORDER_API_TOKEN", "token-123")
     executor = object.__new__(ToolExecutor)
 
@@ -27,6 +28,7 @@ def test_resolve_secret_header(monkeypatch):
 
 
 def test_resolve_basic_auth_header(monkeypatch):
+    """验证 basic 认证配置（含密钥占位符）生成标准的 Basic Authorization 头。"""
     monkeypatch.setenv("TOOL_PASSWORD", "123456")
     executor = object.__new__(ToolExecutor)
 
@@ -42,6 +44,7 @@ def test_resolve_basic_auth_header(monkeypatch):
 
 
 def test_explicit_authorization_header_takes_precedence_over_basic_auth():
+    """验证显式配置的 Authorization 头优先于 basic 认证配置，不被覆盖。"""
     executor = object.__new__(ToolExecutor)
 
     headers = executor._resolve_headers(
@@ -53,6 +56,7 @@ def test_explicit_authorization_header_takes_precedence_over_basic_auth():
 
 
 def test_unknown_auth_type_is_forwarded_as_literal_headers(monkeypatch):
+    """验证未知 auth 类型按字面量透传为请求头，对象值序列化为 JSON 字符串。"""
     monkeypatch.setenv("VENDOR_TOKEN", "token-123")
     executor = object.__new__(ToolExecutor)
 
@@ -71,6 +75,7 @@ def test_unknown_auth_type_is_forwarded_as_literal_headers(monkeypatch):
 
 
 def test_internal_mock_request_adds_service_token_only_for_configured_origin() -> None:
+    """验证只有发往本机 mock 服务的请求才附带内部服务令牌。"""
     executor = object.__new__(ToolExecutor)
     executor.settings = type(
         "Settings",
@@ -92,6 +97,7 @@ def test_internal_mock_request_adds_service_token_only_for_configured_origin() -
 
 
 def test_execute_rejects_tool_not_bound_to_current_employee() -> None:
+    """验证私有工具只授权给绑定员工，其他员工调用返回 NOT_ALLOWED。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         owner = AgentProfile(id="agent_owner", tenant_id="tenant_demo", name="员工 A")
@@ -123,6 +129,7 @@ def test_execute_rejects_tool_not_bound_to_current_employee() -> None:
 
 
 def test_execute_builtin_mcp_tool_success() -> None:
+    """验证内置 MCP 工具被正确路由，并把工具返回值原样作为结果数据。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -157,6 +164,7 @@ def test_execute_builtin_mcp_tool_success() -> None:
 
 
 def test_execution_policy_uses_tool_timeout_and_falls_back_for_invalid_values() -> None:
+    """验证执行策略优先取工具超时配置，覆盖值生效，非法值回落到全局默认。"""
     executor = object.__new__(ToolExecutor)
     executor.settings = type("Settings", (), {"tool_timeout_seconds": 8.0})()
 
@@ -187,19 +195,25 @@ def test_execution_policy_uses_tool_timeout_and_falls_back_for_invalid_values() 
 
 
 def test_execute_http_tool_passes_configured_timeout_to_client(monkeypatch) -> None:
+    """验证 HTTP 工具按配置的超时时间构造 httpx client。"""
     captured: dict[str, float] = {}
 
     class FakeClient:
+        """记录构造超时时间的假 httpx client。"""
         def __init__(self, *, timeout: float):
+            """保存传入的超时时间，供断言使用。"""
             captured["timeout"] = timeout
 
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def request(self, method, url, headers=None, json=None, params=None):
+            """直接返回固定成功响应，避免真实网络请求。"""
             return httpx.Response(200, json={"ok": True}, request=httpx.Request(method, url))
 
     monkeypatch.setattr(httpx, "Client", FakeClient)
@@ -226,19 +240,25 @@ def test_execute_http_tool_passes_configured_timeout_to_client(monkeypatch) -> N
 
 
 def test_execute_a2a_tool_sends_standard_send_message_request(monkeypatch) -> None:
+    """验证 A2A 工具按 JSON-RPC 发送 SendMessage，并携带版本头与文本参数。"""
     captured: dict[str, object] = {}
 
     class FakeClient:
+        """记录 A2A 请求的假 httpx client。"""
         def __init__(self, *, timeout: float):
+            """记录超时时间，供断言默认执行策略生效。"""
             captured["timeout"] = timeout
 
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def post(self, url, *, headers=None, json=None):
+            """记录请求并返回携带 message 结果的成功响应。"""
             captured.update(url=url, headers=headers, payload=json)
             return httpx.Response(
                 200,
@@ -281,19 +301,25 @@ def test_execute_a2a_tool_sends_standard_send_message_request(monkeypatch) -> No
 
 
 def test_execute_a2a_waits_for_working_task_and_persists_lifecycle(monkeypatch) -> None:
+    """验证 A2A 任务处于 working 时轮询 GetTask 至完成，并落库任务与生命周期事件。"""
     calls: list[str] = []
 
     class FakeClient:
+        """模拟 A2A 服务端：先返回 working，再返回 completed。"""
         def __init__(self, *, timeout: float):
+            """保存客户端超时，保持与真实 client 的接口一致。"""
             self.timeout = timeout
 
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def get(self, url, *, headers=None):
+            """返回声明不支持流式的 agent card。"""
             return httpx.Response(
                 200,
                 json={
@@ -311,6 +337,7 @@ def test_execute_a2a_waits_for_working_task_and_persists_lifecycle(monkeypatch) 
             )
 
         def post(self, url, *, headers=None, json=None):
+            """记录调用方法并按 SendMessage/GetTask 返回不同任务状态。"""
             method = json["method"]
             calls.append(method)
             if method == "SendMessage":
@@ -376,22 +403,28 @@ def test_execute_a2a_waits_for_working_task_and_persists_lifecycle(monkeypatch) 
 def test_execute_a2a_same_invocation_returns_persisted_result_without_resending(
     monkeypatch,
 ) -> None:
+    """验证同一 invocation_id 重复调用复用已持久化结果，不再重发 SendMessage。"""
     calls: list[str] = []
 
     class FakeClient:
+        """记录 A2A 调用方法的假 httpx client。"""
         def __init__(self, *, timeout: float):
-            pass
+            """忽略超时参数，仅保持接口一致。"""
 
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def get(self, url, *, headers=None):
+            """模拟 agent card 获取失败，走无发现的分支。"""
             raise RuntimeError("no agent card")
 
         def post(self, url, *, headers=None, json=None):
+            """记录方法名并返回已完成的任务结果。"""
             calls.append(json["method"])
             return httpx.Response(
                 200,
@@ -442,19 +475,24 @@ def test_execute_a2a_same_invocation_returns_persisted_result_without_resending(
 
 
 def test_execute_a2a_same_invocation_resumes_remote_working_task(monkeypatch) -> None:
+    """验证同一 invocation_id 遇到已存在的 working 任务时改走 GetTask 恢复而非重发。"""
     calls: list[str] = []
 
     class FakeClient:
+        """只记录 A2A 调用方法的假 httpx client。"""
         def __init__(self, *, timeout: float):
-            pass
+            """忽略超时参数，仅保持接口一致。"""
 
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def post(self, url, *, headers=None, json=None):
+            """记录方法名并返回已完成的任务结果。"""
             calls.append(json["method"])
             return httpx.Response(
                 200,
@@ -523,22 +561,28 @@ def test_execute_a2a_same_invocation_resumes_remote_working_task(monkeypatch) ->
 
 
 def test_execute_a2a_continues_input_required_task_in_same_session(monkeypatch) -> None:
+    """验证上一轮返回 input-required 时，同会话下一轮携带 taskId 与 contextId 续跑。"""
     messages: list[dict[str, object]] = []
 
     class FakeClient:
+        """模拟 A2A 服务端：首次要求补充输入，其后返回完成。"""
         def __init__(self, *, timeout: float):
-            pass
+            """忽略超时参数，仅保持接口一致。"""
 
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def get(self, url, *, headers=None):
+            """模拟 agent card 获取失败，走无发现的分支。"""
             raise RuntimeError("no agent card")
 
         def post(self, url, *, headers=None, json=None):
+            """记录消息并按调用次数返回 input-required 或 completed。"""
             message = json["params"]["message"]
             messages.append(message)
             first = len(messages) == 1
@@ -594,17 +638,23 @@ def test_execute_a2a_continues_input_required_task_in_same_session(monkeypatch) 
 
 
 def test_execute_a2a_stream_merges_artifact_before_terminal_status(monkeypatch) -> None:
+    """验证 SSE 流中先到的 artifact 更新不会被终态覆盖丢弃。"""
     class FakeStreamResponse:
+        """模拟 A2A SSE 流式响应，依次吐出 artifact 与终态事件。"""
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def raise_for_status(self):
-            return None
+            """模拟状态码检查通过。"""
+            return
 
         def iter_lines(self):
+            """按 SSE 格式输出 artifactUpdate 与 statusUpdate 两条事件。"""
             artifact = {
                 "jsonrpc": "2.0",
                 "id": "1",
@@ -643,16 +693,20 @@ def test_execute_a2a_stream_merges_artifact_before_terminal_status(monkeypatch) 
             )
 
     class FakeClient:
+        """声明支持流式并返回假 SSE 流的 httpx client 替身。"""
         def __init__(self, *, timeout: float):
-            pass
+            """忽略超时参数，仅保持接口一致。"""
 
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def get(self, url, *, headers=None):
+            """返回声明支持流式的 agent card。"""
             return httpx.Response(
                 200,
                 json={"capabilities": {"streaming": True}},
@@ -660,6 +714,7 @@ def test_execute_a2a_stream_merges_artifact_before_terminal_status(monkeypatch) 
             )
 
         def stream(self, method, url, *, headers=None, json=None):
+            """返回预先编排好的 SSE 流式响应。"""
             return FakeStreamResponse()
 
     monkeypatch.setattr(httpx, "Client", FakeClient)
@@ -686,9 +741,11 @@ def test_execute_a2a_stream_merges_artifact_before_terminal_status(monkeypatch) 
 
 
 def test_execute_mcp_tool_passes_configured_timeout(monkeypatch) -> None:
+    """验证 MCP 工具执行时把工具配置的超时时间传给底层调用。"""
     captured: dict[str, float] = {}
 
     def fake_execute(config, arguments, *, timeout_seconds, tool_name):
+        """记录超时时间并返回成功结果，替代真实 MCP 调用。"""
         captured["timeout"] = timeout_seconds
         return {"ok": True}
 
@@ -729,6 +786,7 @@ def test_execute_mcp_tool_passes_configured_timeout(monkeypatch) -> None:
 
 
 def test_execute_builtin_mcp_tool_unknown_config_returns_error() -> None:
+    """验证内置 MCP 工具引用未注册的工具名时返回 MCP_ERROR。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -762,6 +820,7 @@ def test_execute_builtin_mcp_tool_unknown_config_returns_error() -> None:
 
 
 def test_execute_stdio_mcp_tool_success() -> None:
+    """验证 stdio 传输的 MCP 工具能通过子进程完成真实调用并返回结果。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -801,6 +860,7 @@ def test_execute_stdio_mcp_tool_success() -> None:
 
 
 def test_execute_stdio_mcp_tool_error_is_stable() -> None:
+    """验证 stdio MCP 工具的参数校验错误以 MCP_ERROR 稳定返回并保留原始信息。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -840,19 +900,24 @@ def test_execute_stdio_mcp_tool_error_is_stable() -> None:
 
 
 def test_execute_get_tool_preserves_query_string_when_arguments_empty(monkeypatch) -> None:
+    """验证 GET 工具在参数为空时保留 url 自带的查询串，不额外生成 params。"""
     requested: dict[str, object] = {}
 
     class FakeClient:
+        """记录 GET 请求细节的假 httpx client。"""
         def __init__(self, *args, **kwargs):
-            pass
+            """忽略构造参数，仅保持接口一致。"""
 
         def __enter__(self):
+            """上下文入口，直接返回自身。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """上下文出口，不吞异常。"""
+            return
 
         def request(self, method, url, headers=None, json=None, params=None):
+            """记录请求方法、URL 与 params，并返回固定天气数据。"""
             requested.update({"method": method, "url": url, "params": params})
             return httpx.Response(
                 200,
@@ -896,10 +961,12 @@ def test_execute_get_tool_preserves_query_string_when_arguments_empty(monkeypatc
 
 
 def _mock_mcp_server_path() -> Path:
+    """返回仓库内置 mock MCP stdio 服务脚本的绝对路径。"""
     return Path(__file__).resolve().parents[1] / "mock_servers" / "mcp_stdio_server.py"
 
 
 def _test_session():
+    """创建带全量建表的内存 SQLite 会话，作为各用例隔离的数据库环境。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { EnterpriseChatSessionRead, FeedbackSummaryRead } from '../../types';
 import { employeeDashboardMetrics } from './employeeDashboardMetrics';
 
+/** 员工看板指标的计算逻辑。 */
 describe('employeeDashboardMetrics', () => {
+  /** 验证会话列表与反馈汇总共同构成看板唯一数据来源。 */
   it('uses employee sessions and feedback summary as the single dashboard source', () => {
     const sessions = [{ id: 'session-1' }, { id: 'session-2' }] as EnterpriseChatSessionRead[];
     const summary = {
@@ -24,6 +26,7 @@ describe('employeeDashboardMetrics', () => {
     });
   });
 
+  /** 验证正负反馈以百分比呈现，而不是暴露原始计数。 */
   it('keeps rates as percentages instead of exposing positive and negative counts', () => {
     const summary = {
       total_feedback: 4,
@@ -42,6 +45,7 @@ describe('employeeDashboardMetrics', () => {
     expect(metrics.positiveRate).not.toBe(summary.up_count);
   });
 
+  /** 验证员工尚无会话与反馈时返回稳定的零值指标。 */
   it('returns stable zero values before an employee has conversations or feedback', () => {
     expect(employeeDashboardMetrics([], null)).toEqual({
       conversationCount: 0,

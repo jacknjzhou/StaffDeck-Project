@@ -35,6 +35,11 @@ type SidebarContextProps = {
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
 
+/**
+ * 读取侧边栏上下文（展开状态、开关方法、是否移动端与切换方法）。
+ *
+ * 必须在 SidebarProvider 内部调用，否则直接抛出异常。
+ */
 function useSidebar() {
   const context = React.useContext(SidebarContext)
   if (!context) {
@@ -44,6 +49,12 @@ function useSidebar() {
   return context
 }
 
+/**
+ * 侧边栏状态提供者。
+ *
+ * 同时支持受控与非受控的展开状态，变化时写入 cookie 以便下次访问恢复；
+ * 并注册 Cmd/Ctrl+B 快捷键切换侧边栏。
+ */
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
@@ -64,6 +75,7 @@ function SidebarProvider({
   // We use openProp and setOpenProp for control from outside the component.
   const [_open, _setOpen] = React.useState(defaultOpen)
   const open = openProp ?? _open
+  /** 更新展开状态（受控时回调外部，否则写内部 state），并把状态同步到 cookie。 */
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value
@@ -81,12 +93,14 @@ function SidebarProvider({
 
   // Helper to toggle the sidebar. Always drive the desktop open state so the
   // sidebar stays a visible (icon) rail on small screens instead of an off-canvas sheet.
+  /** 切换侧边栏的展开/收起状态。 */
   const toggleSidebar = React.useCallback(() => {
     return setOpen((open) => !open)
   }, [setOpen])
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
+    /** 处理 Cmd/Ctrl+B 快捷键：命中时阻止默认行为并切换侧边栏。 */
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
@@ -141,6 +155,12 @@ function SidebarProvider({
   )
 }
 
+/**
+ * 侧边栏容器。
+ *
+ * 支持左右方向、sidebar/floating/inset 三种外观与 offcanvas/icon/none 三种折叠方式；
+ * collapsible 为 none 时只渲染静态容器，不再输出间距与折叠包裹层。
+ */
 function Sidebar({
   side = "left",
   variant = "sidebar",
@@ -216,6 +236,7 @@ function Sidebar({
   )
 }
 
+/** 侧边栏切换按钮：先透传外部 onClick，再切换展开状态。 */
 function SidebarTrigger({
   className,
   onClick,
@@ -242,6 +263,7 @@ function SidebarTrigger({
   )
 }
 
+/** 侧边栏边缘的可点击热区，用于切换展开与收起（移动端隐藏）。 */
 function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
   const { toggleSidebar } = useSidebar()
 
@@ -267,6 +289,7 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
   )
 }
 
+/** 侧边栏旁的主内容区，在 inset 变体下自动调整外边距与圆角。 */
 function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
   return (
     <main
@@ -280,6 +303,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
   )
 }
 
+/** 侧边栏内的输入框，使用紧凑高度并去掉默认阴影。 */
 function SidebarInput({
   className,
   ...props
@@ -294,6 +318,7 @@ function SidebarInput({
   )
 }
 
+/** 侧边栏顶部区域容器。 */
 function SidebarHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -305,6 +330,7 @@ function SidebarHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** 侧边栏底部区域容器。 */
 function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -316,6 +342,7 @@ function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** 侧边栏内的分隔线。 */
 function SidebarSeparator({
   className,
   ...props
@@ -330,6 +357,7 @@ function SidebarSeparator({
   )
 }
 
+/** 侧边栏可滚动的主内容区，图标折叠模式下隐藏溢出。 */
 function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -344,6 +372,7 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** 侧边栏分组容器，用于聚合一组菜单项。 */
 function SidebarGroup({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -355,6 +384,7 @@ function SidebarGroup({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** 分组标题；图标折叠模式下自动收起，asChild 为 true 时用 Slot 渲染。 */
 function SidebarGroupLabel({
   className,
   asChild = false,
@@ -375,6 +405,7 @@ function SidebarGroupLabel({
   )
 }
 
+/** 分组右上角的操作按钮，图标折叠模式下隐藏。 */
 function SidebarGroupAction({
   className,
   asChild = false,
@@ -395,6 +426,7 @@ function SidebarGroupAction({
   )
 }
 
+/** 分组内容容器。 */
 function SidebarGroupContent({
   className,
   ...props
@@ -409,6 +441,7 @@ function SidebarGroupContent({
   )
 }
 
+/** 侧边栏菜单列表容器（ul）。 */
 function SidebarMenu({ className, ...props }: React.ComponentProps<"ul">) {
   return (
     <ul
@@ -420,6 +453,7 @@ function SidebarMenu({ className, ...props }: React.ComponentProps<"ul">) {
   )
 }
 
+/** 单个菜单项容器（li），同时作为操作按钮与徽标的定位参照。 */
 function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
   return (
     <li
@@ -431,6 +465,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
   )
 }
 
+/** 菜单按钮的样式变体生成器：提供 default/outline 外观与 sm/default/lg 尺寸。 */
 const sidebarMenuButtonVariants = cva(
   "peer/menu-button group/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-open:hover:bg-sidebar-accent data-open:hover:text-sidebar-accent-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate",
   {
@@ -453,6 +488,12 @@ const sidebarMenuButtonVariants = cva(
   }
 )
 
+/**
+ * 侧边栏菜单按钮。
+ *
+ * 支持激活态、外观变体与尺寸；tooltip 可传字符串或 TooltipContent 属性对象，
+ * 仅在侧边栏收起且非移动端时展示。
+ */
 function SidebarMenuButton({
   asChild = false,
   isActive = false,
@@ -503,6 +544,7 @@ function SidebarMenuButton({
   )
 }
 
+/** 菜单项右侧的操作按钮；showOnHover 为 true 时仅在悬停或聚焦时显示。 */
 function SidebarMenuAction({
   className,
   asChild = false,
@@ -529,6 +571,7 @@ function SidebarMenuAction({
   )
 }
 
+/** 菜单项右侧的徽标（数字或短文案），图标折叠模式下隐藏。 */
 function SidebarMenuBadge({
   className,
   ...props
@@ -546,6 +589,7 @@ function SidebarMenuBadge({
   )
 }
 
+/** 菜单加载骨架屏，文本占位宽度在 50%–90% 之间随机生成以贴近真实文本。 */
 function SidebarMenuSkeleton({
   className,
   showIcon = false,
@@ -584,6 +628,7 @@ function SidebarMenuSkeleton({
   )
 }
 
+/** 子菜单容器（ul），带左侧引导线。 */
 function SidebarMenuSub({ className, ...props }: React.ComponentProps<"ul">) {
   return (
     <ul
@@ -598,6 +643,7 @@ function SidebarMenuSub({ className, ...props }: React.ComponentProps<"ul">) {
   )
 }
 
+/** 单个子菜单项容器（li）。 */
 function SidebarMenuSubItem({
   className,
   ...props
@@ -612,6 +658,7 @@ function SidebarMenuSubItem({
   )
 }
 
+/** 子菜单按钮或链接；asChild 为 true 时用 Slot 渲染子元素。 */
 function SidebarMenuSubButton({
   asChild = false,
   size = "md",

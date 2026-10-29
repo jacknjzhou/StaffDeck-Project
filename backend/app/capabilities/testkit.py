@@ -12,10 +12,14 @@ _RESERVED_NAMESPACES = {"core", "staffdeck"}
 
 
 class ContractViolation(AssertionError):
-    """Raised by the shared Provider Contract Test Kit."""
+    """共享 Provider Contract Test Kit 在断言不满足时抛出的失败信号。"""
 
 
 def assert_namespaced_extensions(extensions: Mapping[str, object]) -> None:
+    """校验扩展字段：命名空间须为小写蛇形且不占用 core/staffdeck，值须是对象，整体可 JSON 序列化且不超 64 KiB。
+
+    任一条不满足即抛 ContractViolation，错误信息带上违规的命名空间或具体原因。
+    """
     for namespace in extensions:
         if not _EXTENSION_NAMESPACE.fullmatch(namespace) or namespace in _RESERVED_NAMESPACES:
             raise ContractViolation(
@@ -32,6 +36,10 @@ def assert_namespaced_extensions(extensions: Mapping[str, object]) -> None:
 
 
 def assert_knowledge_search_result(result: KnowledgeSearchResult) -> None:
+    """校验 knowledge_search 返回结构：query_id 必填、outcome 为 complete/partial、hit_id 不重复且类型正确。
+
+    hit_id 与 content 缺一不可；extensions 复用命名空间规则。全部通过时无返回值。
+    """
     if not result.query_id:
         raise ContractViolation("Knowledge result query_id is required")
     if result.outcome not in {"complete", "partial"}:
@@ -51,6 +59,10 @@ def assert_knowledge_search_result(result: KnowledgeSearchResult) -> None:
 
 
 def assert_general_skill_package(package: GeneralSkillPackage) -> None:
+    """校验 General Skill 包：标识与入口字段非空、files 至少一项、路径唯一、size 非负且 entrypoint 指向包内文件。
+
+    失败时 ContractViolation 列出缺失字段名或重复路径，便于提供方定位打包问题。
+    """
     required = {
         "package_id": package.package_id,
         "slug": package.slug,
@@ -82,6 +94,7 @@ def assert_general_skill_package(package: GeneralSkillPackage) -> None:
 
 
 def assert_provider_error(info: CapabilityErrorInfo) -> None:
+    """校验能力调用失败时返回的错误体：code、message、request_id 必填，retryable 必须是布尔值。"""
     if not info.code or not info.message or not info.request_id:
         raise ContractViolation("Provider errors require code, message and request_id")
     if not isinstance(info.retryable, bool):

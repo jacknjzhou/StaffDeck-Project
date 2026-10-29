@@ -9,6 +9,7 @@ import {
   resolveKnowledgeLink,
 } from './knowledgeGraphModel';
 
+/** 构造带默认字段的知识概念测试数据，可用 overrides 覆盖任意字段。 */
 function concept(
   conceptId: string,
   overrides: Partial<KnowledgeConceptRead> = {},
@@ -33,6 +34,7 @@ function concept(
 }
 
 describe('knowledgeGraphModel', () => {
+  /** 验证绝对路径、相对路径、父级路径、查询串与锚点链接的解析结果。 */
   it('resolves absolute, relative, parent, query, and fragment links', () => {
     expect(resolveKnowledgeLink('sources/manual/intro', '/topics/rules.md')).toEqual({
       kind: 'internal',
@@ -51,6 +53,7 @@ describe('knowledgeGraphModel', () => {
     });
   });
 
+  /** 验证只构建指向内部概念的有向边，并排除引用、重复与自链接。 */
   it('builds directed internal edges while excluding citations, duplicates, and self-links', () => {
     const model = buildKnowledgeGraph([
       concept('topics/alpha', {
@@ -92,6 +95,7 @@ describe('knowledgeGraphModel', () => {
     });
   });
 
+  /** 验证默认隐藏已归档概念，同时支持显式传入概念子集。 */
   it('hides archived concepts by default and honors an explicit concept subset', () => {
     const concepts = [
       concept('topics/active', { links: [{ label: 'Old', target: '/topics/old.md' }] }),
@@ -110,6 +114,7 @@ describe('knowledgeGraphModel', () => {
     expect(model.stats).toMatchObject({ nodeCount: 2, edgeCount: 1, isolatedCount: 0 });
   });
 
+  /** 验证按标题、ID 与标签匹配概念，并选出度数最高的活跃枢纽节点。 */
   it('searches titles, ids, and tags and selects the strongest active hub', () => {
     const alpha = concept('topics/alpha', {
       title: 'Meeting Room Rules',
@@ -128,6 +133,7 @@ describe('knowledgeGraphModel', () => {
     expect(highestDegreeActiveNode(model)?.id).toBe('topics/alpha');
   });
 
+  /** 验证优先使用 Markdown 描述，并去除开头重复的标题。 */
   it('prefers the Markdown description and removes a duplicate leading title', () => {
     const preview = knowledgeConceptPreviewMarkdown(concept('topics/liability', {
       title: 'Liability Cases',
@@ -138,6 +144,7 @@ describe('knowledgeGraphModel', () => {
     expect(preview).toBe('**Case L-2022-008** with a penalty clause');
   });
 
+  /** 验证没有 OKF frontmatter 时回退到正文第一个有效章节。 */
   it('falls back to the first meaningful body section without OKF frontmatter', () => {
     const preview = knowledgeConceptPreviewMarkdown(concept('topics/handbook', {
       title: 'Employee Handbook',
@@ -159,6 +166,7 @@ describe('knowledgeGraphModel', () => {
     expect(preview).toBe('Welcome to the handbook.');
   });
 
+  /** 验证标题与内容挤在同一标题行时仍能取出其后的正文。 */
   it('recovers content that follows a duplicate title on the same heading line', () => {
     const preview = knowledgeConceptPreviewMarkdown(concept('topics/liability', {
       title: 'Liability Cases',
@@ -168,6 +176,7 @@ describe('knowledgeGraphModel', () => {
     expect(preview).toBe('**Case L-2022-008** with a penalty clause');
   });
 
+  /** 验证修复旧版摘要中被压平为单行的表格与列表。 */
   it('repairs flattened Markdown tables and lists from legacy summaries', () => {
     const preview = knowledgeConceptPreviewMarkdown(concept('topics/access', {
       title: 'Access Levels',
@@ -184,6 +193,7 @@ describe('knowledgeGraphModel', () => {
     ].join('\n'));
   });
 
+  /** 验证长摘要在完整 Markdown 块边界处做软截断。 */
   it('soft-limits long previews at complete Markdown block boundaries', () => {
     const firstBlock = `First block ${'a'.repeat(700)}`;
     const secondBlock = `Second block ${'b'.repeat(700)}`;

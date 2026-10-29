@@ -38,12 +38,14 @@ from app.tools.tool_schema import ToolExecutionPolicy, ToolProbeRequest
 
 
 def _admin_user() -> User:
+    """构造租户管理员用户，用于工具删除等需要管理员权限的调用。"""
     return User(
         id="user_admin", tenant_id="tenant_demo", username="ops", role="admin", password_hash="test"
     )
 
 
 def _member_user() -> User:
+    """构造普通成员用户，用于模拟非特权用户发起工具探测。"""
     return User(
         id="user_member",
         tenant_id="tenant_demo",
@@ -54,10 +56,12 @@ def _member_user() -> User:
 
 
 def probe_tool(request: ToolProbeRequest, db: Session):  # noqa: ANN201
+    """以普通成员身份调用工具探测接口，避免每个用例重复构造用户。"""
     return _probe_tool(request, db, _member_user())
 
 
 def test_delete_tool_removes_tenant_tool() -> None:
+    """验证管理员删除租户级工具后，工具记录会被移除。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         tool = Tool(
@@ -78,6 +82,7 @@ def test_delete_tool_removes_tenant_tool() -> None:
 
 
 def test_a2a_run_listing_includes_events_and_cancel_is_persisted() -> None:
+    """验证 A2A 运行列表包含事件明细，取消请求会写入并持久化。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -141,6 +146,7 @@ def test_a2a_run_listing_includes_events_and_cancel_is_persisted() -> None:
 
 
 def test_codex_a2a_adapter_status_never_returns_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 Codex A2A 适配器状态只暴露 token 是否配置，不泄露 token 明文。"""
     monkeypatch.setattr(
         "app.api.tools.get_settings",
         lambda: SimpleNamespace(
@@ -161,6 +167,7 @@ def test_codex_a2a_adapter_status_never_returns_token(monkeypatch: pytest.Monkey
 
 
 def test_tool_config_namespaces_execution_and_preserves_existing_policy() -> None:
+    """验证工具配置把执行策略收进 execution 字段，并保留既有策略不被旧客户端覆盖。"""
     created = _tool_config(
         {"tool": "sum"},
         ToolExecutionPolicy(timeout_seconds=20),
@@ -194,6 +201,7 @@ def test_tool_config_namespaces_execution_and_preserves_existing_policy() -> Non
 
 
 def test_tool_config_round_trips_detached_execution_policy() -> None:
+    """验证 detached 执行策略可写入配置，并能原样读回。"""
     policy = ToolExecutionPolicy(
         timeout_seconds=12,
         execution_mode="detached",
@@ -210,6 +218,7 @@ def test_tool_config_round_trips_detached_execution_policy() -> None:
 
 
 def test_provider_detached_policy_requires_status_url() -> None:
+    """验证 provider_task 的 detached 策略缺少 status_url 时会抛错。"""
     with pytest.raises(ValueError, match="status_url"):
         ToolExecutionPolicy(
             timeout_seconds=12,
@@ -219,6 +228,7 @@ def test_provider_detached_policy_requires_status_url() -> None:
 
 
 def test_tool_config_rejects_untyped_execution_and_reads_invalid_legacy_safely() -> None:
+    """验证非法执行策略会被丢弃，读取损坏的旧配置时安全返回 None。"""
     config = _tool_config(
         {"tool": "sum", "execution": {"timeout_seconds": 3601}},
         None,
@@ -229,6 +239,7 @@ def test_tool_config_rejects_untyped_execution_and_reads_invalid_legacy_safely()
 
 
 def test_delete_tool_is_tenant_scoped() -> None:
+    """验证跨租户删除工具返回 404，且原工具仍然存在。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(Tenant(id="tenant_other", name="Other"))
@@ -251,6 +262,7 @@ def test_delete_tool_is_tenant_scoped() -> None:
 
 
 def test_open_gallery_delete_tool_hides_gallery_without_removing_agent_binding() -> None:
+    """验证广场场景删除工具只隐藏展示，不删除工具本身与员工绑定。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -309,6 +321,7 @@ def test_open_gallery_delete_tool_hides_gallery_without_removing_agent_binding()
 
 
 def test_open_gallery_tool_read_returns_persisted_creator_metadata() -> None:
+    """验证广场工具读取会返回绑定时持久化的创建者元数据。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -344,6 +357,7 @@ def test_open_gallery_tool_read_returns_persisted_creator_metadata() -> None:
 
 
 def test_private_tool_is_not_visible_without_employee_scope() -> None:
+    """验证未指定员工范围时私有工具不可见并返回 404。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(id="agent_private", tenant_id="tenant_demo", name="研发员工")
@@ -367,6 +381,7 @@ def test_private_tool_is_not_visible_without_employee_scope() -> None:
 
 
 def test_agent_without_tool_binding_does_not_see_open_gallery_tools() -> None:
+    """验证未绑定工具的 agent 看不到开放广场中的工具。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -398,6 +413,7 @@ def test_agent_without_tool_binding_does_not_see_open_gallery_tools() -> None:
 
 
 def test_invalid_agent_id_does_not_fall_back_to_open_gallery_tools() -> None:
+    """验证传入不存在的 agent_id 时返回 404，而不是回退到广场工具。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -425,6 +441,7 @@ def test_invalid_agent_id_does_not_fall_back_to_open_gallery_tools() -> None:
 
 
 def test_probe_tool_success_infers_output_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证探测成功时返回状态码，并根据响应内容推断输出 schema。"""
     monkeypatch.setattr(
         "app.api.tools.get_settings",
         lambda: SimpleNamespace(
@@ -434,16 +451,21 @@ def test_probe_tool_success_infers_output_schema(monkeypatch: pytest.MonkeyPatch
     )
 
     class FakeClient:
+        """假 httpx 客户端：替代真实网络请求，便于在用例内校验入参与响应。"""
+
         def __init__(self, *args, **kwargs):
-            pass
+            """接收并忽略构造参数，不建立任何真实连接。"""
 
         def __enter__(self):
+            """进入上下文并返回自身，使 with 用法与 httpx.Client 保持一致。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """退出上下文，无资源需要释放。"""
+            return
 
         def request(self, method, url, headers=None, json=None, params=None):
+            """校验探测请求的方法、地址、内部服务头与入参，并返回固定成功响应。"""
             assert method == "POST"
             assert url == "http://localhost:5173/api/mock/member/benefit-reconcile"
             assert headers[INTERNAL_SERVICE_HEADER] == internal_service_token()
@@ -479,19 +501,25 @@ def test_probe_tool_success_infers_output_schema(monkeypatch: pytest.MonkeyPatch
 
 
 def test_probe_tool_forwards_custom_auth_json_as_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证自定义 auth JSON 会合并进请求头，与样例参数一同发送。"""
     requested: dict[str, object] = {}
 
     class FakeClient:
+        """假 httpx 客户端：替代真实网络请求，便于在用例内校验入参与响应。"""
+
         def __init__(self, *args, **kwargs):
-            pass
+            """接收并忽略构造参数，不建立任何真实连接。"""
 
         def __enter__(self):
+            """进入上下文并返回自身，使 with 用法与 httpx.Client 保持一致。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """退出上下文，无资源需要释放。"""
+            return
 
         def request(self, method, url, headers=None, json=None, params=None):
+            """记录请求头与 JSON 入参，并返回固定成功响应。"""
             requested.update(headers=headers, json=json)
             return httpx.Response(200, json={"ok": True})
 
@@ -523,6 +551,7 @@ def test_probe_tool_forwards_custom_auth_json_as_headers(monkeypatch: pytest.Mon
 
 
 def test_probe_mcp_tool_success_infers_output_schema() -> None:
+    """验证内置 MCP 工具探测成功，并根据返回数据推断输出 schema。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -549,19 +578,25 @@ def test_probe_mcp_tool_success_infers_output_schema() -> None:
 def test_probe_get_tool_preserves_query_string_when_arguments_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 GET 探测在无样例参数时保留原 URL 查询串，不额外传参。"""
     requested: dict[str, object] = {}
 
     class FakeClient:
+        """假 httpx 客户端：替代真实网络请求，便于在用例内校验入参与响应。"""
+
         def __init__(self, *args, **kwargs):
-            pass
+            """接收并忽略构造参数，不建立任何真实连接。"""
 
         def __enter__(self):
+            """进入上下文并返回自身，使 with 用法与 httpx.Client 保持一致。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """退出上下文，无资源需要释放。"""
+            return
 
         def request(self, method, url, headers=None, json=None, params=None):
+            """记录请求方法、URL 与查询参数，并返回固定天气响应。"""
             requested.update({"method": method, "url": url, "params": params})
             return httpx.Response(200, json={"current": {"temperature_2m": 27.4}})
 
@@ -598,19 +633,25 @@ def test_probe_get_tool_preserves_query_string_when_arguments_empty(
 def test_probe_get_tool_sends_sample_arguments_as_query_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 GET 探测会把样例参数作为查询参数发送，而不是放进请求体。"""
     requested: dict[str, object] = {}
 
     class FakeClient:
+        """假 httpx 客户端：替代真实网络请求，便于在用例内校验入参与响应。"""
+
         def __init__(self, *args, **kwargs):
-            pass
+            """接收并忽略构造参数，不建立任何真实连接。"""
 
         def __enter__(self):
+            """进入上下文并返回自身，使 with 用法与 httpx.Client 保持一致。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """退出上下文，无资源需要释放。"""
+            return
 
         def request(self, method, url, headers=None, json=None, params=None):
+            """记录请求方法、URL、查询参数与 JSON 入参，并返回固定时区响应。"""
             requested.update({"method": method, "url": url, "params": params, "json": json})
             return httpx.Response(200, json={"timezone": "Asia/Shanghai"})
 
@@ -652,6 +693,7 @@ def test_probe_get_tool_sends_sample_arguments_as_query_params(
 
 
 def test_probe_mcp_tool_error_is_stable() -> None:
+    """验证 MCP 工具不存在时探测返回稳定的 MCP_ERROR 与 400 状态码。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -676,6 +718,7 @@ def test_probe_mcp_tool_error_is_stable() -> None:
 
 
 def test_probe_stdio_mcp_tool_success_infers_output_schema() -> None:
+    """验证 stdio MCP 工具探测成功，并推断数值型输出字段。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -706,6 +749,7 @@ def test_probe_stdio_mcp_tool_success_infers_output_schema() -> None:
 
 
 def test_probe_tool_relative_url_uses_configured_tool_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证相对 URL 会拼接配置的 TOOL_BASE_URL 组成完整探测地址。"""
     monkeypatch.setenv("TOOL_BASE_URL", "http://127.0.0.1:10086/")
     get_settings.cache_clear()
     try:
@@ -717,17 +761,23 @@ def test_probe_tool_relative_url_uses_configured_tool_base(monkeypatch: pytest.M
 
 
 def test_probe_tool_http_error_returns_stable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证上游返回 404 时探测结果会被转换为稳定的 HTTP_ERROR。"""
     class FakeClient:
+        """假 httpx 客户端：替代真实网络请求，便于在用例内校验入参与响应。"""
+
         def __init__(self, *args, **kwargs):
-            pass
+            """接收并忽略构造参数，不建立任何真实连接。"""
 
         def __enter__(self):
+            """进入上下文并返回自身，使 with 用法与 httpx.Client 保持一致。"""
             return self
 
         def __exit__(self, *args):
-            return None
+            """退出上下文，无资源需要释放。"""
+            return
 
         def request(self, method, url, headers=None, json=None, params=None):
+            """始终返回 404，用于验证探测的错误转换。"""
             return httpx.Response(404, json={"detail": "not found"})
 
     monkeypatch.setattr(httpx, "Client", FakeClient)
@@ -753,6 +803,7 @@ def test_probe_tool_http_error_returns_stable_error(monkeypatch: pytest.MonkeyPa
 
 
 def _test_session():
+    """创建基于内存 SQLite 的共享连接会话，保证每个用例的数据互相隔离。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -763,4 +814,5 @@ def _test_session():
 
 
 def _mock_mcp_server_path() -> Path:
+    """返回测试用 stdio MCP 服务脚本路径，用于探测真实子进程服务。"""
     return Path(__file__).resolve().parents[1] / "mock_servers" / "mcp_stdio_server.py"

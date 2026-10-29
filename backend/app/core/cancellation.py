@@ -16,6 +16,7 @@ _cancelled_turns: OrderedDict[tuple[str, str], float] = OrderedDict()
 
 
 def _prune_cancelled_turns_locked(now: float) -> None:
+    """在持锁前提下清理过期标记，并按先进先出压回容量上限。"""
     cutoff = now - _CANCEL_MARKER_TTL_SECONDS
     while _cancelled_turns:
         _, created_at = next(iter(_cancelled_turns.items()))
@@ -25,6 +26,7 @@ def _prune_cancelled_turns_locked(now: float) -> None:
 
 
 def cancel_chat_turn(session_id: str, turn_id: str) -> None:
+    """记录某轮对话的取消标记并顺手清理过期项；session_id 或 turn_id 为空时忽略。"""
     if not session_id or not turn_id:
         return
     with _lock:
@@ -36,6 +38,7 @@ def cancel_chat_turn(session_id: str, turn_id: str) -> None:
 
 
 def clear_chat_turn_cancelled(session_id: str, turn_id: str) -> None:
+    """清除指定轮的取消标记，通常在轮次正常结束后调用；参数为空时忽略。"""
     if not session_id or not turn_id:
         return
     with _lock:
@@ -49,6 +52,12 @@ def is_chat_turn_cancelled(
     db: Session | None = None,
     identity_kind: Literal["any", "client", "message"] = "any",
 ) -> bool:
+    """判断某轮对话是否已被取消，按进程内标记、轮次回执、持久化事件依次回退。
+
+    传入 db 时先看 HarnessTurnRecord 的终态；回执尚未落库则查最近的
+    stream_cancelled 事件，使进程重启后的取消依然生效。identity_kind 决定
+    turn_id 与 client_turn_id、user_message_id 的匹配方式。
+    """
     if not session_id or not turn_id:
         return False
     with _lock:

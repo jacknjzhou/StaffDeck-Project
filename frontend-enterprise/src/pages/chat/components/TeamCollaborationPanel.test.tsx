@@ -66,6 +66,7 @@ const team: TeamRead = {
   updated_at: '2026-08-15T00:00:00Z',
 };
 
+/** 构造返回指定 JSON 体的成功响应桩。 */
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -75,12 +76,14 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+/** 每个用例结束后清理 DOM 并移除全局桩。 */
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe('TeamCollaborationPanel', () => {
+  /** 验证渲染项目领导对成员的 @ 提及，且仅内联展开被点击的成员回复。 */
   it('renders leader mentions and expands only the member reply inline', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -151,6 +154,7 @@ describe('TeamCollaborationPanel', () => {
     );
   });
 
+  /** 验证协作问题格式化为项目领导对成员的直接 @ 提及。 */
   it('formats collaboration as a direct mention from the project leader', () => {
     expect(collaborationQuestion({
       session_id: 'session-task',
@@ -165,6 +169,7 @@ describe('TeamCollaborationPanel', () => {
     })).toBe('@行政，请处理「季度报告」');
   });
 
+  /** 验证补充成员问题答案后恢复同一团队任务。 */
   it('lets the user answer a member question and resume the same team task', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ status: 'rework' }));
     vi.stubGlobal('fetch', fetchMock);
@@ -207,6 +212,7 @@ describe('TeamCollaborationPanel', () => {
     );
   });
 
+  /** 验证回复展开后展示运行中成员的增量输出。 */
   it('shows incremental member output while an expanded reply is running', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -248,6 +254,7 @@ describe('TeamCollaborationPanel', () => {
     );
   });
 
+  /** 验证成员回复复用 Markdown、引用与产物卡片的渲染能力。 */
   it('reuses standalone Markdown, citations, and artifact cards for member replies', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -319,6 +326,7 @@ describe('TeamCollaborationPanel', () => {
     );
   });
 
+  /** 验证每个成员的安全执行记录在协作卡片中单独外置展示。 */
   it('externalizes each member safe execution record in the collaboration card', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -398,6 +406,7 @@ describe('TeamCollaborationPanel', () => {
     );
   });
 
+  /** 验证协作交流按原始时间位置插入聊天时间线。 */
   it('inserts collaboration exchanges at their original position in the chat timeline', () => {
     const messages: ChatMessage[] = [
       { id: 'm1', role: 'user', content: '开始', created_at: '2026-08-15T00:00:00Z' },

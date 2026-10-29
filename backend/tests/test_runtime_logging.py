@@ -10,12 +10,14 @@ def test_runtime_log_path_uses_platform_user_data_directory(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """验证运行时日志路径落在平台用户数据目录下的 logs/staffdeck.log。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
 
     assert runtime_logging.runtime_log_path() == tmp_path / "logs" / "staffdeck.log"
 
 
 def test_runtime_queue_drops_instead_of_blocking_when_full() -> None:
+    """验证队列写满后丢弃记录并累计计数，而不是阻塞日志调用方。"""
     record_queue: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=1)
     handler = runtime_logging._DroppingQueueHandler(record_queue)
     record = logging.makeLogRecord({"msg": "diagnostic"})
@@ -28,6 +30,7 @@ def test_runtime_queue_drops_instead_of_blocking_when_full() -> None:
 
 
 def test_runtime_logging_writes_and_rotates_diagnostics(monkeypatch, tmp_path: Path) -> None:
+    """验证运行时日志会落盘并按大小轮转，同时只采集运行时可观测的日志命名空间。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(runtime_logging, "_configured_path", None)
     monkeypatch.setattr(runtime_logging, "MAX_LOG_BYTES", 256)
@@ -53,6 +56,7 @@ def test_runtime_logging_writes_and_rotates_diagnostics(monkeypatch, tmp_path: P
 
 
 def test_runtime_logging_does_not_attach_to_root_logger(monkeypatch, tmp_path: Path) -> None:
+    """验证日志配置不会向根 logger 挂载处理器，避免污染第三方日志。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(runtime_logging, "_configured_path", None)
 
@@ -68,6 +72,7 @@ def test_runtime_logging_does_not_attach_to_root_logger(monkeypatch, tmp_path: P
 
 
 def test_uncaught_exception_log_excludes_exception_message(monkeypatch, tmp_path: Path) -> None:
+    """验证未捕获异常日志只记异常类型与回溯，不写入异常消息和本机路径。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(runtime_logging, "_configured_path", None)
     sensitive_value = "customer-secret-value-must-not-be-logged"

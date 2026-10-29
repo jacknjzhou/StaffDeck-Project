@@ -43,14 +43,17 @@ from app.security.encryption import encrypt_secret
 
 
 def _admin_user() -> User:
+    """构造管理员用户，作为需要管理员权限的技能接口调用者。"""
     return User(id="user_admin", tenant_id="tenant_demo", username="admin", role="admin", password_hash="test")
 
 
 def _owner_user() -> User:
+    """构造普通员工用户，用于验证个人员工资源的创建者归属。"""
     return User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="test")
 
 
 def test_skill_editor_only_merges_selected_step() -> None:
+    """验证只选中单个步骤时，仅合并该步骤改写，基础信息与其他步骤保持不变。"""
     current = _skill_card()
     candidate = _skill_card()
     candidate.name = "不应修改基础信息"
@@ -78,6 +81,7 @@ def test_skill_editor_only_merges_selected_step() -> None:
 
 
 def test_skill_editor_merges_multiple_selected_targets() -> None:
+    """验证同时选中基础信息与步骤时两处都合并，未选中的步骤保持原样。"""
     current = _skill_card()
     candidate = _skill_card()
     candidate.description = "新的描述"
@@ -105,6 +109,7 @@ def test_skill_editor_merges_multiple_selected_targets() -> None:
 
 
 def test_skill_editor_can_target_node_by_index() -> None:
+    """验证以 nodes[1] 下标选中节点时只替换该下标节点，其他节点不被改写。"""
     current = _skill_card()
     candidate = _skill_card()
     candidate.nodes[0].instruction = "不应修改第一步"
@@ -130,6 +135,7 @@ def test_skill_editor_can_target_node_by_index() -> None:
 
 
 def test_skill_editor_allows_selected_step_deletion() -> None:
+    """验证允许删除被选中的步骤，删除后草稿只保留剩余节点。"""
     current = _skill_card()
     candidate_data = current.model_dump(mode="json")
     candidate_data["nodes"] = candidate_data["nodes"][:1]
@@ -156,6 +162,7 @@ def test_skill_editor_allows_selected_step_deletion() -> None:
 
 
 def test_skill_editor_allows_selected_step_insertion() -> None:
+    """验证允许在被选中步骤后插入新步骤，且模型未申报的基础信息不被覆盖。"""
     current = _skill_card()
     candidate_data = current.model_dump(mode="json")
     candidate_data["nodes"].insert(
@@ -194,6 +201,7 @@ def test_skill_editor_allows_selected_step_insertion() -> None:
 
 
 def test_skill_editor_merges_selected_step_id_change() -> None:
+    """验证选中节点修改 node_id 时只合并该节点，其他节点 ID 保持不变。"""
     current = _skill_card()
     current.nodes[1].node_id = "create_order"
     current.edges[0].next_node_id = "create_order"
@@ -223,6 +231,7 @@ def test_skill_editor_merges_selected_step_id_change() -> None:
 
 
 def test_skill_editor_applies_step_id_corrections_to_final_draft() -> None:
+    """验证节点 ID 修正会落到最终草稿，并写入 changed_paths 且不产生警告。"""
     current = _skill_card()
     candidate = _skill_card()
     candidate.nodes[1].node_id = "feedback_order_result"
@@ -251,6 +260,7 @@ def test_skill_editor_applies_step_id_corrections_to_final_draft() -> None:
 
 
 def test_skill_editor_applies_patch_response_without_full_draft() -> None:
+    """验证模型只返回 patches 而不返回完整草稿时，补丁仍能落到目标字段。"""
     current = _skill_card()
     response = SkillEditor()._normalize_response(  # noqa: SLF001
         {
@@ -278,6 +288,7 @@ def test_skill_editor_applies_patch_response_without_full_draft() -> None:
 
 
 def test_skill_editor_patches_graph_topology_and_capability_refs() -> None:
+    """验证补丁可更新连线拓扑与节点能力引用，并把 graph 记入变更路径。"""
     current = _skill_card()
     response = SkillEditor()._normalize_response(  # noqa: SLF001
         {
@@ -319,6 +330,7 @@ def test_skill_editor_patches_graph_topology_and_capability_refs() -> None:
 
 
 def test_skill_editor_does_not_apply_unreported_graph_changes() -> None:
+    """验证模型未申报的图形变更（连线标签）不会被合并进最终草稿。"""
     current = _skill_card()
     candidate = current.model_copy(deep=True)
     candidate.nodes[0].instruction = "只修改节点说明"
@@ -343,6 +355,7 @@ def test_skill_editor_does_not_apply_unreported_graph_changes() -> None:
 
 
 def test_skill_editor_validates_and_normalizes_nested_sop() -> None:
+    """验证节点改成子 SOP 时先校验嵌套关系，并清空父节点残留的指令与能力。"""
     current = _skill_card()
     candidate = current.model_dump(mode="json")
     candidate["nodes"][0].update(
@@ -373,6 +386,7 @@ def test_skill_editor_validates_and_normalizes_nested_sop() -> None:
 
 
 def test_skill_editor_rejects_unknown_or_cyclic_nested_sop() -> None:
+    """验证引用未知或成环的子 SOP 时抛出 SopNestingError 拒绝改写。"""
     current = _skill_card()
     candidate = current.model_dump(mode="json")
     candidate["nodes"][0].update(
@@ -400,6 +414,7 @@ def test_skill_editor_rejects_unknown_or_cyclic_nested_sop() -> None:
 
 
 def test_skill_editor_payload_exposes_compact_sop_catalog() -> None:
+    """验证提供给模型的可用 SOP 目录只含精简字段，不暴露完整 content。"""
     child = _available_sop("child_purchase")
     request = SkillRewriteRequest(
         tenant_id="tenant_demo",
@@ -424,11 +439,14 @@ def test_skill_editor_payload_exposes_compact_sop_catalog() -> None:
 
 
 def test_skill_editor_stream_repairs_invalid_json_once(monkeypatch) -> None:
+    """验证模型输出非法 JSON 时只重试修复一次，并依次推送各阶段状态。"""
     def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+        """伪造流式输出：先返回被截断的 JSON，触发后续修复流程。"""
         assert self.max_output_tokens == 8192
         yield '{"assistant_message": "截断的输出", "patches": ['
 
     def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        """伪造非流式输出：修复请求返回合法补丁，反思请求返回全部通过。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round"):
             return _reflection_passes_json()
@@ -475,6 +493,7 @@ def test_skill_editor_stream_repairs_invalid_json_once(monkeypatch) -> None:
 
 
 def test_skill_stats_counts_skill_entry_and_feedback() -> None:
+    """验证技能调用次数与正负反馈分别按技能、技能@版本两个维度统计。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         content = _skill_card()
@@ -541,6 +560,7 @@ def test_skill_stats_counts_skill_entry_and_feedback() -> None:
 
 
 def test_skill_stats_count_one_negative_feedback_per_flow() -> None:
+    """验证同一会话内多条负反馈只计一次，避免重复拉低负反馈率。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         content = _skill_card()
@@ -585,6 +605,7 @@ def test_skill_stats_count_one_negative_feedback_per_flow() -> None:
 
 
 def test_skill_versions_are_snapshotted_with_version_stats() -> None:
+    """验证版本列表返回的是版本快照，并带上该版本自身的调用统计。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="开放广场", is_overall=True))
@@ -617,6 +638,7 @@ def test_skill_versions_are_snapshotted_with_version_stats() -> None:
 
 
 def test_skill_id_cannot_be_modified_after_create() -> None:
+    """验证创建后修改 skill_id 会以 400 拒绝并返回固定错误信息。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         content = _skill_card()
@@ -647,6 +669,7 @@ def test_skill_id_cannot_be_modified_after_create() -> None:
 
 
 def test_skill_can_return_to_draft_without_leaving_runtime_list() -> None:
+    """验证技能退回草稿后管理列表仍可见，运行时列表则只保留已发布技能。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="开放广场", is_overall=True))
@@ -677,6 +700,7 @@ def test_skill_can_return_to_draft_without_leaving_runtime_list() -> None:
 
 
 def test_personal_created_skill_uses_agent_owner_as_creator() -> None:
+    """验证个人员工下创建的技能，创建者信息取自该员工的所有者。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(
@@ -710,6 +734,7 @@ def test_personal_created_skill_uses_agent_owner_as_creator() -> None:
 
 
 def test_personal_created_skill_binds_explicit_tools_to_its_skill_id() -> None:
+    """验证个人技能显式调用的工具会被追加到该工具的可用技能列表。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         agent = AgentProfile(
@@ -756,6 +781,7 @@ def test_personal_created_skill_binds_explicit_tools_to_its_skill_id() -> None:
 
 
 def test_personal_created_skill_uses_current_admin_when_owner_missing() -> None:
+    """验证员工缺少所有者信息时，创建者信息回落为当前管理员。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         current_user = User(
@@ -792,6 +818,7 @@ def test_personal_created_skill_uses_current_admin_when_owner_missing() -> None:
 
 
 def test_unversioned_stats_remain_aggregate_without_guessing_a_version() -> None:
+    """验证无版本号的调用与反馈只计入聚合统计，不臆测归属到某个版本。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="开放广场", is_overall=True))
@@ -871,6 +898,7 @@ def test_unversioned_stats_remain_aggregate_without_guessing_a_version() -> None
 
 
 def test_unversioned_stats_do_not_fall_back_to_current_version() -> None:
+    """验证无版本号统计不会回落到当前版本，技能读接口返回零值。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         content = _skill_card()
@@ -918,6 +946,7 @@ def test_unversioned_stats_do_not_fall_back_to_current_version() -> None:
 
 
 def test_rollback_skill_version_restores_content_without_copying_stats() -> None:
+    """验证回滚只恢复目标版本的内容，不把统计数字一并复制。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         old_content = _skill_card()
@@ -980,6 +1009,7 @@ def test_rollback_skill_version_restores_content_without_copying_stats() -> None
 
 
 def test_skill_read_uses_current_version_stats_for_skill_list() -> None:
+    """验证技能读接口在列表场景取当前版本维度的统计而非聚合统计。"""
     content = _skill_card()
     row = Skill(
         tenant_id="tenant_demo",
@@ -1015,6 +1045,7 @@ def test_skill_read_uses_current_version_stats_for_skill_list() -> None:
 
 
 def test_skill_read_includes_total_and_recent_version_ranking_stats() -> None:
+    """验证列表返回总量统计，以及最近若干版本的排行统计。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True))
@@ -1101,6 +1132,7 @@ def test_skill_read_includes_total_and_recent_version_ranking_stats() -> None:
 
 
 def test_message_feedback_attribution_uses_turn_active_skill() -> None:
+    """验证反馈归因取该轮对话中生效的技能与步骤，而非会话首个技能。"""
     with _test_session() as db:
         db.add(Message(id="msg_user", tenant_id="tenant_demo", session_id="session_1", role="user", content="我要退款"))
         assistant = Message(
@@ -1145,6 +1177,7 @@ def test_message_feedback_attribution_uses_turn_active_skill() -> None:
 
 
 def test_message_feedback_attribution_uses_router_skill_hint_for_legacy_step_event() -> None:
+    """验证旧版只记录步骤事件时，用路由决策里的技能提示补全归因。"""
     with _test_session() as db:
         db.add(Message(id="msg_user", tenant_id="tenant_demo", session_id="session_1", role="user", content="继续下单"))
         assistant = Message(
@@ -1201,6 +1234,7 @@ def test_message_feedback_attribution_uses_router_skill_hint_for_legacy_step_eve
 
 
 def test_skill_read_preserves_graph_node_ids() -> None:
+    """验证技能读接口返回的内容保留图的节点 ID 与顺序。"""
     content = _skill_card()
     row = Skill(
         tenant_id="tenant_demo",
@@ -1217,6 +1251,7 @@ def test_skill_read_preserves_graph_node_ids() -> None:
 
 
 def test_persisted_skill_promotes_required_capabilities_without_weakening_schema() -> None:
+    """验证持久化技能恢复时把必选能力提升为可用能力，同时不放松 schema 校验。"""
     content = _skill_card().model_dump(mode="json")
     content["nodes"][0]["capability_refs"] = {
         "required_tool_ids": ["order.query"],
@@ -1232,7 +1267,9 @@ def test_persisted_skill_promotes_required_capabilities_without_weakening_schema
 
 
 def test_skill_distiller_stream_uses_generation_status(monkeypatch) -> None:
+    """验证蒸馏流程推送生成阶段状态，且提示词传递原始文本而不是 JSON。"""
     def fake_stream(self, _system_prompt: str, _payload: str):  # noqa: ANN001
+        """伪造蒸馏流式输出：返回一份完整的技能草稿 JSON 文本。"""
         assert self.max_output_tokens == 8192
         assert isinstance(_payload, str)
         assert _payload.startswith("技能标题：商品比价\n原始流程：")
@@ -1280,6 +1317,7 @@ def test_skill_distiller_stream_uses_generation_status(monkeypatch) -> None:
         """
 
     def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        """伪造反思调用：断言处于首轮反思并返回全部通过的结果。"""
         assert self.max_output_tokens == 8192
         assert payload.get("reflection_round") == 1
         return _reflection_passes_json()
@@ -1308,7 +1346,9 @@ def test_skill_distiller_stream_uses_generation_status(monkeypatch) -> None:
 
 
 def test_skill_distiller_stream_reflects_and_repairs_generated_skill(monkeypatch) -> None:
+    """验证反思发现缺少闭环步骤时应用修正，并重置此前已推送的片段。"""
     def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+        """伪造蒸馏流式输出：返回缺少闭环回复步骤的技能草稿。"""
         assert self.max_output_tokens == 8192
         yield json.dumps(
             {
@@ -1341,6 +1381,7 @@ def test_skill_distiller_stream_reflects_and_repairs_generated_skill(monkeypatch
         )
 
     def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        """伪造反思调用：首轮补上闭环步骤，第二轮返回通过结果。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round") == 1:
             revised = dict(payload["candidate_skill"])
@@ -1401,7 +1442,9 @@ def test_skill_distiller_stream_reflects_and_repairs_generated_skill(monkeypatch
 
 
 def test_skill_distiller_reflection_checks_tool_call_format_without_rule_fallback(monkeypatch) -> None:
+    """验证反思按 rubric 检查工具调用格式并修正裸 call_tool，不用规则兜底。"""
     def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+        """伪造蒸馏流式输出：返回含裸 call_tool 动作的技能草稿。"""
         assert self.max_output_tokens == 8192
         yield json.dumps(
             {
@@ -1442,6 +1485,7 @@ def test_skill_distiller_reflection_checks_tool_call_format_without_rule_fallbac
         )
 
     def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        """伪造反思调用：断言 rubric 含工具调用格式项，首轮修正动作后次轮通过。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round") == 1:
             rubric_names = {item["name"] for item in payload["rubrics"]}
@@ -1502,6 +1546,7 @@ def test_skill_distiller_reflection_checks_tool_call_format_without_rule_fallbac
 
 
 def test_skill_reflection_prompt_keeps_new_candidate_tool_actions() -> None:
+    """验证反思提示词保留新候选工具动作，并包含各 rubric 的中文标签。"""
     prompt = SKILL_REFLECTION_PROMPT_PATH.read_text(encoding="utf-8")
 
     assert RUBRIC_LABELS["tool_grounding"] == "工具依据"
@@ -1516,11 +1561,14 @@ def test_skill_reflection_prompt_keeps_new_candidate_tool_actions() -> None:
 
 
 def test_skill_distiller_stream_repairs_invalid_json_with_model(monkeypatch) -> None:
+    """验证蒸馏遇到非法 JSON 时由模型修复一次，并重置片段后继续。"""
     def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+        """伪造流式输出：返回被截断的技能草稿 JSON。"""
         assert self.max_output_tokens == 8192
         yield '{"draft_skill": {"name": "截断"'
 
     def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        """伪造修复调用：断言修复轮次，并返回完整的技能草稿。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round"):
             return _reflection_passes_json()
@@ -1590,11 +1638,14 @@ def test_skill_distiller_stream_repairs_invalid_json_with_model(monkeypatch) -> 
 
 
 def test_skill_distiller_stream_uses_staged_generation_after_repair_failure(monkeypatch) -> None:
+    """验证模型修复失败后改用分段生成，逐节点扩写后再做最终评审。"""
     def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+        """伪造流式输出：返回被截断的 JSON，迫使流程进入修复阶段。"""
         assert self.max_output_tokens == 8192
         yield '{"draft_skill": {"name": "截断"'
 
     def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        """伪造修复与分段调用：修复失败，分段生成逐节点扩写并完成评审。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round"):
             return _reflection_passes_json()
@@ -1675,9 +1726,11 @@ def test_skill_distiller_stream_uses_staged_generation_after_repair_failure(monk
 
 
 def test_distill_skill_uses_selected_model_config(monkeypatch) -> None:
+    """验证蒸馏接口使用请求指定的模型配置，而不是租户默认模型。"""
     captured: dict[str, str] = {}
 
     def fake_distill(self, request, model_config):  # noqa: ANN001
+        """替换真实蒸馏调用，记录实际使用的模型 ID 以便断言。"""
         captured["model_id"] = model_config.id
         return SkillDistillResponse(draft_skill=_skill_card())
 
@@ -1721,6 +1774,7 @@ def test_distill_skill_uses_selected_model_config(monkeypatch) -> None:
 
 
 def test_extract_uploaded_skill_file_reads_docx_text() -> None:
+    """验证上传的 docx 技能文件能被解析出正文文本。"""
     buffer = BytesIO()
     with ZipFile(buffer, "w") as archive:
         archive.writestr(
@@ -1742,6 +1796,7 @@ def test_extract_uploaded_skill_file_reads_docx_text() -> None:
 
 
 def _skill_card() -> SkillCard:
+    """构造覆盖两个节点、一条连线的基准技能卡，供各改写用例复用与对比。"""
     return SkillCard(
         skill_id="purchase",
         name="购买商品",
@@ -1788,6 +1843,7 @@ def _available_sop(
     *,
     nested_sop_ids: list[str] | None = None,
 ) -> dict[str, object]:
+    """构造可用 SOP 目录项，可带上子 SOP 列表以模拟嵌套关系。"""
     child_ids = nested_sop_ids or []
     return {
         "skill_id": skill_id,
@@ -1810,6 +1866,7 @@ def _available_sop(
 
 
 def _reflection_passes_json() -> str:
+    """构造反思全部通过的 JSON 响应，供蒸馏与改写流程的 mock 使用。"""
     return json.dumps(
         {
             "passed": True,
@@ -1831,6 +1888,7 @@ def _reflection_passes_json() -> str:
 
 
 def _model_config() -> ModelConfig:
+    """构造已加密密钥的模型配置，供流式改写与蒸馏调用。"""
     return ModelConfig(
         tenant_id="tenant_demo",
         name="mock",
@@ -1840,6 +1898,7 @@ def _model_config() -> ModelConfig:
 
 
 def _test_session():
+    """创建内存 SQLite 会话，隔离各用例的数据库状态。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -1853,6 +1912,7 @@ def _handoff_skill_card(
     assignee_user_id: str | None,
     assignee_notify_channel: str | None = None,
 ) -> SkillCard:
+    """把基准技能卡的第二个节点改造成转接节点，便于校验转接待办人。"""
     card = _skill_card().model_copy(deep=True)
     card.nodes[1].type = "handoff"
     card.nodes[1].assignee_user_id = assignee_user_id
@@ -1866,6 +1926,7 @@ def _scope_binding(
     channel: str = "feishu",
     scope: str = "",
 ) -> ChannelBinding:
+    """构造启用中的渠道绑定，用于验证渠道身份的可达性判定。"""
     return ChannelBinding(
         id=binding_id,
         tenant_id="tenant_demo",
@@ -1877,6 +1938,7 @@ def _scope_binding(
 
 
 def test_validate_handoff_assignees_accepts_internal_and_bound_channel_variants() -> None:
+    """验证站内通知与已绑定渠道的转接人校验都能通过。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x"))
@@ -1899,6 +1961,7 @@ def test_validate_handoff_assignees_accepts_internal_and_bound_channel_variants(
 
 
 def test_validate_handoff_assignees_rejects_unbound_channel_variant() -> None:
+    """验证只有群聊虚拟身份时不算有效渠道绑定，渠道转接会被拒绝。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x"))
@@ -2008,6 +2071,7 @@ def test_validate_handoff_assignees_accepts_wecom_scope_reachability() -> None:
 
 
 def test_validate_handoff_assignees_rejects_channel_customer() -> None:
+    """验证渠道客户账号不能作为转接待办人。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(

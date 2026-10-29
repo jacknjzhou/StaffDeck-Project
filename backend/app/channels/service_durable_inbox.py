@@ -13,6 +13,7 @@ REACTION_TARGET_INHERITED_KEYS = ("conversation_id",)
 
 
 class StageDisposition(StrEnum):
+    """durable 入站事件的暂存结论，决定是否回执渠道以及后续走哪个处理分支。"""
     STAGED = "staged"
     DUPLICATE = "duplicate"
     SECURITY_DROP = "security_drop"
@@ -21,12 +22,14 @@ class StageDisposition(StrEnum):
 
 @dataclass(frozen=True)
 class StageResult:
+    """一次暂存的结果：结论类型、落库事件主键和失败错误码。"""
     disposition: StageDisposition
     event_pk: str | None = None
     error_code: str | None = None
 
     @property
     def should_ack(self) -> bool:
+        """除 NACK 之外的结论都应回执渠道，避免 provider 反复重投。"""
         return self.disposition is not StageDisposition.NACK
 
 

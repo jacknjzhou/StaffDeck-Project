@@ -16,6 +16,7 @@ type SlashCommandChipProps = {
   removeLabel?: string;
 };
 
+/** 斜杠命令标签：展示命令图标、名称与类型，传入 onRemove 时额外渲染移除按钮。 */
 export default function SlashCommandChip({
   command,
   onRemove,

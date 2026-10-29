@@ -40,6 +40,7 @@ const team: TeamRead = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+/** 构造仅包含用例所需字段的会话状态对象，extra 中的字段会覆盖默认值。 */
 function buildChat(session: Partial<ChatSession>, extra: Record<string, unknown> = {}): UseChatSession {
   return {
     currentSession: {
@@ -53,6 +54,7 @@ function buildChat(session: Partial<ChatSession>, extra: Record<string, unknown>
   } as unknown as UseChatSession;
 }
 
+/** 在 i18n 上下文中渲染会话空状态组件。 */
 function renderEmptyState(chat: UseChatSession) {
   return render(
     <I18nProvider>
@@ -61,11 +63,14 @@ function renderEmptyState(chat: UseChatSession) {
   );
 }
 
+/** 每个用例结束后卸载已渲染的组件，避免 DOM 相互影响。 */
 afterEach(() => {
   cleanup();
 });
 
+/** 会话空状态在团队会话与普通员工会话下的卡片渲染。 */
 describe('ChatEmptyState team card', () => {
+  /** 验证团队会话渲染团队卡片，并展示团队名、描述、成员与统计信息。 */
   it('renders the team card for team sessions', () => {
     renderEmptyState(buildChat(
       { team_id: 'team-1', team_name: '增长团队' },
@@ -87,6 +92,7 @@ describe('ChatEmptyState team card', () => {
     expect(screen.getByText('3')).toBeTruthy();
   });
 
+  /** 验证团队数据尚未加载时回退到 team_name 与成员数量摘要。 */
   it('falls back to team_name and a member-count summary when the team is not loaded', () => {
     renderEmptyState(buildChat(
       { team_id: 'team-1', team_name: '增长团队' },
@@ -97,6 +103,7 @@ describe('ChatEmptyState team card', () => {
     expect(screen.getByText(/团队由 0 名成员组成/)).toBeTruthy();
   });
 
+  /** 验证普通员工会话仍渲染员工卡片，且不出现团队卡片。 */
   it('still renders the employee card for regular sessions', () => {
     renderEmptyState(buildChat(
       { agent_id: 'agent-1' },

@@ -17,11 +17,13 @@ MAX_ENVELOPE_BYTES = 256 * 1024
 
 
 def feishu_account_key(app_id: str) -> str:
+    """生成带长度前缀的飞书 app 账号键，避免拼接产生歧义。"""
     app_id = app_id.strip()
     return f"feishu:app:{len(app_id)}:{app_id}"
 
 
 def feishu_identity_scope(app_id: str, tenant_key: str) -> str:
+    """生成 app_id 与 tenant_key 的身份作用域键，两者均带长度前缀。"""
     app_id = app_id.strip()
     tenant_key = tenant_key.strip()
     return f"app:{len(app_id)}:{app_id}:tenant:{len(tenant_key)}:{tenant_key}"
@@ -33,6 +35,7 @@ def encode_replay_envelope(
     app_id: str,
     tenant_key: str,
 ) -> dict[str, Any]:
+    """把入站事件编码为带版本号与账号信息的重放信封。"""
     normalized = asdict(inbound)
     return {
         "schema_version": FEISHU_ENVELOPE_VERSION,
@@ -42,6 +45,7 @@ def encode_replay_envelope(
 
 
 def decode_replay_envelope(payload: object) -> ChannelInbound:
+    """解析重放信封并还原 ChannelInbound；版本、字段或类型不合法时抛 ValueError。"""
     if not isinstance(payload, dict) or payload.get("schema_version") != FEISHU_ENVELOPE_VERSION:
         raise ValueError("unsupported_envelope_version")
     normalized = payload.get("inbound")
@@ -73,10 +77,10 @@ def stage_feishu_inbound(
     inbound: ChannelInbound,
     target: dict[str, Any],
 ) -> StageResult:
-    """Persist a Feishu event and pin its provider tenant before wire ACK.
+    """在回 ACK 之前持久化飞书事件并钉住其 Provider 租户。
 
-    Security mismatches are acknowledged and dropped. Persistence failures are NACKed
-    so the provider can retry. Duplicate delivery never mutates the original row.
+    安全校验不通过时确认并丢弃；持久化失败返回 NACK，让 Provider 重试；
+    重复投递不改写原始行，直接返回 DUPLICATE。
     """
     event_app_id = event_app_id.strip()
     tenant_key = tenant_key.strip()

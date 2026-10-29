@@ -5,6 +5,7 @@ from app.session.session_schema import RouterDecision, StepAgentResult
 
 
 def test_handoff_is_terminal_and_does_not_complete_skill() -> None:
+    """验证人工转接一旦生效即进入终态，不再触发技能完成或记录事件。"""
     events: list[tuple[str, dict[str, object]]] = []
     calls: list[str] = []
     session = SimpleNamespace(id="session-1", active_step_id="handoff", active_skill_id="skill-1")
@@ -30,6 +31,7 @@ def test_handoff_is_terminal_and_does_not_complete_skill() -> None:
 
 
 def test_ignored_handoff_preserves_completion_decision_and_event_payload() -> None:
+    """验证当前步骤不允许转接时忽略交接，仍按完成决策处理并记录携带步骤标记的事件。"""
     events: list[tuple[str, dict[str, object]]] = []
     calls: list[str] = []
     session = SimpleNamespace(id="session-1", active_step_id="step-1", active_skill_id="skill-1")
@@ -55,8 +57,7 @@ def test_ignored_handoff_preserves_completion_decision_and_event_payload() -> No
 
 
 def test_step_result_handoff_routes_to_handoff_node_when_current_step_disallows() -> None:
-    """When step_result.handoff=True and current step doesn't declare handoff,
-    the finalizer should call route_to_handoff_node before checking again."""
+    """验证步骤结果要求转接但当前步骤未声明转接时，会先路由到转接节点再复核。"""
     events: list[tuple[str, dict[str, object]]] = []
     calls: list[str] = []
     routed: list[bool] = []

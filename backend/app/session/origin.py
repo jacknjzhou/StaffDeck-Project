@@ -11,6 +11,7 @@ PILOTDECK_GROUP_CHAT_CHANNEL = "pilotdeck_group_chat"
 
 
 def _is_pilotdeck_metadata(value: object) -> bool:
+    """判断元数据里的 channel 是否为 PilotDeck 群聊，用于识别隐藏会话来源。"""
     return (
         isinstance(value, dict)
         and str(value.get("channel") or "").strip() == PILOTDECK_GROUP_CHAT_CHANNEL
@@ -22,11 +23,11 @@ def pilotdeck_origin_session_ids(
     tenant_id: str,
     session_ids: Iterable[str] | None = None,
 ) -> set[str]:
-    """Return StaffDeck sessions created for hidden PilotDeck collaboration.
+    """返回为隐藏的 PilotDeck 协作而创建的 StaffDeck 会话 ID 集合。
 
-    Open API sessions persist the source on the external binding. The legacy chat
-    adapter used the request channel, which is now also stored on the session. The
-    event fallback keeps already-created legacy sessions hidden without a migration.
+    Open API 会话把来源记在外部绑定上，旧版聊天适配器记在会话的 channel 字段；
+    事件兜底让已存在的历史会话无需迁移也能保持隐藏。session_ids 只收窄查询范围，
+    传空集合时直接返回空集。
     """
 
     scoped_ids = (

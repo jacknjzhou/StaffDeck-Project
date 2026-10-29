@@ -29,14 +29,16 @@ WECOM_KF_FILE_MAX_BYTES = 20 * 1024 * 1024
 
 
 class WeChatKfPermanentError(RuntimeError):
+    """不可重试的微信客服错误，例如凭证缺失、无权限或参数非法。"""
     retryable = False
 
 
 class WeChatKfTransientError(RuntimeError):
-    pass
+    """可重试的微信客服错误，如网络失败、token 失效或下游限流。"""
 
 
 def wechat_kf_credentials(binding: ChannelBinding) -> dict[str, str]:
+    """解密并返回该绑定的微信客服凭证；缺失或格式非法时抛永久错误。"""
     if not binding.credentials_enc:
         raise WeChatKfPermanentError("微信客服凭证未配置")
     try:
@@ -49,16 +51,24 @@ def wechat_kf_credentials(binding: ChannelBinding) -> dict[str, str]:
 
 
 class WeChatKfTokenProvider:
+    """按 binding 与配置版本缓存微信客服 access_token，提前 5 分钟过期以避开临界失效。
+
+    缓存键为 (binding.id, config_revision)，配置变更后旧 token 自然不再命中。
+    """
+
     def __init__(self, client_factory=httpx.Client) -> None:
+        """保存 HTTP 客户端工厂并初始化 token 缓存与互斥锁。"""
         self._client_factory = client_factory
         self._cache: dict[tuple[str, int], tuple[str, float]] = {}
         self._lock = threading.Lock()
 
     def invalidate(self, binding: ChannelBinding) -> None:
+        """清掉该绑定的缓存 token，供接口返回 token 失效后立即换新。"""
         with self._lock:
             self._cache.pop((binding.id, binding.config_revision), None)
 
     def get(self, binding: ChannelBinding) -> str:
+        """取可用 access_token：命中未过期缓存则直接复用，否则调用 gettoken 刷新并缓存。"""
         key = (binding.id, binding.config_revision)
         now = time.monotonic()
         with self._lock:
@@ -97,6 +107,10 @@ class WeChatKfTokenProvider:
 def normalize_wechat_kf_message(
     raw: dict[str, Any], *, account_scope: str = ""
 ) -> ChannelInbound | None:
+    """把微信客服回调帧归一化成 ChannelInbound；非客户消息或必填字段缺失时返回 None。
+
+    只处理 origin=3（客户发送）的 text/image/file/mixed；mixed 会拼接文本并收集附件。
+    """
     if not isinstance(raw, dict):
         return None
     try:
@@ -160,6 +174,7 @@ def normalize_wechat_kf_message(
 def _wechat_kf_attachments(
     raw: dict[str, Any], message_id: str, msg_type: str
 ) -> list[ChannelInboundAttachment]:
+    """从 image/file 消息体里取出 media_id，组装带下载参数与大小上限的附件描述。"""
     info = raw.get(msg_type) or {}
     if not isinstance(info, dict):
         return []
@@ -202,6 +217,7 @@ def _wechat_kf_attachments(
 
 
 def _split_utf8_text(text: str, limit: int = TEXT_LIMIT_BYTES) -> list[str]:
+    """按 UTF-8 字节数把长文本切成多段，单段不超过 limit，且不切断多字节字符。"""
     chunks: list[str] = []
     current: list[str] = []
     current_bytes = 0
@@ -219,7 +235,7 @@ def _split_utf8_text(text: str, limit: int = TEXT_LIMIT_BYTES) -> list[str]:
 
 
 def _filename_from_content_disposition(value: str) -> str:
-    """Extract and normalize a provider filename without allowing path components."""
+    """从 Content-Disposition 头解析并规整文件名，只保留末段并截断到 255 字符。"""
     if not value:
         return ""
     match = re.search(
@@ -234,13 +250,18 @@ def _filename_from_content_disposition(value: str) -> str:
 
 
 class WeChatKfAdapter:
+    """微信客服渠道适配器：负责消息归一化、media 下载、账号管理与文本消息投递。"""
+
     def __init__(self, token_provider: WeChatKfTokenProvider | None = None) -> None:
+        """允许注入 token provider 以便测试，默认使用进程内缓存实现。"""
         self._tokens = token_provider or WeChatKfTokenProvider()
 
     def normalize(self, raw: dict[str, Any]) -> ChannelInbound | None:
+        """把原始回调帧转成统一入站消息，无法识别时返回 None。"""
         return normalize_wechat_kf_message(raw)
 
     def _post(self, binding: ChannelBinding, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        """带 access_token 调用微信客服接口并校验 errcode，按错误类型抛出可重试/永久错误。"""
         token = self._tokens.get(binding)
         try:
             with httpx.Client(timeout=15.0) as client:
@@ -273,7 +294,11 @@ class WeChatKfAdapter:
         *,
         max_bytes: int = 0,
     ) -> bytes:
-        """Download a customer image/file through the WeChat customer-service API."""
+        """经微信客服 media/get 下载客户图片或文件，返回字节；超限或返回 JSON 错误时抛异常。
+
+        实际大小上限取调用方 max_bytes 与渠道上限的较小值；Content-Disposition 与
+        Content-Type 会回写到 attachment 上，供后续识别文件名与类型。
+        """
         media_id = str(
             attachment.download_params.get("media_id") or attachment.media_id
         ).strip()
@@ -342,6 +367,7 @@ class WeChatKfAdapter:
         cursor: str,
         open_kfid: str = "",
     ) -> dict[str, Any]:
+        """用微信客服 sync_msg 拉取增量消息，返回含 next_cursor 与 msg_list 的原始响应。"""
         config = dict(binding.config_json or {})
         body: dict[str, Any] = {
             "open_kfid": open_kfid or str(config.get("open_kfid") or ""),
@@ -354,6 +380,7 @@ class WeChatKfAdapter:
         return self._post(binding, "/kf/sync_msg", body)
 
     def validate_account(self, binding: ChannelBinding) -> None:
+        """校验配置的 open_kfid 在账号列表里且具备管理权限，否则抛永久错误。"""
         config = dict(binding.config_json or {})
         open_kfid = str(config.get("open_kfid") or "").strip()
         data = self._post(binding, "/kf/account/list", {"offset": 0, "limit": 100})
@@ -367,6 +394,7 @@ class WeChatKfAdapter:
             raise WeChatKfPermanentError("应用无权管理该微信客服账号")
 
     def list_accounts(self, binding: ChannelBinding) -> list[dict[str, Any]]:
+        """翻页拉取全部微信客服账号；超过 50 页视为异常并抛可重试错误。"""
         accounts: list[dict[str, Any]] = []
         offset = 0
         limit = 100
@@ -380,11 +408,16 @@ class WeChatKfAdapter:
         raise WeChatKfTransientError("微信客服账号列表分页超过安全上限")
 
     def create_account(self, binding: ChannelBinding, name: str) -> str:
+        """创建客服账号需要头像 media_id，此简化入口一律拒绝并提示改用带头像接口。"""
         raise WeChatKfPermanentError("创建微信客服账号需要头像 media_id")
 
     def create_account_with_avatar(
         self, binding: ChannelBinding, name: str, media_id: str
     ) -> str:
+        """用名称与头像 media_id 创建客服账号，返回新的 open_kfid。
+
+        名称限 16 字符以内；响应缺少 open_kfid 时按可重试错误处理。
+        """
         name = name.strip()
         media_id = media_id.strip()
         if not name or len(name) > 16 or not media_id:
@@ -396,6 +429,7 @@ class WeChatKfAdapter:
         return open_kfid
 
     def delete_account(self, binding: ChannelBinding, open_kfid: str) -> None:
+        """删除指定的微信客服账号；open_kfid 为空时直接拒绝。"""
         open_kfid = open_kfid.strip()
         if not open_kfid:
             raise WeChatKfPermanentError("客服账号 ID 不能为空")
@@ -408,6 +442,7 @@ class WeChatKfAdapter:
         name: str,
         media_id: str | None = None,
     ) -> None:
+        """更新客服账号名称，可同时替换头像 media_id；名称为空或超长时拒绝。"""
         open_kfid = open_kfid.strip()
         name = name.strip()
         if not open_kfid or not name or len(name) > 16:
@@ -424,6 +459,7 @@ class WeChatKfAdapter:
         filename: str,
         content_type: str = "image/jpeg",
     ) -> str:
+        """上传头像图片到微信 media 接口，返回可复用的 media_id。"""
         token = self._tokens.get(binding)
         try:
             with httpx.Client(timeout=15.0) as client:
@@ -446,6 +482,7 @@ class WeChatKfAdapter:
         return media_id
 
     def contact_way(self, binding: ChannelBinding, *, open_kfid: str, scene: str = "staffdeck") -> str:
+        """生成客户可扫码/点击的微信客服咨询链接，响应为空时按可重试错误处理。"""
         open_kfid = open_kfid.strip()
         data = self._post(
             binding,
@@ -465,6 +502,7 @@ class WeChatKfAdapter:
         *,
         idempotency_key: str | None = None,
     ) -> None:
+        """发送文本消息：按 UTF-8 字节上限分段，idempotency_key 派生出各段的 msgid 以去重。"""
         to_user = str(target.get("to_user_id") or "").strip()
         open_kfid = str(target.get("open_kfid") or "").strip()
         if not to_user or not open_kfid:
@@ -487,10 +525,12 @@ class WeChatKfAdapter:
             )
 
     def start_ingress(self, binding_id: str) -> None:
-        return None
+        """微信客服走回调推送，无需主动起拉取线程，故为空实现。"""
+        return
 
     def stop_ingress(self, binding_id: str) -> None:
-        return None
+        """与 start_ingress 对称：没有后台线程需要停止，故为空实现。"""
+        return
 
 
 register_channel_adapter("wechat_kf", WeChatKfAdapter())

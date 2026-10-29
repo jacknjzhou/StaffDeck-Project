@@ -28,7 +28,7 @@ def compact_knowledge_citation_labels(
     content: str,
     citations: object,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Keep cited sources and renumber them by first appearance in the reply."""
+    """去掉文末来源脚注，按正文首次引用顺序重排编号，并剔除无对应来源的标签。"""
     content = SOURCE_FOOTER_PATTERN.sub("", content.rstrip()).rstrip()
     if not isinstance(citations, list) or not citations:
         # A model may emit a reference footer even when retrieval produced no
@@ -60,6 +60,7 @@ def compact_knowledge_citation_labels(
     label_mapping = {old_label: index for index, old_label in enumerate(ordered_labels, start=1)}
 
     def replace_label(match: re.Match[str]) -> str:
+        """把旧标签映射为新编号；无对应来源的标签直接删除，避免留下打不开的引用。"""
         old_label = int(match.group(1))
         new_label = label_mapping.get(old_label)
         # Metadata is authoritative. Unsupported labels are model-generated
@@ -76,7 +77,7 @@ def compact_knowledge_citation_labels(
 
 
 def restore_truncated_atomic_references(content: str, citations: object) -> str:
-    """Restore a uniquely identifiable email that the model abbreviated."""
+    """用引用证据中唯一匹配的邮箱补全模型截断的邮箱引用。"""
     if not content or not isinstance(citations, list):
         return content
     evidence_text = "\n".join(
@@ -90,6 +91,7 @@ def restore_truncated_atomic_references(content: str, citations: object) -> str:
         return content
 
     def replace(match: re.Match[str]) -> str:
+        """候选邮箱唯一时替换为完整地址，否则保留原文。"""
         prefix = match.group("prefix")
         candidates = {
             email for email in evidence_emails if email.lower().startswith(prefix.lower())
@@ -100,6 +102,7 @@ def restore_truncated_atomic_references(content: str, citations: object) -> str:
 
 
 def _compact(value: str, limit: int) -> str:
+    """压缩连续空白并把超长文本截到 limit 以内，截断时补省略号。"""
     text = re.sub(r"\s+", " ", (value or "").strip())
     if len(text) <= limit:
         return text
@@ -107,19 +110,22 @@ def _compact(value: str, limit: int) -> str:
 
 
 def _normalize_identity(value: str) -> str:
+    """归一化身份键：转小写并去掉空白与非单词字符，用于引用去重。"""
     return re.sub(r"[\s\W_]+", "", (value or "").lower())
 
 
 def _semantic_identity(value: str) -> str:
+    """仅折叠空白，作为保留原始符号的语义身份键。"""
     return re.sub(r"\s+", " ", (value or "").strip())
 
 
 def _display_title(value: str) -> str:
+    """把来源标题压缩为 72 字符以内的展示标题。"""
     return _compact(value, 72)
 
 
 def knowledge_source_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return one normalized source stream for both answer context and citations."""
+    """按 evidence、chunks、concepts、okf 的顺序，返回首个非空层的标准化来源列表。"""
     tiers = (
         ("evidence", result.get("evidence_pack")),
         ("evidence", result.get("chunks")),
@@ -140,6 +146,10 @@ def _normalize_source_items(
     kind: str,
     items: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """把同一层的原始条目按 related_group_id 归并，并标准化为引用候选。
+
+    输出保留 _identity 供上层去重；缺内容或缺身份的条目会被丢弃。
+    """
     groups: list[list[dict[str, Any]]] = []
     group_indexes: dict[str, int] = {}
     for index, item in enumerate(items):
@@ -260,6 +270,10 @@ def knowledge_citations_from_results(
     *,
     max_results: int | None = 1,
 ) -> list[dict[str, Any]]:
+    """从知识检索结果生成去重引用列表。
+
+    limit 限制引用条数；max_results 只取最后 N 个结果（None 表示全部，0 表示直接返回空）。
+    """
     if limit <= 0 or max_results == 0:
         return []
     citations: list[dict[str, Any]] = []

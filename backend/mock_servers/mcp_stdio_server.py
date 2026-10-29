@@ -7,6 +7,7 @@ from typing import Any
 
 
 def main() -> None:
+    """按 stdio 读取 JSON-RPC 行，响应 MCP 初始化、工具列表与工具调用请求。"""
     for line in sys.stdin:
         if not line.strip():
             continue
@@ -63,6 +64,7 @@ def main() -> None:
 
 
 def _call_tool(request_id: Any, params: dict[str, Any]) -> None:
+    """按工具名分发 echo、sum 与 product_lookup，未知工具返回工具级错误。"""
     name = str(params.get("name") or "")
     arguments = params.get("arguments") or {}
     if name == "echo":
@@ -89,10 +91,12 @@ def _call_tool(request_id: Any, params: dict[str, Any]) -> None:
 
 
 def _is_number(value: Any) -> bool:
+    """判断值是否为非布尔数值，避免 bool 被当作数字参与求和。"""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _tool_result(request_id: Any, data: Any) -> None:
+    """把工具执行数据序列化为 MCP 文本内容结果返回。"""
     _respond(
         request_id,
         {
@@ -103,14 +107,17 @@ def _tool_result(request_id: Any, data: Any) -> None:
 
 
 def _tool_error(request_id: Any, message: str) -> None:
+    """返回携带错误文案且 isError 为真的工具结果。"""
     _respond(request_id, {"content": [{"type": "text", "text": message}], "isError": True})
 
 
 def _respond(request_id: Any, result: Any) -> None:
+    """向 stdout 输出一条 JSON-RPC 成功响应并立即刷新缓冲区。"""
     print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}, ensure_ascii=False), flush=True)
 
 
 def _error(request_id: Any, code: int, message: str) -> None:
+    """向 stdout 输出一条 JSON-RPC 协议错误响应并立即刷新缓冲区。"""
     print(
         json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}),
         flush=True,

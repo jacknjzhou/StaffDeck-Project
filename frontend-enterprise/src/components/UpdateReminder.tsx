@@ -16,6 +16,11 @@ type AppVersion = {
   check_succeeded: boolean;
 };
 
+/**
+ * 新版本提示卡片：展示最新版本与当前版本号，并提供「查看更新」外链和关闭按钮。
+ *
+ * 点击外链或关闭按钮都会调用 onClose，由父级销毁该 toast。
+ */
 export function UpdateNotice({
   currentVersion,
   latestVersion,
@@ -68,6 +73,12 @@ export function UpdateNotice({
   );
 }
 
+/**
+ * 更新提醒容器：enabled 为真时查询版本接口，发现新版本则弹出一次提示 toast。
+ *
+ * 同一 latest_version 只提醒一次，toast 创建成功后写入 localStorage 去重键。
+ * 组件不渲染任何节点；卸载或 enabled 变化时通过 cancelled 标记忽略过期响应。
+ */
 export default function UpdateReminder({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     if (!enabled) return undefined;

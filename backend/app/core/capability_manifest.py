@@ -48,11 +48,14 @@ RESERVED_HARNESS_CAPABILITY_NAMES = {
 
 
 class CapabilityAuthorizationError(RuntimeError):
-    pass
+    """能力清单构建被拒绝，例如员工不存在、已归档或不属于该租户。"""
 
 
 class CapabilityManifestBuilder:
+    """按租户、员工与 SOP 步骤编译当前 TaskFrame 的能力清单。"""
+
     def __init__(self, db: Session):
+        """保存数据库会话，供编译时按租户读取能力配置与可见性。"""
         self.db = db
 
     def build(
@@ -62,6 +65,11 @@ class CapabilityManifestBuilder:
         skill: Skill | None,
         step_id: str | None,
     ) -> CapabilityManifest:
+        """编译当前步骤的能力清单，并把不可用引用与可用能力分开返回。
+
+        可见性由员工资源绑定、capability_scope 与 SOP 显式授权共同决定；
+        scope 配置非法的能力按 fail-closed 归入 unavailable_references。
+        """
         if agent_id and get_agent(self.db, tenant_id, agent_id) is None:
             raise CapabilityAuthorizationError("当前员工不存在、已归档或不属于该租户。")
         refs = current_step_capability_refs(skill, step_id)
@@ -322,6 +330,11 @@ class CapabilityManifestBuilder:
         tool_by_ref: dict[str, Tool],
         knowledge_ids: set[str],
     ) -> list[CapabilityDescriptor]:
+        """为 SOP 显式引用但不可见的能力生成不可用描述。
+
+        逐类比对引用与可见集合，并用 _explicit_reason 区分"能力不存在"与
+        "存在但未发布、未启用或未绑定"两类原因。
+        """
         unavailable: list[CapabilityDescriptor] = []
         for ref in refs["general_skill_ids"]:
             if ref not in general_by_ref:
@@ -388,6 +401,7 @@ def _lark_cli_descriptor(
 
 
 def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
+    """返回内置的发现、交付物读取与外部任务查询类能力描述。"""
     return [
         CapabilityDescriptor(
             capability_id="builtin.external_task.status",
@@ -516,7 +530,11 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
 
 
 def tool_snapshot_digest(db: Session, tool: Tool) -> str:
-    """Hash every persisted field that can change an external tool invocation."""
+    """对可能影响外部工具调用的全部持久化字段做哈希。
+
+    除工具自身配置与鉴权外，还纳入所关联 MCPServer 的传输与运行参数；
+    字段排序后取 sha256，任一变更都会使快照版本失配。
+    """
 
     server_payload: dict[str, Any] | None = None
     if tool.mcp_server_id:
@@ -563,7 +581,10 @@ def tool_snapshot_digest(db: Session, tool: Tool) -> str:
 
 
 def general_skill_snapshot_digest(skill: GeneralSkill) -> str:
-    """Hash the package and every persisted field used by the skill runner."""
+    """对技能包及技能运行器实际使用的字段做哈希。
+
+    包摘要本身参与计算，因此包内容变化同样会改变清单快照版本。
+    """
 
     package = package_from_row(skill)
     payload = {
@@ -593,10 +614,12 @@ def general_skill_snapshot_digest(skill: GeneralSkill) -> str:
 def _visible_general_skills(
     db: Session, tenant_id: str, agent_id: str | None
 ) -> list[GeneralSkill]:
+    """按员工的可见范围列出通用技能。"""
     return visible_general_skill_rows(db, tenant_id, agent_id)
 
 
 def _scope(row: object | None) -> str | None:
+    """读取行的 capability_scope，仅接受 general 与 sop_specific，其余返回 None。"""
     value = str(getattr(row, "capability_scope", "") or "").strip()
     return value if value in {"general", "sop_specific"} else None
 
@@ -608,6 +631,7 @@ def _unavailable(
     scope: str,
     reason: str,
 ) -> CapabilityDescriptor:
+    """构造一条 available=False 的能力描述，并附上不可用原因。"""
     return CapabilityDescriptor(
         capability_id=capability_id,
         name=name,
@@ -619,6 +643,7 @@ def _unavailable(
 
 
 def _explicit_reason(row: object | None, tenant_id: str) -> str:
+    """解释显式引用的能力为何不可用：跨租户/不存在，或未发布、未启用、未绑定。"""
     if row is None or str(getattr(row, "tenant_id", "")) != tenant_id:
         return "SOP 引用的能力不存在。"
     return "SOP 引用的能力未发布、未启用或未绑定到当前员工。"
@@ -628,7 +653,9 @@ def _snapshot_revision(
     available: list[CapabilityDescriptor],
     unavailable: list[CapabilityDescriptor],
 ) -> str:
+    """对可用与不可用能力按稳定顺序做哈希，得到清单快照版本。"""
     def stable_key(item: CapabilityDescriptor) -> tuple[str, str, str]:
+        """给出与输入顺序无关的能力排序键。"""
         return (item.kind, item.name, item.capability_id)
 
     payload = {
@@ -652,6 +679,7 @@ def _available_invocation_name(
     capability_id: str,
     available: list[CapabilityDescriptor],
 ) -> str:
+    """为工具挑选不冲突的调用名，重名时回落到 external_tool.<id> 并加序号后缀。"""
     # Knowledge is appended after external tools, so reserve its stable builtin
     # name up front as well as every descriptor already emitted.
     used = {item.name for item in available} | RESERVED_HARNESS_CAPABILITY_NAMES

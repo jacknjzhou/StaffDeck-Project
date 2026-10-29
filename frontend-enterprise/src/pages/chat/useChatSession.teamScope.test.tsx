@@ -31,6 +31,7 @@ const employeeSession: ChatSession = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+/** 构造仅包含 ok/status 与 JSON 文本体的伪 Response 对象。 */
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -40,6 +41,7 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+/** 按 URL 分发聊天会话所需的 fetch 假数据，并返回该 mock 以便断言调用。 */
 function stubChatFetch(sessions: ChatSession[]) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -54,6 +56,7 @@ function stubChatFetch(sessions: ChatSession[]) {
   return fetchMock;
 }
 
+/** 在 I18n Provider 与内存路由中渲染 useChatSession 并返回 renderHook 结果。 */
 function renderChatSession(
   initialPath: string,
   options: Parameters<typeof useChatSession>[0] = {},
@@ -86,6 +89,7 @@ afterEach(() => {
 });
 
 describe('useChatSession team scope', () => {
+  /** 验证打开团队群聊会话时，共享作用域同步为 team:<id>。 */
   it('syncs the shared scope for an active team group', async () => {
     window.localStorage.setItem(ENTERPRISE_AGENT_STORAGE_KEY, 'agent-1');
     stubChatFetch([teamSession, employeeSession]);
@@ -96,6 +100,7 @@ describe('useChatSession team scope', () => {
     });
   });
 
+  /** 验证普通员工会话保持员工作用域，不会被误写成团队作用域。 */
   it('keeps the employee scope for regular employee sessions', async () => {
     window.localStorage.setItem(ENTERPRISE_AGENT_STORAGE_KEY, 'agent-1');
     stubChatFetch([teamSession, employeeSession]);
@@ -109,6 +114,7 @@ describe('useChatSession team scope', () => {
     expect(window.localStorage.getItem(ENTERPRISE_AGENT_STORAGE_KEY)).toBe('agent-1');
   });
 
+  /** 验证选中团队群聊时，统一会话列表只保留该团队的会话。 */
   it('filters the unified session list to a selected team group', async () => {
     window.localStorage.setItem(ENTERPRISE_AGENT_STORAGE_KEY, 'team:team-1');
     stubChatFetch([teamSession, employeeSession]);
@@ -120,6 +126,7 @@ describe('useChatSession team scope', () => {
     expect(result.current.visibleSidebarSessions.map((session) => session.id)).toEqual(['session-team-1']);
   });
 
+  /** 验证团队 TL 将任务分派给成员后，仍持续轮询消息。 */
   it('keeps polling messages after a team leader turn hands work to members', async () => {
     vi.useFakeTimers();
     const fetchMock = stubChatFetch([teamSession, employeeSession]);

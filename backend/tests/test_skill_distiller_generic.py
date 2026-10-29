@@ -5,10 +5,12 @@ from app.skills.skill_schema import SkillDistillRequest
 
 
 def _normalize(raw: dict, request: SkillDistillRequest):
+    """把构造的模型原始响应转成图谱结构后交给 distiller 规范化，供断言使用。"""
     return SkillDistiller()._normalize_response(_graph_raw(raw), request)  # noqa: SLF001
 
 
 def _graph_raw(raw: dict) -> dict:
+    """将旧版 steps 字段转换为 nodes/edges 图谱，便于复用新版规范化逻辑。"""
     converted = dict(raw)
     draft = converted.get("draft_skill") if isinstance(converted.get("draft_skill"), dict) else None
     if draft is None:
@@ -50,6 +52,7 @@ def _graph_raw(raw: dict) -> dict:
 
 
 def test_fallback_card_is_not_domain_hardcoded_for_commerce_text() -> None:
+    """验证购买类文本的回退技能卡不会硬编码购买域，且不自动挂工具或要求确认。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="购买商品",
@@ -72,6 +75,7 @@ def test_fallback_card_is_not_domain_hardcoded_for_commerce_text() -> None:
 
 
 def test_model_input_uses_plain_text_and_compacts_available_tools() -> None:
+    """验证模型输入为纯文本，且可用工具只保留必要字段并带上 ID 与参数说明。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="新SOP",
@@ -122,6 +126,7 @@ def test_model_input_uses_plain_text_and_compacts_available_tools() -> None:
 
 
 def test_distill_preserves_and_resolves_capability_references() -> None:
+    """验证能力引用会被解析为目录中的真实 ID，并保留普通技能、工具与知识库引用。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="每日科技新闻入 Excel",
@@ -215,6 +220,7 @@ def test_distill_preserves_and_resolves_capability_references() -> None:
 
 
 def test_distill_infers_explicit_catalog_capabilities_when_model_omits_refs() -> None:
+    """验证模型未声明引用时，会按原始文本中明确提到的能力补齐工具、技能与知识库引用。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="在职证明开具",
@@ -286,6 +292,7 @@ def test_distill_infers_explicit_catalog_capabilities_when_model_omits_refs() ->
 
 
 def test_slot_policy_targets_model_generated_fields() -> None:
+    """验证槽位填充策略使用模型生成的步骤字段，而不是沿用固定模板字段。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="设备报修",
@@ -314,6 +321,7 @@ def test_slot_policy_targets_model_generated_fields() -> None:
 
 
 def test_normalize_response_does_not_infer_tool_or_confirmation_from_raw_words() -> None:
+    """验证原始文本出现动作词时，规范化不会凭空补工具调用或确认步骤。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="退款处理",
@@ -359,6 +367,7 @@ def test_normalize_response_does_not_infer_tool_or_confirmation_from_raw_words()
 
 
 def test_normalize_response_preserves_model_declared_tool_and_confirmation() -> None:
+    """验证保留模型声明的工具节点与确认节点，并保证确认步骤排在工具调用之前。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="退款处理",
@@ -424,6 +433,7 @@ def test_normalize_response_preserves_model_declared_tool_and_confirmation() -> 
 
 
 def test_normalize_response_makes_duplicate_step_ids_unique() -> None:
+    """验证重复的 step_id 会被改写为唯一 node_id，并产生告警。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="购买商品",
@@ -463,6 +473,7 @@ def test_normalize_response_makes_duplicate_step_ids_unique() -> None:
 
 
 def test_normalize_response_turns_steps_into_adaptive_goals() -> None:
+    """验证步骤会被改写为自适应目标，并开启多槽位收集与跳过已完成步骤的策略。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="资料审核",
@@ -501,6 +512,7 @@ def test_normalize_response_turns_steps_into_adaptive_goals() -> None:
 
 
 def test_fallback_card_uses_conservative_adaptive_steps() -> None:
+    """验证回退技能卡只生成保守的自适应步骤，不收集固定信息也不挂工具。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="预约服务",
@@ -518,6 +530,7 @@ def test_fallback_card_uses_conservative_adaptive_steps() -> None:
 
 
 def test_normalize_response_removes_unknown_actions_without_default_tool_suggestion() -> None:
+    """验证未知工具调用动作会被移除，且不会退化成默认工具建议。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="商品比价",
@@ -560,6 +573,7 @@ def test_normalize_response_removes_unknown_actions_without_default_tool_suggest
 
 
 def test_normalize_response_resolves_tool_mentions_as_new_candidates() -> None:
+    """验证模型提出的新工具候选会被接受，并保留 schema、样例参数与来源片段。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="商品比价",
@@ -627,6 +641,7 @@ def test_normalize_response_resolves_tool_mentions_as_new_candidates() -> None:
 
 
 def test_normalize_response_resolves_tool_mentions_as_existing_tools() -> None:
+    """验证工具候选命中已有工具时会被标记为 existing，并回填匹配的名称与 ID。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="商品比价",
@@ -713,6 +728,7 @@ def test_normalize_response_resolves_tool_mentions_as_existing_tools() -> None:
 
 
 def test_normalize_response_drops_tool_suggestion_when_url_not_in_source() -> None:
+    """验证候选工具 URL 未出现在原文时会被丢弃，并给出不能新增工具的告警。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="会员权益补发",
@@ -780,6 +796,7 @@ def test_normalize_response_drops_tool_suggestion_when_url_not_in_source() -> No
 
 
 def test_normalize_response_does_not_suggest_tool_from_raw_text_only() -> None:
+    """验证仅在原文提及工具、模型未声明工具候选时，不会生成工具建议。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="商品比价",
@@ -817,6 +834,7 @@ def test_normalize_response_does_not_suggest_tool_from_raw_text_only() -> None:
 
 
 def test_normalize_response_drops_incomplete_model_tool_suggestion() -> None:
+    """验证缺少 schema 与 URL 等必要信息的模型工具建议会被丢弃。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="商品比价",
@@ -848,6 +866,7 @@ def test_normalize_response_drops_incomplete_model_tool_suggestion() -> None:
 
 
 def test_skill_card_serializes_response_rules_before_nodes() -> None:
+    """验证技能卡序列化时不再输出 steps，且 response_rules 字段排在 nodes 之前。"""
     request = SkillDistillRequest(
         tenant_id="tenant_demo",
         title="资料审核",

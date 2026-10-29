@@ -17,6 +17,7 @@ from app.session.session_schema import ChatTurnRequest
 
 
 def test_scheduled_task_uses_server_pinned_sop_without_rewriting_visible_prompt() -> None:
+    """验证服务端固定的 SOP 直接作为斜杠选择生效，且不改写用户可见提示词。"""
     request = ChatTurnRequest(
         tenant_id="tenant-demo",
         agent_id="agent-demo",
@@ -35,6 +36,7 @@ def test_scheduled_task_uses_server_pinned_sop_without_rewriting_visible_prompt(
 
 
 def test_scheduled_task_metadata_exposes_only_the_explicit_sop_selection() -> None:
+    """验证任务元数据只暴露显式指定的 SOP，未固定版本时快照为空。"""
     task = ScheduledTask(
         tenant_id="tenant-demo",
         agent_id="agent-demo",
@@ -51,6 +53,7 @@ def test_scheduled_task_metadata_exposes_only_the_explicit_sop_selection() -> No
 
 
 def test_pinned_scheduled_task_uses_immutable_sop_snapshot() -> None:
+    """验证 pinned 策略用不可变快照覆盖同名 SOP 的当前最新版本。"""
     current = Skill(
         tenant_id="tenant-demo",
         skill_id="daily_report_v2",
@@ -92,6 +95,7 @@ def test_pinned_scheduled_task_uses_immutable_sop_snapshot() -> None:
 
 
 def test_latest_scheduled_task_keeps_current_published_sop() -> None:
+    """验证 latest 策略原样沿用当前已发布 SOP，不套用任何快照。"""
     current = Skill(
         tenant_id="tenant-demo",
         skill_id="daily_report_v2",
@@ -108,6 +112,7 @@ def test_latest_scheduled_task_keeps_current_published_sop() -> None:
 
 
 def test_pinned_snapshot_cannot_restore_an_unbound_sop() -> None:
+    """验证快照无法为未绑定该 SOP 的智能体凭空恢复内容。"""
     snapshot = {
         "skill_id": "daily_report_v2",
         "version": "1.0.0",
@@ -121,6 +126,7 @@ def test_pinned_snapshot_cannot_restore_an_unbound_sop() -> None:
 def test_prepare_pinned_policy_captures_server_owned_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 pinned 策略由服务端重新生成快照，忽略客户端传入的不可信内容。"""
     current = Skill(
         tenant_id="tenant-demo",
         skill_id="daily_report_v2",
@@ -152,6 +158,7 @@ def test_prepare_pinned_policy_captures_server_owned_snapshot(
 
 
 def test_scheduled_task_api_read_hides_internal_snapshot() -> None:
+    """验证 API 读取任务时隐藏内部快照字段，只保留版本策略与版本号。"""
     task = ScheduledTask(
         tenant_id="tenant-demo",
         agent_id="agent-demo",
@@ -176,6 +183,7 @@ def test_scheduled_task_api_read_hides_internal_snapshot() -> None:
 
 
 def test_scheduled_task_rejects_ambiguous_user_slash_and_server_pinned_sop() -> None:
+    """验证用户斜杠命令与服务端固定 SOP 冲突时抛出明确错误码。"""
     request = ChatTurnRequest(
         tenant_id="tenant-demo",
         message="/sop another_sop",
@@ -192,6 +200,7 @@ def test_scheduled_task_rejects_ambiguous_user_slash_and_server_pinned_sop() -> 
 def test_prepare_latest_sop_metadata_rejects_unavailable_sop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 latest 策略下 SOP 不可见时以 400 拒绝创建任务。"""
     monkeypatch.setattr(
         scheduled_task_service,
         "visible_published_skills",

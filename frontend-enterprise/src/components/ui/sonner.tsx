@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import { CircleCheckIcon, InfoIcon, Loader2Icon, OctagonXIcon, TriangleAlertIcon } from 'lucide-react';
 import { Toaster as Sonner, type ToasterProps } from 'sonner';
 
+/** 全局消息提示容器，统一浅色主题、状态图标与 Toast 样式变量。 */
 const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner

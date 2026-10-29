@@ -4,6 +4,7 @@ from app.session.session_schema import PendingTask, RouterDecision
 
 
 def test_start_new_task_replaces_active_context_without_implicit_stack():
+    """验证开启新任务会替换活动技能与步骤并清空槽位，不产生隐藏技能栈。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -29,6 +30,7 @@ def test_start_new_task_replaces_active_context_without_implicit_stack():
 
 
 def test_complete_task_discards_obsolete_suspended_skill_state():
+    """验证完成当前任务会清空活动技能、槽位与已挂起的技能帧。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -53,6 +55,7 @@ def test_complete_task_discards_obsolete_suspended_skill_state():
 
 
 def test_start_new_task_discards_obsolete_skill_stack_frames():
+    """验证开启新任务时旧技能栈帧被丢弃，不会残留重复任务。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -89,6 +92,7 @@ def test_start_new_task_discards_obsolete_skill_stack_frames():
 
 
 def test_answer_only_preserves_active_task_without_creating_hidden_frames():
+    """验证只回答时保留活动任务与步骤，且不生成隐藏的技能帧。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -110,6 +114,7 @@ def test_answer_only_preserves_active_task_without_creating_hidden_frames():
 
 
 def test_answer_only_does_not_switch_to_another_skill():
+    """验证只回答不会因路由提示切换技能，原槽位与待恢复状态保持不变。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -138,6 +143,7 @@ def test_answer_only_does_not_switch_to_another_skill():
 
 
 def test_pending_tasks_are_queued_and_selected_explicitly_without_using_skill_stack():
+    """验证待办任务入队不占用技能栈，只有显式选择时才切换并消费该任务。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -186,6 +192,7 @@ def test_pending_tasks_are_queued_and_selected_explicitly_without_using_skill_st
 
 
 def test_continue_active_does_not_regress_existing_step_from_router_hint():
+    """验证继续当前任务不会按路由提示回退步骤，已有槽位保持不变。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -211,6 +218,7 @@ def test_continue_active_does_not_regress_existing_step_from_router_hint():
 
 
 def test_start_new_task_clears_previous_awaiting_input():
+    """验证开启新任务会清除上一次的等待输入状态与追问记录。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -241,6 +249,7 @@ def test_start_new_task_clears_previous_awaiting_input():
 
 
 def test_runtime_never_persists_router_generated_message_content_slots():
+    """验证运行时丢弃模型生成的 message_content 槽位，只保留业务字段。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -284,6 +293,7 @@ def test_runtime_never_persists_router_generated_message_content_slots():
 
 
 def test_runtime_ignores_message_content_only_task_update():
+    """验证只含 message_content 的任务更新被忽略，已有任务槽位不被覆盖。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -315,6 +325,7 @@ def test_runtime_ignores_message_content_only_task_update():
 
 
 def test_pending_task_is_not_claimed_without_selected_task_id():
+    """验证未显式选择任务 ID 时不认领待办任务，路由槽位仍并入当前任务。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -353,6 +364,7 @@ def test_pending_task_is_not_claimed_without_selected_task_id():
 
 
 def test_semantic_duplicate_pending_task_is_merged_on_append():
+    """验证语义重复的待办任务在追加时合并进已有条目并保留原任务 ID。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -409,6 +421,7 @@ def test_semantic_duplicate_pending_task_is_merged_on_append():
 
 
 def test_complete_current_skill_drops_equivalent_pending_frames():
+    """验证完成当前技能会丢弃与已完成任务等价的待办帧，其余继续保留。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -448,6 +461,7 @@ def test_complete_current_skill_drops_equivalent_pending_frames():
 
 
 def test_selected_pending_task_switch_does_not_suspend_completed_current_skill():
+    """验证切换到已选待办任务时不把已完成的当前技能压入技能栈。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -487,6 +501,7 @@ def test_selected_pending_task_switch_does_not_suspend_completed_current_skill()
 
 
 def test_ambiguous_same_skill_pending_tasks_are_not_claimed_by_target_only():
+    """验证仅凭目标技能无法区分同技能待办任务时不认领任何一条。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",
@@ -524,6 +539,7 @@ def test_ambiguous_same_skill_pending_tasks_are_not_claimed_by_target_only():
 
 
 def test_continue_active_can_reattach_missing_active_skill():
+    """验证活动技能缺失时继续当前任务可重新绑定该技能并沿用步骤。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_demo",

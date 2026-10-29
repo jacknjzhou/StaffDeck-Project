@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 
 def purge_chat_session_records(db: Session, session: ChatSession) -> None:
-    """Stage deletion of one chat session with its dependent rows.
+    """暂存删除一个会话及其从属记录。
 
-    The caller owns the surrounding transaction; the on-disk Harness workspace
-    should be removed afterwards via remove_chat_session_workspace.
+    外层事务由调用方负责提交；提交后还需调用 remove_chat_session_workspace
+    清理磁盘上的 Harness 工作区。
     """
     tenant_id = session.tenant_id
     session_id = session.id
@@ -42,7 +42,7 @@ def remove_chat_session_workspace(
     session_id: str,
     db: Session | None = None,
 ) -> None:
-    """Remove one session's Harness workspace after the deletion commit."""
+    """删除提交后清理该会话对应的 Harness 工作区目录，失败只记日志不抛出。"""
     try:
         remove_harness_session_workspace(tenant_id=tenant_id, session_id=session_id, db=db)
     except OSError:

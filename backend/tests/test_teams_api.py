@@ -61,6 +61,7 @@ from app.teams.wakeup import (
 
 
 def _test_session() -> Session:
+    """建一个内存 SQLite 会话,为每个用例提供独立数据。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -71,12 +72,14 @@ def _test_session() -> Session:
 
 
 def _admin_user() -> User:
+    """构造租户内的管理员用户,用于权限相关断言。"""
     return User(
         id="user_admin", tenant_id="tenant_demo", username="ops", role="admin", password_hash="test"
     )
 
 
 def _member_user() -> User:
+    """构造租户内的普通成员用户,用于校验非管理员的管理权限。"""
     return User(
         id="user_member",
         tenant_id="tenant_demo",
@@ -87,6 +90,7 @@ def _member_user() -> User:
 
 
 def _seed_agents(db: Session) -> None:
+    """插入两个租户与若干员工档案,覆盖同租户和跨租户场景。"""
     db.add(Tenant(id="tenant_demo", name="Demo"))
     db.add(Tenant(id="tenant_other", name="Other"))
     db.add(AgentProfile(id="agent_tl", tenant_id="tenant_demo", name="TL"))
@@ -97,6 +101,7 @@ def _seed_agents(db: Session) -> None:
 
 
 def _seed_team(db: Session) -> Team:
+    """建一个带 TL 与成员的团队,作为多数用例的初始数据。"""
     _seed_agents(db)
     team = create_team(
         db,
@@ -111,6 +116,7 @@ def _seed_team(db: Session) -> Team:
 
 
 def _make_task(db: Session, team: Team, *, status: str = "pending") -> TeamTask:
+    """为团队造一条指派给成员的任务,可按需指定初始状态。"""
     task = TeamTask(
         team_id=team.id,
         tenant_id=team.tenant_id,
@@ -139,6 +145,7 @@ def _stub_start_wakeup(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def test_team_crud_and_unique_name() -> None:
+    """验证团队创建、重名 409、列表、详情、更新与删除的完整 CRUD 行为。"""
     with _test_session() as db:
         _seed_agents(db)
         admin = _admin_user()
@@ -173,6 +180,7 @@ def test_team_crud_and_unique_name() -> None:
 
 
 def test_delete_team_cascades_members_and_tasks() -> None:
+    """验证删除团队会级联清理任务与唤醒事件。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -189,6 +197,7 @@ def test_delete_team_cascades_members_and_tasks() -> None:
 
 
 def test_member_add_remove_and_constraints() -> None:
+    """验证重复添加成员返回 409、跨租户员工 404,而正常添加与移除成功。"""
     with _test_session() as db:
         team = _seed_team(db)
         admin = _admin_user()
@@ -226,6 +235,7 @@ def test_member_add_remove_and_constraints() -> None:
 
 
 def test_leader_uniqueness_and_reassign() -> None:
+    """验证换任 TL 后团队只有一个 leader,原 TL 降为成员,非成员换任返回 404。"""
     with _test_session() as db:
         team = _seed_team(db)
         add_member(db, team, agent_id="agent_worker2")
@@ -253,6 +263,7 @@ def test_leader_uniqueness_and_reassign() -> None:
 
 
 def test_manage_permission_owner_or_admin() -> None:
+    """验证团队管理权限只归 owner 或管理员,其他成员操作返回 403。"""
     with _test_session() as db:
         _seed_agents(db)
         team = teams_api.create_team_endpoint(
@@ -278,6 +289,7 @@ def test_manage_permission_owner_or_admin() -> None:
 
 
 def _admin_user_other() -> User:
+    """构造同租户但既非 owner 也非管理员的用户,用于 403 场景。"""
     return User(
         id="user_other",
         tenant_id="tenant_demo",
@@ -291,6 +303,7 @@ def _admin_user_other() -> User:
 
 
 def test_task_state_machine_transitions() -> None:
+    """验证任务状态机的合法流转顺序与版本累加,非法流转抛 TeamTaskTransitionError。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -317,6 +330,7 @@ def test_task_state_machine_transitions() -> None:
 
 
 def test_parse_tl_task_assignments_ok() -> None:
+    """验证能从带 JSON 代码块的 TL 回复中解析出任务列表。"""
     reply = (
         "好的,我来拆解。\n"
         '```json\n{"team_tasks": [{"title": "调研", "description": "竞品分析", '
@@ -329,6 +343,7 @@ def test_parse_tl_task_assignments_ok() -> None:
 
 
 def test_parse_tl_task_assignments_keeps_dependency_graph_fields() -> None:
+    """验证解析保留 client_ref、depends_on 与 activation_condition 等依赖图字段。"""
     reply = (
         '```json\n{"team_tasks": ['
         '{"client_ref": "source", "title": "收集资料", '
@@ -349,6 +364,7 @@ def test_parse_tl_task_assignments_keeps_dependency_graph_fields() -> None:
 
 
 def test_parse_tl_task_assignments_no_block_or_bad_json() -> None:
+    """验证无代码块或 JSON 损坏时返回空列表,缺 title 的条目被跳过。"""
     assert parse_tl_task_assignments("随便聊聊,没有代码块") == []
     assert parse_tl_task_assignments('```json\n{"team_tasks": [坏掉的\n```') == []
     # title 缺失的条目被跳过;assignee 缺省表示投入任务池竞标(增量 3)
@@ -357,6 +373,7 @@ def test_parse_tl_task_assignments_no_block_or_bad_json() -> None:
 
 
 def test_parse_tl_review() -> None:
+    """验证只解析合法 verdict 的验收结论,无代码块或未知 verdict 返回 None。"""
     reply = '验收完毕\n```json\n{"team_review": {"verdict": "rework", "comment": "重做"}}\n```'
     assert parse_tl_review(reply) == {"verdict": "rework", "comment": "重做"}
     assert parse_tl_review("没有块") is None
@@ -367,11 +384,13 @@ def test_parse_tl_review() -> None:
 
 
 def test_tl_chat_creates_tasks_and_wakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 TL 对话把结构化任务落库并派发唤醒,同时跳过非成员指派与回复中的 JSON。"""
     with _test_session() as db:
         team = _seed_team(db)
         started = _stub_start_wakeup(monkeypatch)
 
         def fake_handle_turn(self, request):
+            """替换 AgentLoop.handle_turn,断言团队上下文并返回带任务 JSON 的回复。"""
             assert request.interaction_mode == "team_tl"
             assert request.message == "帮我调研竞品"
             # 团队上下文仅注入运行时，不写入可见消息。
@@ -428,6 +447,7 @@ def test_tl_chat_does_not_repair_natural_language_into_tasks(
         requests: list[ChatTurnRequest] = []
 
         def fake_handle_turn(self, request):
+            """替换 AgentLoop.handle_turn,返回缺少执行输入的澄清回复并记录请求。"""
             requests.append(request)
             return ChatTurnResponse(
                 reply=(
@@ -463,12 +483,14 @@ def test_tl_chat_does_not_repair_natural_language_into_tasks(
 def test_tl_chat_blocks_dependent_tasks_until_predecessor_completes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证依赖任务初始为 blocked,前置任务完成后才被激活并派发唤醒。"""
     with _test_session() as db:
         team = _seed_team(db)
         add_member(db, team, agent_id="agent_worker2")
         started = _stub_start_wakeup(monkeypatch)
 
         def fake_handle_turn(self, request):
+            """替换 AgentLoop.handle_turn,返回带依赖关系的两项任务规划。"""
             reply = (
                 "已按依赖关系安排。\n"
                 '```json\n{"team_tasks": ['
@@ -530,6 +552,7 @@ def test_tl_chat_blocks_dependent_tasks_until_predecessor_completes(
 def test_publish_team_planner_frames_persists_parallel_and_serial_dag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证规划帧落库为并行与串行 DAG,只唤醒就绪任务,重复发布保持幂等。"""
     with _test_session() as db:
         team = _seed_team(db)
         add_member(db, team, agent_id="agent_worker2")
@@ -610,6 +633,7 @@ def test_publish_team_planner_frames_persists_parallel_and_serial_dag(
 
 
 def test_member_task_message_includes_completed_dependency_outputs() -> None:
+    """验证成员任务消息附带已完成前置任务的结论、引用与产物。"""
     with _test_session() as db:
         team = _seed_team(db)
         source = _make_task(db, team, status="done")
@@ -640,6 +664,7 @@ def test_member_task_message_includes_completed_dependency_outputs() -> None:
 
 
 def test_team_progress_message_updates_after_each_member_result() -> None:
+    """验证每收到一条成员结果后,团队进度消息的内容与元数据同步刷新。"""
     with _test_session() as db:
         team = _seed_team(db)
         tl_session = ChatSession(
@@ -705,11 +730,13 @@ def test_team_progress_message_updates_after_each_member_result() -> None:
 
 
 def test_tl_chat_rejects_cyclic_dependency_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证循环依赖的规划被整体拒绝,不产生任务与唤醒事件。"""
     with _test_session() as db:
         team = _seed_team(db)
         started = _stub_start_wakeup(monkeypatch)
 
         def fake_handle_turn(self, request):
+            """替换 AgentLoop.handle_turn,返回互相依赖的循环任务规划。"""
             return ChatTurnResponse(
                 reply=(
                     '```json\n{"team_tasks": ['
@@ -738,11 +765,13 @@ def test_tl_chat_rejects_cyclic_dependency_graph(monkeypatch: pytest.MonkeyPatch
 
 
 def test_tl_chat_rejects_duplicate_dependency_references(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 client_ref 重复的规划被整体拒绝,不产生任务与唤醒事件。"""
     with _test_session() as db:
         team = _seed_team(db)
         started = _stub_start_wakeup(monkeypatch)
 
         def fake_handle_turn(self, request):
+            """替换 AgentLoop.handle_turn,返回 client_ref 重复的任务规划。"""
             return ChatTurnResponse(
                 reply=(
                     '```json\n{"team_tasks": ['
@@ -792,6 +821,7 @@ def test_task_activation_state_supports_generic_fan_in_conditions(
     needs_input: list[bool],
     expected: str,
 ) -> None:
+    """验证 all_succeeded、any_succeeded、minimum_succeeded、all_terminal 等汇聚条件的判定。"""
     with _test_session() as db:
         team = _seed_team(db)
         sources: list[TeamTask] = []
@@ -828,6 +858,7 @@ def test_task_activation_state_supports_generic_fan_in_conditions(
 
 
 def test_tl_chat_requires_leader() -> None:
+    """验证团队没有 TL 时发起 TL 对话返回 400。"""
     with _test_session() as db:
         _seed_agents(db)
         team = create_team(
@@ -848,6 +879,7 @@ def test_tl_chat_requires_leader() -> None:
 
 
 def test_member_execution_report_then_tl_wake(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证成员执行完成后任务进入 review、写回报告并唤醒 TL 验收。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -881,6 +913,7 @@ def test_member_execution_report_then_tl_wake(monkeypatch: pytest.MonkeyPatch) -
 def test_planner_member_completion_skips_review_and_enqueues_one_synthesis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证规划模式下成员完成即跳过人工验收,直接进入汇总且只入队一次汇总唤醒。"""
     with _test_session() as db:
         team = _seed_team(db)
         tl_session = ChatSession(
@@ -980,6 +1013,7 @@ def test_planner_member_completion_skips_review_and_enqueues_one_synthesis(
 def test_team_synthesis_publishes_final_answer_on_original_tl_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证汇总结果写回原 TL 会话,合并各任务引用并刷新进度消息。"""
     with _test_session() as db:
         team = _seed_team(db)
         tl_session = ChatSession(
@@ -1078,6 +1112,7 @@ def test_team_synthesis_publishes_final_answer_on_original_tl_session(
         synthesis_messages: list[str] = []
 
         def fake_team_turn(*args: object, **kwargs: object) -> str:
+            """替换轮次执行,记录汇总提示词并返回最终答案。"""
             synthesis_messages.append(str(kwargs["message"]))
             return "综合建议：优先方案 A，并为关键风险设置兜底。"
 
@@ -1115,6 +1150,7 @@ def test_team_synthesis_publishes_final_answer_on_original_tl_session(
 
 
 def test_tl_review_verdicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 TL 验收 approve、escalate、rework 三种结论的状态流转与唤醒行为。"""
     cases = [
         ("approve", "done", None),
         ("escalate", "escalated", None),
@@ -1155,6 +1191,7 @@ def test_tl_review_verdicts(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_tl_review_without_verdict_keeps_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 TL 回复不含验收结论时任务停留在 review,唤醒仍标记完成。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="review")
@@ -1174,6 +1211,7 @@ def test_tl_review_without_verdict_keeps_review(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_failed_turn_escalates_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证成员执行抛异常时任务升级为 escalated,唤醒记录失败原因。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -1185,6 +1223,7 @@ def test_failed_turn_escalates_task(monkeypatch: pytest.MonkeyPatch) -> None:
         _stub_start_wakeup(monkeypatch)
 
         def boom(*args, **kwargs):
+            """模拟模型不可用,让成员轮次抛出异常。"""
             raise RuntimeError("LLM 不可用")
 
         monkeypatch.setattr(wakeup, "run_agent_turn", boom)
@@ -1202,6 +1241,7 @@ def test_failed_turn_escalates_task(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_override_verdicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证人工改判支持通过、退回与升级任务改判,非法状态返回 409。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="review")
@@ -1261,6 +1301,7 @@ def test_override_verdicts(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_override_requires_manager() -> None:
+    """验证非管理者发起人工改判返回 403。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="review")
@@ -1274,6 +1315,7 @@ def test_override_requires_manager() -> None:
 
 
 def test_resume_needs_input_task_with_user_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证为等待输入的升级任务补充答案后转回 rework 并唤醒成员。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="escalated")
@@ -1309,6 +1351,7 @@ def test_resume_needs_input_task_with_user_answer(monkeypatch: pytest.MonkeyPatc
 
 
 def test_resume_rejects_task_not_waiting_for_input() -> None:
+    """验证任务未处于等待输入状态时补充信息返回 409。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="escalated")
@@ -1328,6 +1371,7 @@ def test_resume_rejects_task_not_waiting_for_input() -> None:
 def test_resume_allows_the_user_who_requested_the_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证任务发起人本人可补充输入,不要求管理员权限。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="escalated")
@@ -1352,6 +1396,7 @@ def test_resume_allows_the_user_who_requested_the_task(
 
 
 def test_claim_wake_event_only_once() -> None:
+    """验证唤醒事件的原子认领只成功一次,重复认领返回 False。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -1367,6 +1412,7 @@ def test_claim_wake_event_only_once() -> None:
 
 
 def test_recover_orphaned_claimed_wake_records_audit_event() -> None:
+    """验证超时未完成的认领被回收为 pending,并写入 wake_recovered 审计事件。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -1408,6 +1454,7 @@ def test_recover_orphaned_claimed_wake_records_audit_event() -> None:
 
 
 def test_dispatches_abandoned_pending_wake_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证滞留的 pending 唤醒只被补派一次,并交给异步启动器。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -1475,6 +1522,7 @@ def test_member_execution_serializes_same_agent_without_blocking_other_agents(
         executed: list[str] = []
 
         def fake_execute_member_task(db, event, team, agent):
+            """替换真实成员执行,只记录被执行的事件 ID。"""
             executed.append(event.id)
 
         monkeypatch.setattr(wakeup, "_execute_member_task", fake_execute_member_task)
@@ -1503,6 +1551,7 @@ def test_member_execution_serializes_same_agent_without_blocking_other_agents(
 
 
 def test_export_team_log_contains_raw_model_and_tool_records() -> None:
+    """验证团队日志导出含原始模型事件与工具调用记录,并以附件形式返回。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="done")
@@ -1577,6 +1626,7 @@ def test_export_team_log_contains_raw_model_and_tool_records() -> None:
 
 
 def test_list_tasks_filter_by_status() -> None:
+    """验证任务列表可按状态过滤,非法状态返回 400。"""
     with _test_session() as db:
         team = _seed_team(db)
         _make_task(db, team)

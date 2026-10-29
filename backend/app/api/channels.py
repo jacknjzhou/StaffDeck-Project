@@ -112,6 +112,7 @@ router = APIRouter(prefix="/api/enterprise/channels", tags=["enterprise:channels
 
 
 def _channel_attachment_metadata(metadata: object) -> list[ChannelConversationAttachmentRead]:
+    """从消息 metadata 中提取附件列表,跳过结构不合法的条目。"""
     if not isinstance(metadata, dict):
         return []
     raw_attachments = metadata.get("attachments")
@@ -135,7 +136,10 @@ def _patch_binding_config_key(
     key: str,
     value: object,
 ) -> None:
-    """Patch one API-owned config key against the latest JSON value."""
+    """就地更新绑定的单个配置键,以库中最新 JSON 为基准避免整表覆盖。
+
+    按方言分别使用 SQLite 的 json_set 与 PostgreSQL 的 jsonb_set;未命中行时抛 404。
+    """
     # SQLite JSON1 与 PostgreSQL jsonb 的等价写法按方言分支(config_json 列在 PG 上为 json 类型)。
     is_sqlite = db.get_bind().dialect.name == "sqlite"
     if is_sqlite:
@@ -267,6 +271,7 @@ CHANNEL_META = [
 
 
 def _get_binding(db: Session, tenant_id: str, binding_id: str) -> ChannelBinding:
+    """按租户取渠道绑定;不存在或跨租户一律抛 404。"""
     binding = db.get(ChannelBinding, binding_id)
     if not binding or binding.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Channel binding not found")
@@ -321,6 +326,7 @@ def _ensure_external_account_available(
     binding_id: str,
     aliases: set[str] | None = None,
 ) -> None:
+    """校验外部机器人未被其他绑定占用;aliases 用于兼容历史账号键。"""
     account_keys = {account_key, *(aliases or set())}
     conflict = db.exec(
         select(ChannelBinding).where(
@@ -354,11 +360,13 @@ def _quiesce_binding_or_409(
 
 
 def _resume_binding(channel: str, binding_id: str, *, start: bool) -> None:
+    """渠道服务启用时恢复该绑定的入站处理,start 决定是否真正拉起长连接。"""
     if channel_services_enabled():
         resume_binding_ingress(channel, binding_id, start=start)
 
 
 def _ensure_revision(binding: ChannelBinding, expected_revision: int) -> None:
+    """乐观锁校验:配置版本与调用方读到的不一致时抛 409 要求重试。"""
     if binding.config_revision != expected_revision:
         raise HTTPException(status_code=409, detail="渠道配置已被其他请求修改，请重试")
 
@@ -380,6 +388,10 @@ def list_channel_bindings(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[ChannelBindingRead]:
+    """列出渠道绑定;按 agent_id 过滤时走员工可见性校验,admin 见全量。
+
+    未指定 agent_id 时,普通成员只能看到自己创建或被授权协管的绑定。
+    """
     if agent_id:
         require_agent_scope_viewer(tenant_id, agent_id, current_user, db)
     else:
@@ -410,6 +422,10 @@ def create_channel_binding(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelBindingRead:
+    """创建渠道绑定,按员工或团队挂载并初始化默认员工关系。
+
+    agent_id 与 team_id 必须且只能提供一个;团队绑定以现任 TL 作为路由员工。
+    """
     ensure_current_user_tenant(request.tenant_id, current_user)
     if request.channel not in SUPPORTED_CHANNELS:
         raise HTTPException(status_code=400, detail=f"v1 仅支持渠道: {sorted(SUPPORTED_CHANNELS)}")
@@ -487,10 +503,15 @@ def _check_bind_code_rate(user_id: str) -> bool:
 
 
 def _generate_bind_code() -> str:
+    """生成 6 位数字绑定码(100000-999999)。"""
     return f"{secrets.randbelow(900000) + 100000}"
 
 
 def _issue_bind_code(db: Session, tenant_id: str, user_id: str) -> ChannelBindCodeRead:
+    """为指定用户签发绑定码并落库,复用旧行覆盖旧码使其作废。
+
+    唯一键冲突时重试最多 10 次,仍失败返回 409。
+    """
     for _attempt in range(10):
         now = utc_now()
         record = db.exec(
@@ -648,6 +669,7 @@ def list_channel_binding_agents(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[ChannelBindingAgentRead]:
+    """列出该绑定挂载的数字员工及当前默认员工。"""
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user, action=_MANAGER_ACTION_AGENTS)
@@ -662,6 +684,11 @@ def update_channel_binding_agents(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelBindingRead:
+    """更新绑定的显示名、员工挂载、自动路由与默认人工处理人。
+
+    只处理显式传入的字段;员工挂载整表替换要求恰好一个默认员工,团队绑定不允许改挂载;
+    配置键在生命周期锁内按 revision 乐观锁逐项写入。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user, action=_MANAGER_ACTION_AGENTS)
@@ -808,6 +835,10 @@ def delete_channel_binding(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> Response:
+    """删除渠道绑定:先静默入站与长连接,再级联清理投递、事件与挂载行。
+
+    删除前须通过 revision 校验;入站消息或 reaction 未收敛时返回 409 而不强删。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user)
@@ -1091,6 +1122,7 @@ def create_wechat_qrcode(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelQRCodeRead:
+    """申请微信扫码登录二维码,并带上本地已有 bot_token 以支持旧凭证续绑。"""
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user, action=_MANAGER_ACTION_CREDENTIALS)
@@ -1118,6 +1150,10 @@ def _activate_binding_with_existing_credentials(
     db: Session,
     binding: ChannelBinding,
 ) -> ChannelBinding:
+    """用已存凭证直接激活绑定(旧 bot 仍有效时免扫码)。
+
+    清除会话过期标记与 get_updates_buf,重新校验外部账号唯一性并拉起长连接。
+    """
     binding_id = binding.id
     tenant_id = binding.tenant_id
     channel = binding.channel
@@ -1171,6 +1207,11 @@ def poll_wechat_qrcode_status(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelQRCodeStatusRead:
+    """轮询微信扫码状态,确认后落库凭证并激活绑定。
+
+    scaned_but_redirect 只记录腾讯官方域的接入域名;binded_redirect 复用旧凭证激活;
+    机器人标识与原绑定不一致时拒绝修改,要求删除后重建。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user, action=_MANAGER_ACTION_CREDENTIALS)
@@ -1577,6 +1618,7 @@ def create_wechat_kf_contact_way(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict[str, str]:
+    """为已绑定的客服账号生成带 scene 参数的咨询链接。"""
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user)
@@ -1604,6 +1646,7 @@ def create_wechat_kf_contact_way(
 def _ensure_wechat_kf_account_binding(
     db: Session, binding: ChannelBinding, open_kfid: str
 ) -> ChannelBinding:
+    """把客服账号挂到该绑定上:他处仍活跃则 409,原渠道已失效则接管。"""
     open_kfid = open_kfid.strip()
     if not open_kfid:
         raise HTTPException(status_code=400, detail="客服账号 ID 不能为空")
@@ -1642,6 +1685,7 @@ def list_wechat_kf_accounts(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict[str, list[dict[str, object]]]:
+    """列出微信客服后台的账号,并标注其在本租户内的绑定归属。"""
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user)
@@ -1717,6 +1761,7 @@ def create_wechat_kf_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelBindingRead:
+    """在微信客服后台创建账号(可带头像)并绑定到该渠道。"""
     ensure_current_user_tenant(request.tenant_id, current_user)
     binding = _get_binding(db, request.tenant_id, binding_id)
     _ensure_binding_manager(db, request.tenant_id, binding, current_user)
@@ -1740,6 +1785,10 @@ def upload_wechat_kf_avatar(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict[str, str]:
+    """上传客服头像临时素材,返回可用于建号或改名的 media_id。
+
+    仅接受 JPG/PNG,大小上限 2MB。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user)
@@ -1770,6 +1819,7 @@ def select_wechat_kf_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelBindingRead:
+    """把已有的微信客服账号绑定到该渠道。"""
     ensure_current_user_tenant(request.tenant_id, current_user)
     binding = _get_binding(db, request.tenant_id, binding_id)
     _ensure_binding_manager(db, request.tenant_id, binding, current_user)
@@ -1786,6 +1836,7 @@ def update_wechat_kf_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelBindingRead:
+    """同步修改微信客服后台的账号名称与头像,并更新本地记录。"""
     ensure_current_user_tenant(request.tenant_id, current_user)
     binding = _get_binding(db, request.tenant_id, binding_id)
     _ensure_binding_manager(db, request.tenant_id, binding, current_user)
@@ -1824,6 +1875,7 @@ def delete_wechat_kf_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelBindingRead:
+    """在微信客服后台删除账号并移除本地绑定记录。"""
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user)
@@ -1854,7 +1906,10 @@ def save_feishu_credentials(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelBindingRead:
-    """Validate and save Feishu app credentials, then start its long connection."""
+    """校验并保存飞书应用凭证,随后拉起长连接。
+
+    app_id 与原绑定不一致时拒绝直接修改,要求删除后重建。
+    """
     ensure_current_user_tenant(request.tenant_id, current_user)
     binding = _get_binding(db, request.tenant_id, binding_id)
     _ensure_binding_manager(db, request.tenant_id, binding, current_user, action=_MANAGER_ACTION_CREDENTIALS)
@@ -1936,7 +1991,10 @@ def save_dingtalk_credentials(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelBindingRead:
-    """Validate and save DingTalk Stream credentials, then start its connector."""
+    """校验并保存钉钉 Stream 模式凭证,随后启动连接器。
+
+    client_id 与原绑定不一致时拒绝直接修改,要求删除后重建。
+    """
     ensure_current_user_tenant(request.tenant_id, current_user)
     binding = _get_binding(db, request.tenant_id, binding_id)
     _ensure_binding_manager(db, request.tenant_id, binding, current_user, action=_MANAGER_ACTION_CREDENTIALS)
@@ -2013,7 +2071,10 @@ def list_tenant_delivery_audit(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelDeliveryPage:
-    """Tenant-admin audit that remains available after a binding is deleted."""
+    """租户管理员的投递审计:绑定删除后仍可按租户查询历史投递。
+
+    仅 admin 可用;status 只接受 pending/sending/delivered/failed,默认筛失败记录。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     if not is_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Only administrators can audit channel deliveries")
@@ -2055,6 +2116,7 @@ def list_channel_deliveries(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelDeliveryPage:
+    """分页列出该绑定的投递记录,按创建时间倒序。"""
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user)
@@ -2156,6 +2218,7 @@ def list_channel_conversations(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChannelConversationPage:
+    """分页列出该绑定下的渠道会话,附带最近一条消息预览与消息数。"""
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user)
@@ -2231,6 +2294,7 @@ def list_channel_conversation_messages(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[ChannelConversationMessageRead]:
+    """按时间顺序返回该渠道会话最近 200 条消息,含附件元数据。"""
     ensure_current_user_tenant(tenant_id, current_user)
     binding = _get_binding(db, tenant_id, binding_id)
     _ensure_binding_manager(db, tenant_id, binding, current_user)
@@ -2265,6 +2329,10 @@ def get_channel_conversation_attachment(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> FastAPIResponse:
+    """下载渠道会话中某条消息的附件内容,以二进制流响应。
+
+    会话、消息与附件 id 必须同属该绑定,否则返回 404;不存在的文件同样 404。
+    """
     from app.session.attachment_store import read_staged_chat_attachment
     from app.session.session_schema import ChatAttachmentRead
 

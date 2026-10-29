@@ -10,7 +10,10 @@ SOP_SPECIFIC_CAPABILITY_SCOPE: CapabilityScope = "sop_specific"
 
 
 def normalize_capability_scope(value: object) -> CapabilityScope:
-    """Normalize persisted or imported values without making old rows unusable."""
+    """归一化持久化或导入的能力范围取值，避免历史脏数据导致旧记录不可用。
+
+    仅识别 `sop_specific`，其余任何取值都回退为 `general`。
+    """
 
     if value == SOP_SPECIFIC_CAPABILITY_SCOPE:
         return SOP_SPECIFIC_CAPABILITY_SCOPE

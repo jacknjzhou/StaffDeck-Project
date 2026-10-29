@@ -4,10 +4,15 @@ from typing import Any
 
 
 class BuiltinMCPError(ValueError):
-    pass
+    """内置 MCP server 或工具名、工具参数不合法时抛出的错误。"""
 
 
 def execute_builtin_mcp(config: dict[str, Any], arguments: dict[str, Any]) -> Any:
+    """执行 builtin.demo 内置 MCP 工具，返回该工具约定的结果字典。
+
+    当前支持 echo、sum、product_lookup；server 不是 builtin.demo、tool 未知，或
+    sum 的 numbers 不是数字数组时抛 BuiltinMCPError。
+    """
     server = str(config.get("server") or config.get("server_id") or "").strip()
     tool = str(config.get("tool") or config.get("tool_name") or "").strip()
     if server != "builtin.demo":
@@ -35,6 +40,7 @@ def execute_builtin_mcp(config: dict[str, Any], arguments: dict[str, Any]) -> An
 
 
 def builtin_mcp_tool_names() -> list[str]:
+    """列出内置 MCP server 暴露的工具名。"""
     return ["echo", "sum", "product_lookup"]
 
 
@@ -92,6 +98,10 @@ _BUILTIN_TOOL_DEFINITIONS: list[dict[str, Any]] = [
 
 
 def builtin_mcp_tool_definitions(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """返回内置 MCP 工具的 schema 定义副本，供工具注册与前端展示使用。
+
+    仅接受 builtin.demo，其他 server 抛 BuiltinMCPError。
+    """
     server = str(config.get("server") or config.get("server_id") or "builtin.demo").strip()
     if server != "builtin.demo":
         raise BuiltinMCPError(f"不支持的内置 MCP server：{server or '<empty>'}")

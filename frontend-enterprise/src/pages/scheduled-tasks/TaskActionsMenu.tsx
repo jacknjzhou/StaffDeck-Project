@@ -28,7 +28,13 @@ export type TaskActionsMenuProps = {
   onDelete: (task: ScheduledTaskRead) => void;
 };
 
-/** Row action dropdown for a scheduled task (SD1 node 281:2178). */
+/**
+ * 定时任务行内“更多”操作下拉菜单（SD1 node 281:2178）。
+ *
+ * - “查看记录”对所有状态可见；编辑、立即执行、启停、删除仅非归档任务展示。
+ * - 已归档任务只保留“查看记录”，已完成任务隐藏启停项。
+ * - 各菜单项仅触发父级回调，组件自身不发起请求。
+ */
 export function TaskActionsMenu({
   task,
   onViewRuns,

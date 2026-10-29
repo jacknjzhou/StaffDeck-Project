@@ -17,6 +17,7 @@ from app.session.session_schema import (
 
 
 def _engine():
+    """创建内存 SQLite 引擎并建表，让每个用例拥有独立的 Turn 存储。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -27,6 +28,7 @@ def _engine():
 
 
 def _request(message: str = "hello") -> ChatTurnRequest:
+    """构造固定租户、会话与客户端轮次 ID 的对话请求，可替换消息内容。"""
     return ChatTurnRequest(
         tenant_id="tenant-demo",
         session_id="session-1",
@@ -36,6 +38,7 @@ def _request(message: str = "hello") -> ChatTurnRequest:
 
 
 def test_harness_turn_receipt_replays_completed_response() -> None:
+    """验证已完成的轮次按 client_turn_id 重放原始响应，不会重复执行。"""
     engine = _engine()
     with Session(engine) as db:
         session = ChatSession(id="session-1", tenant_id="tenant-demo")
@@ -62,6 +65,7 @@ def test_harness_turn_receipt_replays_completed_response() -> None:
 
 
 def test_harness_turn_receipt_blocks_in_progress_and_mismatched_reuse() -> None:
+    """验证执行中的轮次拒绝重复提交，且同一 client_turn_id 换内容时报冲突。"""
     engine = _engine()
     with Session(engine) as db:
         session = ChatSession(id="session-1", tenant_id="tenant-demo")
@@ -86,6 +90,7 @@ def test_harness_turn_receipt_blocks_in_progress_and_mismatched_reuse() -> None:
 
 
 def test_harness_turn_terminal_receipt_allows_only_cancel_or_completion() -> None:
+    """验证已取消的轮次不能再完成，已进入 finalizing 的轮次也不能再取消。"""
     engine = _engine()
     with Session(engine) as db:
         session = ChatSession(id="session-1", tenant_id="tenant-demo")
@@ -125,6 +130,7 @@ def test_harness_turn_terminal_receipt_allows_only_cancel_or_completion() -> Non
 
 
 def test_first_turn_retry_without_returned_session_id_replays_original() -> None:
+    """验证首轮未返回 session_id 时重试可恢复同一会话并重放原响应。"""
     engine = _engine()
     original_request = ChatTurnRequest(
         tenant_id="tenant-demo",

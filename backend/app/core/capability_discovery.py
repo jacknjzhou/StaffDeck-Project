@@ -38,11 +38,10 @@ def project_capability_manifest(
     *,
     budget_chars: int = CAPABILITY_CATALOG_BUDGET_CHARS,
 ) -> CapabilityManifest:
-    """Return the compact manifest sent to one isolated Task Agent.
+    """生成发给单个隔离 Task Agent 的精简能力清单，只压缩上下文体积。
 
-    ``manifest`` remains the complete authorization snapshot held by the
-    invoker.  This projection controls context size only; it never grants a
-    capability that was absent from the frozen snapshot.
+    ``manifest`` 仍是调用方持有的完整授权快照：内核能力与 SOP 专属能力直接展开，
+    其余进入 catalog 由模型按需检索。该投影绝不授予冻结快照之外的能力。
     """
 
     budget_chars = max(256, int(budget_chars))
@@ -80,6 +79,11 @@ def search_capability_descriptors(
     kinds: set[str] | None = None,
     limit: int = 8,
 ) -> list[CapabilityDescriptor]:
+    """按相关度给能力描述符排序，返回最匹配的若干项。
+
+    跳过不可用与 internal 能力，可用 kinds 限定类型；若没有任何正分命中，则
+    退化为按名称排序的原始顺序。limit 夹在 1 与 CAPABILITY_SEARCH_MAX_RESULTS 之间。
+    """
     normalized_query = _normalize(query)
     limit = max(1, min(int(limit), CAPABILITY_SEARCH_MAX_RESULTS))
     ranked: list[tuple[float, str, CapabilityDescriptor]] = []
@@ -99,6 +103,7 @@ def search_capability_descriptors(
 
 
 def catalog_entry(descriptor: CapabilityDescriptor) -> CapabilityCatalogEntry:
+    """把能力描述符压成目录条目：只留 id、名称、类型与截短到 240 字符的描述。"""
     return CapabilityCatalogEntry(
         capability_id=descriptor.capability_id,
         name=descriptor.name,
@@ -109,7 +114,11 @@ def catalog_entry(descriptor: CapabilityDescriptor) -> CapabilityCatalogEntry:
 
 
 def model_descriptor(descriptor: CapabilityDescriptor) -> CapabilityDescriptor:
-    """Strip authorization/runtime internals from a model-visible descriptor."""
+    """剥掉授权与运行时内部字段，得到可安全展示给模型的能力描述符。
+
+    按能力类型只保留必要元数据（如 tool_type、method、授权知识库数量），
+    input_schema 交给 ``_model_input_schema`` 过滤，描述统一截短到 1000 字符。
+    """
 
     if not descriptor.available:
         return descriptor.model_copy(
@@ -149,11 +158,10 @@ def model_descriptor(descriptor: CapabilityDescriptor) -> CapabilityDescriptor:
 
 
 def _model_input_schema(schema: dict[str, object]) -> dict[str, object]:
-    """Project configured JSON Schema without examples or sensitive defaults.
+    """把管理员配置的 JSON Schema 投影成模型可见版本，去掉示例与敏感默认值。
 
-    Administrators control external capability schemas.  Treat their prose as
-    untrusted catalog data and expose only the validation vocabulary required
-    for a model to construct a call.
+    外部能力 schema 由管理员控制，其文案按不可信的目录数据处理：只保留模型构造
+    调用所需的校验关键字；递归超过 16 层、列表超过 128 项的部分直接丢弃。
     """
 
     allowed_keys = {
@@ -190,6 +198,7 @@ def _model_input_schema(schema: dict[str, object]) -> dict[str, object]:
     }
 
     def project(value: object, *, depth: int = 0) -> object:
+        """递归过滤单个 schema 节点，深度超过 16 层时返回空字典。"""
         if depth > 16:
             return {}
         if isinstance(value, dict):
@@ -223,6 +232,11 @@ def _model_input_schema(schema: dict[str, object]) -> dict[str, object]:
 
 
 def _is_initially_expanded(descriptor: CapabilityDescriptor) -> bool:
+    """判断能力是否一开始就展开完整 schema，而不是只放进 catalog。
+
+    internal 内核能力、固定白名单、SOP 专属能力以及被 SOP 显式放行的能力直接
+    展开，其余能力走渐进式披露，避免一开始就撑爆上下文。
+    """
     return (
         descriptor.kind == "internal"
         or descriptor.name in ALWAYS_EXPANDED_CAPABILITIES
@@ -235,6 +249,10 @@ def _budget_catalog(
     entries: list[CapabilityCatalogEntry],
     budget_chars: int,
 ) -> tuple[list[CapabilityCatalogEntry], bool]:
+    """在字符预算内压缩能力目录：先逐步缩短描述，实在放不下才丢弃条目。
+
+    预算按真正发给模型的紧凑 JSON 长度衡量；返回入选条目与是否发生截断。
+    """
     # Match Codex's progressive-disclosure behavior: shorten descriptions
     # before omitting entries.  The measured budget is the compact JSON payload
     # actually sent to the model, not Python object size.
@@ -263,6 +281,7 @@ def _budget_catalog(
 
 
 def _catalog_chars(entries: list[CapabilityCatalogEntry]) -> int:
+    """按紧凑 JSON（不转义中文）计算目录条目的字符数，供预算判断使用。"""
     return len(
         json.dumps(
             [item.model_dump(mode="json") for item in entries],
@@ -273,6 +292,7 @@ def _catalog_chars(entries: list[CapabilityCatalogEntry]) -> int:
 
 
 def _compact_description(value: str, limit: int) -> str:
+    """把描述合并成单行并截到 limit 个字符；limit 不大于 0 时返回空串。"""
     text = " ".join(str(value or "").split())
     if limit <= 0:
         return ""
@@ -282,10 +302,12 @@ def _compact_description(value: str, limit: int) -> str:
 
 
 def _normalize(value: str) -> str:
+    """归一化检索文本：转小写并压缩连续空白。"""
     return " ".join(str(value or "").casefold().split())
 
 
 def _relevance_score(query: str, descriptor: CapabilityDescriptor) -> float:
+    """给能力打分：名称精确命中权重最高，其次整串包含、词项命中，再叠加序列相似度。"""
     if not query:
         return 0.0
     name = _normalize(descriptor.name)
@@ -309,6 +331,7 @@ def _relevance_score(query: str, descriptor: CapabilityDescriptor) -> float:
 
 
 def _search_terms(value: str) -> set[str]:
+    """切出检索词：拉丁词与中文串，中文长串再补上全部二元片段以支持模糊匹配。"""
     terms = {
         token
         for token in re.findall(r"[a-z0-9_.-]+|[\u3400-\u9fff]+", value)

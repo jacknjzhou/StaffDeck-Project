@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 
 import IconFolder from '../../assets/icons/cap-folder.svg?react';
 
-/** Per-module accent used for the meta line and tag pills (SD1 232:4634 family). */
+/** 各模块的强调色，用于信息行与标签胶囊（SD1 232:4634 系列）。 */
 export type PlatformResourceAccent = 'green' | 'blue' | 'indigo' | 'orange';
 
 const ACCENT_STYLES: Record<PlatformResourceAccent, { meta: string; tag: string }> = {
@@ -18,22 +18,24 @@ export const platformResourceAccentStyles = ACCENT_STYLES;
 
 export type PlatformResourceCardProps = {
   title: ReactNode;
-  /** Accent metric line under the title, e.g. "12M / 6个片段". */
+  /** 标题下方的强调色信息行，例如 "12M / 6个片段"。 */
   meta: ReactNode;
   description: ReactNode;
   tags?: string[];
-  /** Full 36px icon visual. When omitted a default folder tile is shown. */
+  /** 完整的 36px 图标视觉；省略时展示默认的文件夹图标块。 */
   icon?: ReactNode;
-  /** Module accent color for the meta line and tag pills. Defaults to green (知识库). */
+  /** 信息行与标签胶囊使用的模块强调色，默认为绿色（知识库）。 */
   accent?: PlatformResourceAccent;
   onClick?: () => void;
   className?: string;
 };
 
 /**
- * 广场 resource card shared by the 知识库 / 技能 / SOP / 工具 modules. It renders a
- * colorful module icon, a title with a green meta line, a two-line description
- * and a row of green pills on a clean white card (SD1 232:4923).
+ * 广场资源卡片，供知识库 / 技能 / SOP / 工具模块共用。
+ *
+ * - 展示彩色模块图标、标题、强调色信息行、两行描述与一行标签胶囊（SD1 232:4923）。
+ * - `icon` 缺省时回退为文件夹图标块，`accent` 决定信息行与胶囊的配色（默认绿色）。
+ * - 整张卡片为 `button`，点击时调用 `onClick`，因此需由使用方保证可访问名称。
  */
 export default function PlatformResourceCard({
   title,

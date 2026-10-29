@@ -11,6 +11,7 @@ from app.knowledge.citations import knowledge_citations_from_results
 
 
 def test_compact_knowledge_context_keeps_evidence_without_duplicate_payloads() -> None:
+    """验证知识上下文压缩只保留证据要点，丢弃切片、目录树与重复摘要。"""
     result = {
         "query": {"query": "退款规则"},
         "source_message": "请查询退款规则",
@@ -66,6 +67,7 @@ def test_compact_knowledge_context_keeps_evidence_without_duplicate_payloads() -
 
 
 def test_compact_step_result_only_projects_knowledge_results() -> None:
+    """验证步骤结果压缩只投影知识证据，同时保留 reply 与 slot_updates。"""
     payload = {
         "reply": "已找到规则",
         "slot_updates": {"order_id": "A001"},
@@ -89,6 +91,7 @@ def test_compact_step_result_only_projects_knowledge_results() -> None:
 
 
 def test_compact_knowledge_context_keeps_complete_related_group() -> None:
+    """验证同一 related_group_id 的证据被完整保留，不因长度限制被拆断。"""
     evidence = [
         {
             "chunk_id": f"chunk_{index}",
@@ -108,6 +111,7 @@ def test_compact_knowledge_context_keeps_complete_related_group() -> None:
 
 
 def test_compact_knowledge_context_does_not_split_email_at_limit() -> None:
+    """验证截断不切断邮箱等词元，避免产生半截地址。"""
     content = f"{'x' * 790} ops@example.test 后续说明"
     compacted = compact_knowledge_context(
         [{"evidence_pack": [{"content": content, "source_path": "guide.md"}]}]
@@ -119,6 +123,7 @@ def test_compact_knowledge_context_does_not_split_email_at_limit() -> None:
 
 
 def test_compact_knowledge_context_and_citations_share_normalized_source() -> None:
+    """验证压缩结果与引用使用同一归一化来源路径。"""
     result = {
         "selected_concepts": [
             {
@@ -138,6 +143,7 @@ def test_compact_knowledge_context_and_citations_share_normalized_source() -> No
 
 
 def test_document_route_metadata_without_evidence_is_not_answer_context() -> None:
+    """验证只有路由摘要、没有证据正文的文档不进入回答上下文与引用。"""
     result = {
         "selected_documents": [
             {
@@ -153,6 +159,7 @@ def test_document_route_metadata_without_evidence_is_not_answer_context() -> Non
 
 
 def test_compact_conversation_context_keeps_recent_history_within_control_budget() -> None:
+    """验证会话上下文按 token 预算裁剪，保留最近消息并标记已压缩。"""
     context = {
         "messages": [
             {"role": "user" if index % 2 == 0 else "assistant", "content": str(index) * 1_000}
@@ -168,6 +175,7 @@ def test_compact_conversation_context_keeps_recent_history_within_control_budget
 
 
 def test_compact_conversation_context_preserves_configured_budget() -> None:
+    """验证已有预算且未超限时原样返回同一对象。"""
     context = {
         "messages": [{"role": "user", "content": "保留原始上下文"}],
         "metadata": {
@@ -180,6 +188,7 @@ def test_compact_conversation_context_preserves_configured_budget() -> None:
 
 
 def test_step_skill_context_keeps_only_local_graph_and_complete_instructions() -> None:
+    """验证技能上下文只投影当前节点、直接后继与完整指令，剔除无关节点与规则字段。"""
     current_instruction = "当前节点业务说明" * 1_000
     target_instruction = "目标节点业务说明" * 1_000
     compacted = compact_step_skill_context(
@@ -233,6 +242,7 @@ def test_step_skill_context_keeps_only_local_graph_and_complete_instructions() -
 
 
 def test_step_skill_context_embeds_only_direct_transition_metadata() -> None:
+    """验证边上的条件与标签只随直接跳转内联，后继节点的出边不传入。"""
     compacted = compact_step_skill_context(
         {
             "nodes": [
@@ -283,6 +293,7 @@ def test_step_skill_context_embeds_only_direct_transition_metadata() -> None:
 
 
 def test_compact_memory_context_only_returns_deduplicated_content_text() -> None:
+    """验证记忆压缩只输出去重后的内容文本，不带 id 与审计字段。"""
     memory = compact_memory_context(
         [
             {
@@ -305,6 +316,7 @@ def test_compact_memory_context_only_returns_deduplicated_content_text() -> None
 
 
 def test_compact_runtime_state_drops_storage_and_audit_metadata() -> None:
+    """验证待办任务与待补充输入只保留业务字段，去掉存储与审计元数据。"""
     tasks = compact_pending_tasks(
         [
             {

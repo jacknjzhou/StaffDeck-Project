@@ -34,6 +34,7 @@ from app.teams.wakeup import (
 
 
 def _entries(db, team, status="active"):
+    """按状态取出团队黑板条目，便于断言写入结果。"""
     return list(
         db.exec(
             select(TeamBlackboardEntry).where(
@@ -48,6 +49,7 @@ def _entries(db, team, status="active"):
 
 
 def test_pipeline_normalize_and_batch_dedup() -> None:
+    """验证流水线规范化内容与标签，并去重、丢弃空内容和非字典条目。"""
     with _test_session() as db:
         team = _seed_team(db)
         written, skipped = write_blackboard_entries(
@@ -69,6 +71,7 @@ def test_pipeline_normalize_and_batch_dedup() -> None:
 
 
 def test_pipeline_substring_skip_and_superset_merge() -> None:
+    """验证既有条目的子串被跳过，超集则合并更新原条目且来源不变。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -110,6 +113,7 @@ def test_pipeline_substring_skip_and_superset_merge() -> None:
 
 
 def test_pipeline_citation_with_task_title() -> None:
+    """验证成员写入会带上含任务标题的引用，无任务来源时引用为空。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -134,6 +138,7 @@ def test_pipeline_citation_with_task_title() -> None:
 
 
 def test_pipeline_invalid_source_type() -> None:
+    """验证非法来源类型会抛出 ValueError，阻止写入。"""
     with _test_session() as db:
         team = _seed_team(db)
         with pytest.raises(ValueError):
@@ -146,6 +151,7 @@ def test_pipeline_invalid_source_type() -> None:
 
 
 def test_parse_blackboard_suggestions() -> None:
+    """验证解析只保留内容非空的建议，无 JSON 块时返回空列表。"""
     reply = (
         "报告正文\n```json\n"
         '{"blackboard_suggestions": [{"content": "结论一", "tags": ["A"]}, '
@@ -159,6 +165,7 @@ def test_parse_blackboard_suggestions() -> None:
 
 
 def test_parse_tl_review_with_blackboard_writes() -> None:
+    """验证 TL 评审解析保留 blackboard_writes，缺省时返回原有最小结构。"""
     reply = (
         "```json\n{\"team_review\": {\"verdict\": \"approve\", \"comment\": \"好\", "
         '"blackboard_writes": [{"content": "结论", "tags": ["a"]}]}}\n```'
@@ -176,6 +183,7 @@ def test_parse_tl_review_with_blackboard_writes() -> None:
 
 
 def test_member_report_stores_suggestions_from_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证成员回复中的建议只暂存到任务报告，不直接写入团队黑板。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -205,6 +213,7 @@ def test_member_report_stores_suggestions_from_reply(monkeypatch: pytest.MonkeyP
 
 
 def test_member_report_suggestions_from_fragments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证最终回复丢失 JSON 块时，仍可从回复片段中收集建议。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -234,6 +243,7 @@ def test_member_report_suggestions_from_fragments(monkeypatch: pytest.MonkeyPatc
 
 
 def test_tl_review_adjudicates_blackboard_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 TL 只写入其认可的条目，并产生一条 blackboard_written 事件。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="review")
@@ -285,6 +295,7 @@ def test_tl_review_adjudicates_blackboard_writes(monkeypatch: pytest.MonkeyPatch
 def test_tl_review_without_writes_keeps_blackboard_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证 TL 评审未给出写入项时黑板保持为空且不产生写入事件。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="review")
@@ -319,6 +330,7 @@ def test_tl_review_without_writes_keeps_blackboard_empty(
 
 
 def test_blackboard_injection_into_messages() -> None:
+    """验证黑板非空时三类消息均注入条目，且仅成员有建议时给 TL 追加裁决说明。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -358,6 +370,7 @@ def test_blackboard_injection_into_messages() -> None:
 
 
 def test_blackboard_injection_absent_when_empty() -> None:
+    """验证黑板为空时各类唤醒消息都不包含黑板段落。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team)
@@ -369,6 +382,7 @@ def test_blackboard_injection_absent_when_empty() -> None:
 
 
 def test_member_rework_message_treats_user_input_as_an_answer() -> None:
+    """验证返工消息把用户输入当作补充回答呈现，而不是退回意见。"""
     with _test_session() as db:
         team = _seed_team(db)
         task = _make_task(db, team, status="rework")
@@ -385,6 +399,7 @@ def test_member_rework_message_treats_user_input_as_an_answer() -> None:
 
 
 def test_blackboard_topk_pinned_first_and_archived_excluded() -> None:
+    """验证注入只取 top-K，置顶的最旧条目入选，归档条目不参与。"""
     with _test_session() as db:
         team = _seed_team(db)
         for index in range(12):
@@ -415,6 +430,7 @@ def test_blackboard_topk_pinned_first_and_archived_excluded() -> None:
 
 
 def test_blackboard_tag_relevance_scoring() -> None:
+    """验证标签命中的条目在相关性排序中优先出现。"""
     with _test_session() as db:
         team = _seed_team(db)
         write_blackboard_entries(
@@ -435,6 +451,7 @@ def test_blackboard_tag_relevance_scoring() -> None:
 
 
 def test_blackboard_api_crud_flow() -> None:
+    """验证黑板条目的创建、去重、列表、更新、归档与非法状态过滤全流程。"""
     with _test_session() as db:
         team = _seed_team(db)
         admin = _admin_user()
@@ -500,6 +517,7 @@ def test_blackboard_api_crud_flow() -> None:
 
 
 def test_blackboard_write_requires_manager_read_open_to_tenant() -> None:
+    """验证写入需要管理权限、读取仅限本租户，且条目不存在时返回 404。"""
     with _test_session() as db:
         team = _seed_team(db)  # owner 是 user_admin
         outsider = _admin_user_other()  # 同租户,非 owner 非 admin
@@ -538,6 +556,7 @@ def test_blackboard_write_requires_manager_read_open_to_tenant() -> None:
 
 
 def test_delete_team_cascades_blackboard() -> None:
+    """验证删除团队会级联清理其黑板条目。"""
     with _test_session() as db:
         team = _seed_team(db)
         write_blackboard_entries(

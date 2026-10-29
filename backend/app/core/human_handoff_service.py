@@ -18,7 +18,10 @@ from app.session.session_schema import StepAgentResult
 
 
 class HumanHandoffService:
+    """在 SOP 执行到需要人工确认的节点时，创建并复用人工转接请求。"""
+
     def __init__(self, db: Session, events: Any) -> None:
+        """绑定数据库会话与事件记录器（events.record 用于广播转接事件）。"""
         self.db = db
         self.events = events
 
@@ -37,6 +40,12 @@ class HumanHandoffService:
         step_notify_channel: str | None = None,
         binding_default_notify_channel: str | None = None,
     ) -> HumanHandoffRequest:
+        """创建人工转接请求；同会话已有 pending 请求时改为刷新它的元数据。
+
+        assignee 优先级：SOP 节点指定 → 渠道绑定默认处理人 → 数字员工负责人
+        → 租户管理员，前两级必须是本租户的内部 web 账号。命中后把会话置为
+        handoff 并写 awaiting_input_json，且只在新建时广播 human_handoff_requested。
+        """
         current_step = current_step_resolver()
         pending_question_text = pending_question(current_step, step_result)
         existing = self.db.exec(
@@ -139,6 +148,7 @@ class HumanHandoffService:
         return handoff
 
     def _is_internal_assignee(self, tenant_id: str, user_id: str | None) -> bool:
+        """判断 user_id 是否为本租户的内部 web 账号；渠道访客与他人租户都不算。"""
         if not user_id:
             return False
         user = self.db.get(User, user_id)
@@ -152,6 +162,10 @@ class HumanHandoffService:
         *,
         tenant_admin_resolver: Callable[[str], str | None],
     ) -> str | None:
+        """解析内部处理人：数字员工元数据中的负责人/创建人 → 租户管理员 → 兜底用户。
+
+        候选必须是内部 web 账号；全部不可用时返回 None。
+        """
         if agent_id:
             agent = self.db.exec(
                 select(AgentProfile).where(
@@ -179,6 +193,7 @@ class HumanHandoffService:
         return None
 
     def tenant_admin_user_id(self, tenant_id: str) -> str | None:
+        """取该租户最早创建的管理员账号 id；没有管理员时返回 None。"""
         row = self.db.exec(
             select(User)
             .where(User.tenant_id == tenant_id, User.role == "admin")
@@ -187,6 +202,7 @@ class HumanHandoffService:
         return row.id if row else None
 
     def context_summary(self, chat_session: ChatSession) -> str:
+        """取会话最近两条消息拼成转接摘要：每行「角色: 前 240 字」，空白内容跳过。"""
         rows = self.db.exec(
             select(Message)
             .where(Message.session_id == chat_session.id)
@@ -204,6 +220,10 @@ class HumanHandoffService:
     def pending_question(
         current_step: dict[str, Any] | None, step_result: StepAgentResult
     ) -> str:
+        """生成待人工确认的问题文案，按 step 回复 → handoff_question → question → name 取首个非空。
+
+        全空时回落一句通用提示，文本压缩空白并截断到 600 字。
+        """
         candidates: list[Any] = [
             step_result.reply,
             current_step.get("handoff_question") if current_step else None,

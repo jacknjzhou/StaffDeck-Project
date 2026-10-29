@@ -24,7 +24,11 @@ def inbound_attachments_to_chat(
     tenant_id: str,
     user_id: str,
 ) -> list[ChatAttachmentRead]:
-    """Download channel media and stage it through the web attachment pipeline."""
+    """下载渠道附件并经 Web 附件管线落盘暂存，返回可挂到聊天消息的附件列表。
+
+    适配器未实现 download_media 时返回空列表；单个附件失败只记日志跳过，
+    不影响其余附件；图片按真实格式归一化并纠正扩展名与 content_type。
+    """
     from app.channels.adapters.base import get_channel_adapter
     from app.session.attachment_store import stage_chat_attachment
     from app.session.attachments import parse_chat_attachment

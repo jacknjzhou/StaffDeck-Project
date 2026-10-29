@@ -25,6 +25,11 @@ _intake_sweep_thread: threading.Thread | None = None
 
 
 def _acquire_connector_process_lock() -> bool:
+    """获取进程级 connector 锁，保证每个数据库只有一个 connector 进程。
+
+    非 SQLite（如 PostgreSQL）无法用文件 flock 隔离实例：配置了 REDIS_URL 时由
+    Redis 角色租约保证独占，否则仅告警放行。fork 出的子进程会先关闭继承的句柄。
+    """
     global _connector_lock_file, _connector_lock_pid
     current_pid = os.getpid()
     if _connector_lock_file is not None and _connector_lock_pid == current_pid:
@@ -74,6 +79,7 @@ def _acquire_connector_process_lock() -> bool:
 
 
 def _release_connector_process_lock() -> None:
+    """释放 connector 进程锁；锁不属于当前进程时只关闭句柄而不解锁。"""
     global _connector_lock_file, _connector_lock_pid
     handle = _connector_lock_file
     if handle is None:
@@ -100,6 +106,7 @@ def _release_connector_process_lock() -> None:
 
 
 def get_wechat_poll_manager():
+    """返回进程级微信轮询管理器单例，首次调用时懒创建。"""
     global _wechat_poll_manager
     if _wechat_poll_manager is None:
         from app.channels.adapters.wechat import WeChatPollManager
@@ -109,6 +116,7 @@ def get_wechat_poll_manager():
 
 
 def get_wecom_stream_manager():
+    """返回进程级企微流式管理器单例，首次调用时懒创建。"""
     global _wecom_stream_manager
     if _wecom_stream_manager is None:
         from app.channels.adapters.wecom import WeComStreamManager
@@ -118,10 +126,10 @@ def get_wecom_stream_manager():
 
 
 def _feishu_supported() -> bool:
-    """Feishu long-connection connectors need a file-backed SQLite database.
+    """判断当前数据库能否承载飞书长连接 connector。
 
-    The child process stages inbound messages with ``sqlite3.connect`` directly,
-    so PostgreSQL deployments cannot host this channel yet (M1 server mode).
+    子进程直接用 sqlite3 暂存入站消息，因此只支持文件型 SQLite；
+    PostgreSQL 部署暂不可用（M1 服务端模式）。
     """
     from app.db import engine
 
@@ -134,6 +142,7 @@ def _feishu_supported() -> bool:
 
 
 def get_feishu_process_manager():
+    """返回进程级飞书长连接进程管理器单例，首次调用时懒创建。"""
     global _feishu_process_manager
     if _feishu_process_manager is None:
         from app.channels.feishu_manager import FeishuProcessManager
@@ -143,10 +152,10 @@ def get_feishu_process_manager():
 
 
 def _optional_feishu_manager():
-    """Feishu manager when the backing database can host it, else None.
+    """在数据库可承载时返回飞书管理器，否则返回 None。
 
-    Binding lifecycle helpers (pause/resume/wait) must stay safe to call on
-    PostgreSQL deployments, where the Feishu channel is unavailable.
+    绑定生命周期的暂停/恢复/等待逻辑必须在 PostgreSQL 部署上也能安全调用，
+    因此这里吞掉管理器不可用时的 RuntimeError。
     """
     if not _feishu_supported():
         return None
@@ -157,6 +166,7 @@ def _optional_feishu_manager():
 
 
 def get_dingtalk_stream_manager():
+    """返回进程级钉钉流式管理器单例，首次调用时懒创建。"""
     global _dingtalk_stream_manager
     if _dingtalk_stream_manager is None:
         from app.channels.adapters.dingtalk import DingTalkStreamManager
@@ -166,11 +176,13 @@ def get_dingtalk_stream_manager():
 
 
 def channel_services_enabled() -> bool:
+    """判断当前 staffdeck_role 是否需要启动渠道服务（all 或 connector）。"""
     # staffdeck_role 预留角色拆分：all=单体全量，connector=仅渠道连接器
     return get_settings().staffdeck_role in {"all", "connector"}
 
 
 def _ensure_adapters_registered() -> None:
+    """导入各渠道适配器模块，触发模块级的适配器自注册。"""
     # 各适配器模块导入即自注册(模块级 register_channel_adapter)
     import app.channels.adapters.dingtalk  # noqa: F401
     import app.channels.adapters.feishu  # noqa: F401
@@ -190,6 +202,7 @@ def start_binding_ingress(channel: str, binding_id: str) -> None:
 
 
 def stop_binding_ingress(channel: str, binding_id: str) -> None:
+    """经适配器协议停止指定绑定的 ingress，适配器未实现时静默跳过。"""
     _ensure_adapters_registered()
     from app.channels.adapters.base import get_channel_adapter
 
@@ -199,6 +212,7 @@ def stop_binding_ingress(channel: str, binding_id: str) -> None:
 
 
 def _ingress_manager(channel: str):
+    """按渠道返回对应的 ingress 管理器，未知渠道或飞书不可用时返回 None。"""
     if channel == "wechat":
         return get_wechat_poll_manager()
     if channel == "wecom":
@@ -268,6 +282,11 @@ def restart_binding_ingress(channel: str, binding_id: str, *, wait_seconds: floa
 
 
 def start_channel_services() -> None:
+    """启动渠道后台服务：各渠道 manager、投递与入站守护线程。
+
+    非 connector 角色直接跳过；先抢进程级 connector 锁，失败即抛错。飞书依赖文件型
+    SQLite，不满足时只告警跳过；任何步骤失败都会回滚已启动的服务后再抛出。
+    """
     global _intake_sweep_thread
     if not channel_services_enabled():
         logger.info("staffdeck_role=%s,渠道服务不启动", get_settings().staffdeck_role)
@@ -310,6 +329,10 @@ def start_channel_services() -> None:
 
 
 def stop_channel_services(timeout_seconds: float = 5.0) -> bool:
+    """停止全部渠道后台线程，返回是否都在期限内退出。
+
+    所有步骤共享一个单调时钟 deadline；全部停止成功才释放 connector 锁，否则保留到进程结束。
+    """
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     from app.channels.service_intake import stop_staged_inbound_daemon
     from app.channels.service_outbox import stop_delivery_daemon

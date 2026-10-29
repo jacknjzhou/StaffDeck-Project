@@ -39,10 +39,12 @@ export type ScheduledTaskPageProps = {
   onLogout?: () => void;
 };
 
+/** 新建定时任务页面的路由入口，复用编辑器组件的新建模式。 */
 export function ScheduledTaskNewPage(props: ScheduledTaskPageProps = {}) {
   return <ScheduledTaskEditorPage mode="new" {...props} />;
 }
 
+/** 编辑定时任务页面的路由入口，复用编辑器组件的编辑模式。 */
 export function ScheduledTaskEditPage(props: ScheduledTaskPageProps = {}) {
   return <ScheduledTaskEditorPage mode="edit" {...props} />;
 }
@@ -55,6 +57,13 @@ const CARD_TITLE_CLASS = 'mb-[16px] text-[14px] font-medium text-[#18181a]';
 const FIELD_LABEL_CLASS = 'text-[13px] font-medium text-[#18181a]';
 const FIELD_ERROR_CLASS = 'text-[12px] leading-none text-[#d20b0b]';
 
+/**
+ * 定时任务编辑器：新建与编辑共用同一套表单和保存逻辑。
+ *
+ * - 编辑模式按路由参数加载任务，并以其员工、SOP 与调度配置填充表单。
+ * - 新建模式在挂载或切换模式时重置为初始值。
+ * - 随全局员工作用域变化重新拉取可用 SOP 选项。
+ */
 function ScheduledTaskEditorPage({
   mode,
   currentUser,
@@ -72,11 +81,13 @@ function ScheduledTaskEditorPage({
   const isEdit = mode === 'edit';
   const scheduleType = values.schedule_type;
 
+  /** 更新单个表单字段，其余字段保持不变。 */
   function update<K extends keyof TaskFormValues>(key: K, value: TaskFormValues[K]) {
     setValues((prev) => ({ ...prev, [key]: value }));
   }
 
   useEffect(() => {
+    /** 响应全局员工作用域变更事件，忽略团队作用域并回落到本地存储的员工 ID。 */
     const onScopeChange = (event: Event) => {
       const next = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
       setAgentId(next && !isTeamScope(next) ? next : readEmployeeScope());
@@ -125,6 +136,7 @@ function ScheduledTaskEditorPage({
     };
   }, [agentId]);
 
+  /** 校验必填项并按调度类型检查时间与星期，写入错误信息后返回是否通过。 */
   function validate(): boolean {
     const nextErrors: FormErrors = {};
     if (!values.title.trim()) nextErrors.title = '请填写任务名称';
@@ -141,6 +153,12 @@ function ScheduledTaskEditorPage({
     return Object.keys(nextErrors).length === 0;
   }
 
+  /**
+   * 校验并保存定时任务：新建成功后跳转到编辑页，编辑成功后回填服务端数据。
+   *
+   * - 校验失败、未选择员工或请求异常时不会更新表单。
+   * - 未指定 SOP 时会清除 metadata 中残留的 SOP 版本字段。
+   */
   async function save() {
     if (!validate()) return;
     if (!agentId) {
@@ -196,6 +214,7 @@ function ScheduledTaskEditorPage({
     }
   }
 
+  /** 勾选或取消某个星期，并保持星期列表升序。 */
   function toggleWeekday(day: number, checked: boolean) {
     setValues((prev) => {
       const next = checked

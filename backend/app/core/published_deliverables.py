@@ -21,7 +21,11 @@ def list_published_deliverables(
     query: str = "",
     exclude_task_frame_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return a bounded latest-first inventory of published workspace artifacts."""
+    """列出会话内已发布的 workspace 产物,按发布消息时间倒序并限制条数。
+
+    limit 夹在 1..MAX_PUBLISHED_DELIVERABLES;query 对 display_name/path/description 做
+    大小写不敏感子串过滤,同名产物只留最新一条,exclude_task_frame_id 用于排除当前任务帧。
+    """
 
     bounded_limit = max(1, min(int(limit), MAX_PUBLISHED_DELIVERABLES))
     frame_ids = set(
@@ -78,6 +82,7 @@ def find_published_deliverable(
     task_frame_id: str,
     path: str,
 ) -> dict[str, Any] | None:
+    """定位某任务帧下指定路径的已发布产物,路径非法或任务帧不归属该会话时返回 None。"""
     try:
         requested_path = normalize_harness_artifact_path(path)
     except HarnessArtifactAccessError:
@@ -120,6 +125,11 @@ def _published_item(
     *,
     frame_ids: set[str],
 ) -> dict[str, Any] | None:
+    """把消息里的一条 harness_artifacts 记录规范成产物字典。
+
+    非 workspace_file、任务帧不在 frame_ids 内或路径越权时返回 None;display_name 与
+    description 会截断到固定长度。
+    """
     if not isinstance(raw, dict) or raw.get("type") != "workspace_file":
         return None
     task_frame_id = str(raw.get("task_frame_id") or "").strip()

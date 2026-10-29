@@ -35,6 +35,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 
 def _agent_payload(value: object) -> dict:
+    """把 pydantic 模型或字典转成可下发的 JSON 字典，并剔除 tenant_id。"""
     if hasattr(value, "model_dump"):
         payload = value.model_dump(mode="json")
     elif isinstance(value, dict):
@@ -51,6 +52,11 @@ def list_agents(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """列出当前租户的数字员工，供 Open API 客户端读取。
+
+    只返回前 limit 条且不分页（next_cursor 恒为 None）；agent 作用域的
+    API Key 只能看到自己绑定的那一个员工。
+    """
     rows = internal_agents.list_agents(principal.tenant_id, db, principal.actor_user)
     if principal.agent_id:
         rows = [row for row in rows if row.id == principal.agent_id]
@@ -66,6 +72,11 @@ def create_agent(
     principal: PublicPrincipal = Depends(require_scopes("agents:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """创建数字员工并返回其 JSON 表示。
+
+    仅租户级 Key 可创建（agent 作用域返回 403）；相同幂等键的重放直接返回
+    首次结果，创建成功时附带 ETag 供后续条件更新使用。
+    """
     if principal.agent_id:
         raise PublicAPIError(403, "TENANT_KEY_REQUIRED", "A tenant key is required.")
     replay = replay_idempotent_response(db, principal, request, body.model_dump(mode="json"))
@@ -107,6 +118,7 @@ def get_agent(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """按 id 读取单个员工并返回 JSON 表示，响应头同时带上当前 ETag。"""
     enforce_agent_access(principal, agent_id)
     payload = _agent_payload(
         internal_agents.get_agent(agent_id, principal.tenant_id, db, principal.actor_user)
@@ -124,6 +136,10 @@ def update_agent(
     principal: PublicPrincipal = Depends(require_scopes("agents:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """条件更新员工：必须携带与当前资源一致的 If-Match。
+
+    缺少 If-Match 返回 428，ETag 不匹配返回 412；只应用请求中显式给出的字段。
+    """
     enforce_agent_access(principal, agent_id, write=True)
     current = _agent_payload(
         internal_agents.get_agent(agent_id, principal.tenant_id, db, principal.actor_user)
@@ -153,6 +169,7 @@ def archive_agent(
     principal: PublicPrincipal = Depends(require_scopes("agents:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """把员工状态置为 archived（逻辑删除），返回更新后的员工。"""
     enforce_agent_access(principal, agent_id, write=True)
     updated = internal_agents.update_agent(
         agent_id,
@@ -169,6 +186,7 @@ def get_agent_resources(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """返回员工的资源绑定列表，逐项剔除 tenant_id 后放在 data 中。"""
     enforce_agent_access(principal, agent_id)
     rows = internal_agents.get_agent_resources(
         agent_id, principal.tenant_id, db, principal.actor_user
@@ -183,6 +201,7 @@ def update_agent_resources(
     principal: PublicPrincipal = Depends(require_scopes("agents:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """整体替换员工的资源绑定，返回替换后的资源列表。"""
     enforce_agent_access(principal, agent_id, write=True)
     rows = internal_agents.update_agent_resources(
         agent_id,
@@ -202,6 +221,11 @@ def get_agent_models(
     principal: PublicPrincipal = Depends(require_scopes("agents:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """返回员工的模型绑定视图。
+
+    当前只把租户默认模型暴露为 role=default 的继承项，effective 恒为 False；
+    员工不存在或不属于当前租户时返回 AGENT_NOT_FOUND。
+    """
     enforce_agent_access(principal, agent_id)
     agent = db.get(AgentProfile, agent_id)
     if not agent or agent.tenant_id != principal.tenant_id:
@@ -229,6 +253,10 @@ def update_agent_models(
     principal: PublicPrincipal = Depends(require_scopes("agents:write")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """兼容性重置接口：清空员工模型绑定，使其回到继承默认模型。
+
+    请求体不被采用，内部服务删除遗留绑定行后返回默认模型视图。
+    """
     enforce_agent_access(principal, agent_id, write=True)
     # Retained as a compatibility reset endpoint. Per-employee model bindings are no longer
     # accepted; the internal service removes any legacy rows and the agent inherits the default.
@@ -252,6 +280,11 @@ def get_agent_capabilities(
     principal: PublicPrincipal = Depends(require_scopes("capabilities:read")),
     db: Session = Depends(get_session),
 ) -> dict:
+    """返回员工（可按 SOP 与步骤限定）的能力清单。
+
+    员工不存在、已归档或不属于当前租户返回 AGENT_NOT_FOUND；sop_id 不在该
+    员工可见范围时返回 SOP_NOT_FOUND。
+    """
     enforce_agent_access(principal, agent_id)
     agent = db.get(AgentProfile, agent_id)
     if not agent or agent.tenant_id != principal.tenant_id or agent.status != "active":

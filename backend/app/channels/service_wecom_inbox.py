@@ -20,6 +20,10 @@ def encode_wecom_replay_envelope(
     *,
     account_scope: str,
 ) -> dict[str, Any]:
+    """把归一化的入站消息封装成可持久化重放的信封，带版本号与账号 scope。
+
+    account_scope 会去掉首尾空白；只做序列化，不做任何合法性校验。
+    """
     return {
         "schema_version": WECOM_ENVELOPE_VERSION,
         "account": {"scope": account_scope.strip()},
@@ -28,6 +32,11 @@ def encode_wecom_replay_envelope(
 
 
 def decode_wecom_replay_envelope(payload: object) -> ChannelInbound:
+    """从重放信封还原 ChannelInbound，并校验版本、字段白名单与渠道。
+
+    信封版本不符、inbound 非 dict、含未知字段、字段值不合法或 channel 不是
+    wecom 时抛 ValueError，调用方应据此放弃重放。
+    """
     if not isinstance(payload, dict) or payload.get("schema_version") != WECOM_ENVELOPE_VERSION:
         raise ValueError("unsupported_envelope_version")
     normalized = payload.get("inbound")
@@ -60,7 +69,12 @@ def stage_wecom_inbound(
     account_scope: str,
     inbound: ChannelInbound,
 ) -> StageResult:
-    """Persist a normalized WeCom message before returning from the SDK callback."""
+    """在 SDK 回调返回前，把归一化的 WeCom 消息持久化进收件箱。
+
+    先按账号 scope 生成信封并校验体积，再核对 binding 的渠道、状态、配置版本
+    与 scope 是否仍匹配，防止旧绑定继续入站；重复 event_id 返回 DUPLICATE，
+    数据库异常返回 NACK，成功则返回 STAGED 与事件主键。
+    """
     account_scope = account_scope.strip()
     if inbound.channel != "wecom" or not inbound.event_id or not account_scope:
         return StageResult(StageDisposition.SECURITY_DROP, error_code="invalid_event_identity")

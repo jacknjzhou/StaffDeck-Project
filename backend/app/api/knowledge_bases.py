@@ -79,6 +79,10 @@ def list_knowledge_bases(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> list[KnowledgeBaseRead]:
+    """列出当前视角可见的知识库，并附版本、统计与分支同步状态。
+
+    非 overall agent 以分支 head 版本为准，overall 视角只返回开放画廊资源，均按更新时间倒序。
+    """
     ensure_tenant(db, tenant_id)
     agent = get_agent(db, tenant_id, agent_id)
     if agent and not agent.is_overall:
@@ -152,6 +156,10 @@ def create_knowledge_base(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeBaseRead:
+    """创建知识库：名称为空返回 400，同租户重名返回 409。
+
+    非 overall agent 生成私有资源与私有分支，否则登记开放画廊资源与画廊绑定。
+    """
     ensure_tenant(db, request.tenant_id)
     name = request.name.strip()
     if not name:
@@ -212,6 +220,7 @@ def get_knowledge_base(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> KnowledgeBaseRead:
+    """读取单个知识库详情，按请求 agent 的可见版本补齐统计与分支元信息。"""
     row = _get_knowledge_base(db, tenant_id, knowledge_base_id)
     visible_version = _visible_knowledge_version(db, tenant_id, knowledge_base_id, agent_id)
     stats = _knowledge_base_stats(
@@ -236,6 +245,10 @@ def update_knowledge_base(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeBaseRead:
+    """更新知识库：非 overall agent 写分支版本，overall 需画廊管理员并同时改主干与版本。
+
+    分支侧改名称或元数据会把 sync_state 置为 diverged，状态变更同步到资源绑定。
+    """
     row = _get_knowledge_base(db, request.tenant_id, knowledge_base_id)
     agent = ensure_agent_scope_manager(db, request.tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
@@ -385,6 +398,7 @@ def list_knowledge_base_versions(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> list[dict[str, object]]:
+    """列出知识库版本；agent 视角只保留 base 版本与自有私有版本，其余过滤掉。"""
     row = _get_knowledge_base(db, tenant_id, knowledge_base_id)
     _visible_knowledge_version(db, tenant_id, knowledge_base_id, agent_id)
     agent = get_agent(db, tenant_id, agent_id)
@@ -447,6 +461,7 @@ def list_okf_concepts(
     concept_type: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> list[KnowledgeConceptRead]:
+    """列出当前可见版本的 OKF 概念，可按 concept_type 过滤并按类型与 ID 排序。"""
     version = _visible_knowledge_version(db, tenant_id, knowledge_base_id, agent_id)
     _ensure_okf_concepts_for_version(db, tenant_id, knowledge_base_id, version.id)
     stmt = select(KnowledgeConcept).where(
@@ -473,6 +488,7 @@ def get_okf_concept(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> KnowledgeConceptRead:
+    """按 concept_id 读取单个 OKF 概念，概念不存在或已删除时返回 404。"""
     version = _visible_knowledge_version(db, tenant_id, knowledge_base_id, agent_id)
     _ensure_okf_concepts_for_version(db, tenant_id, knowledge_base_id, version.id)
     row = _get_concept(db, tenant_id, knowledge_base_id, version.id, concept_id)
@@ -490,6 +506,7 @@ def upsert_okf_concept(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeConceptRead:
+    """写入 OKF 概念正文，必要时先为 agent 开上传版本，再解析 Markdown 并落库。"""
     version = _writable_knowledge_version(
         db, request.tenant_id, knowledge_base_id, agent_id, current_user
     )
@@ -521,6 +538,7 @@ def export_okf(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> Response:
+    """把当前版本的有效概念打包成 OKF zip 下载，文件名带知识库名与版本号。"""
     kb = _get_knowledge_base(db, tenant_id, knowledge_base_id)
     version = _visible_knowledge_version(db, tenant_id, knowledge_base_id, agent_id)
     _ensure_okf_concepts_for_version(db, tenant_id, knowledge_base_id, version.id)
@@ -555,6 +573,7 @@ def lint_okf(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> dict[str, object]:
+    """校验当前版本的 OKF 概念，持久化问题记录并返回问题条数。"""
     version = _visible_knowledge_version(db, tenant_id, knowledge_base_id, agent_id)
     _ensure_okf_concepts_for_version(db, tenant_id, knowledge_base_id, version.id)
     issues = lint_okf_concepts(db, tenant_id, knowledge_base_id, version.id)
@@ -570,6 +589,7 @@ def delete_knowledge_base(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """删除知识库：agent 视角只隐藏分支与绑定，overall 视角隐藏画廊条目或级联删除整库。"""
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
         row = _get_knowledge_base(db, tenant_id, knowledge_base_id)
@@ -658,6 +678,7 @@ def sync_knowledge_base_from_overall(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """用 overall 主干最新版本覆盖 agent 分支，overall agent 调用返回 400。"""
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -680,6 +701,7 @@ def promote_knowledge_base_to_overall(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """把 agent 分支发布为 overall 主干版本，需要画廊管理员权限。"""
     agent = get_agent(db, tenant_id, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -704,6 +726,7 @@ def rollback_knowledge_base(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """把 agent 分支回滚到指定版本；overall agent 应改用主干版本管理接口。"""
     agent = ensure_agent_scope_manager(db, request.tenant_id, request.agent_id, current_user)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -728,6 +751,10 @@ def knowledge_base_read(
     version_row: KnowledgeBaseVersion | None = None,
     branch_meta: dict[str, str] | None = None,
 ) -> KnowledgeBaseRead:
+    """组装 KnowledgeBaseRead 响应，字段优先取版本行，缺版本时回退到知识库行。
+
+    分支状态 inactive 对外映射为 archived，统计缺失补 0，元数据缺失补空字典。
+    """
     branch_status = (branch_meta or {}).get("status")
     if branch_status == "inactive":
         effective_status = "archived"
@@ -760,6 +787,7 @@ def knowledge_base_read(
 
 
 def concept_read(row: KnowledgeConcept) -> KnowledgeConceptRead:
+    """把 KnowledgeConcept 行转成响应模型，并把空的 JSON 字段补成空容器。"""
     return KnowledgeConceptRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -787,6 +815,7 @@ def _visible_knowledge_version(
     knowledge_base_id: str,
     agent_id: str | None,
 ) -> KnowledgeBaseVersion:
+    """取当前 agent 可见的知识库版本，不可见时返回 404。"""
     _get_knowledge_base(db, tenant_id, knowledge_base_id)
     versions = _management_knowledge_base_versions(db, tenant_id, agent_id)
     version = versions.get(knowledge_base_id)
@@ -802,6 +831,7 @@ def _writable_knowledge_version(
     agent_id: str | None,
     current_user: User,
 ) -> KnowledgeBaseVersion:
+    """取可写版本：agent 视角先开新上传版本并提交，overall 视角要求画廊管理员。"""
     _get_knowledge_base(db, tenant_id, knowledge_base_id)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
@@ -824,6 +854,7 @@ def _ensure_okf_concepts_for_version(
     knowledge_base_id: str,
     version_id: str,
 ) -> None:
+    """确保指定版本已有 OKF 概念，缺失时由底层按文档内容补齐。"""
     ensure_okf_concepts_for_version(db, tenant_id, knowledge_base_id, version_id)
 
 
@@ -834,6 +865,7 @@ def _get_concept(
     knowledge_base_version_id: str,
     concept_id: str,
 ) -> KnowledgeConcept:
+    """按归一化后的 concept_id 查概念，未命中或已删除时返回 404。"""
     normalized = normalize_concept_id(concept_id)
     row = db.exec(
         select(KnowledgeConcept).where(
@@ -856,6 +888,7 @@ def _document_id_for_version(
     knowledge_base_version_id: str,
     document_id: str | None,
 ) -> str | None:
+    """把请求里的 document_id 归位到指定版本：同版本直接复用，跨版本时按文件名与类型找同名文档。"""
     if not document_id:
         return None
     current = db.get(KnowledgeDocument, document_id)
@@ -891,6 +924,7 @@ def _management_knowledge_base_versions(
     tenant_id: str,
     agent_id: str | None,
 ) -> dict[str, KnowledgeBaseVersion]:
+    """汇总管理视图可见的知识库与版本：agent 视角看绑定可见性，overall 视角看开放画廊。"""
     agent = get_agent(db, tenant_id, agent_id)
     if agent and not agent.is_overall:
         branches = db.exec(
@@ -925,6 +959,7 @@ def _management_knowledge_base_versions(
 
 
 def _get_knowledge_base(db: Session, tenant_id: str, knowledge_base_id: str) -> KnowledgeBase:
+    """按租户读取知识库，记录不存在或不属于该租户时返回 404。"""
     ensure_tenant(db, tenant_id)
     row = db.get(KnowledgeBase, knowledge_base_id)
     if not row or row.tenant_id != tenant_id:
@@ -937,6 +972,7 @@ def _knowledge_base_stats(
     tenant_id: str,
     version_ids: list[str] | None = None,
 ) -> dict[str, dict[str, int]]:
+    """按知识库聚合文档、分桶、切片数量，可用版本 ID 列表限定统计范围。"""
     stats: dict[str, dict[str, int]] = {}
     doc_stmt = select(KnowledgeDocument.knowledge_base_id, func.count(KnowledgeDocument.id)).where(
         KnowledgeDocument.tenant_id == tenant_id
@@ -969,6 +1005,7 @@ def _knowledge_base_stats(
 def _knowledge_branch_meta(
     db: Session, tenant_id: str, agent_id: str | None
 ) -> dict[str, dict[str, str]]:
+    """返回 agent 未删除分支的版本与同步状态；overall 视角或未知 agent 返回空字典。"""
     agent = get_agent(db, tenant_id, agent_id)
     if not agent or agent.is_overall:
         return {}

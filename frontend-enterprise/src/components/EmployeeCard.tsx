@@ -34,7 +34,7 @@ export type EmployeeCardProps = {
   canManage: boolean;
   selected?: boolean;
   busy?: boolean;
-  /** Show the top-right "更多" actions menu. Hidden on the 对话端 gallery. */
+  /** 是否展示右上角“更多”操作菜单，对话端广场页会隐藏。 */
   showMenu?: boolean;
   onOpen: () => void;
   onStatus: (status: 'active' | 'archived') => void;
@@ -46,6 +46,13 @@ export type EmployeeCardProps = {
   onApiKeys?: () => void;
 };
 
+/**
+ * 员工卡片：展示头像、名称、岗位、在线状态、描述、工作风格标签与资源统计。
+ *
+ * - 点击卡片或按 Enter/空格触发 onOpen，busy 时忽略交互；
+ * - 更多菜单按 canManage 与 online 状态禁用上线、编辑、删除等操作；
+ * - showMenu 为 false 时不渲染操作菜单，对话端广场依赖此行为。
+ */
 export default function EmployeeCard({
   employee,
   canManage,

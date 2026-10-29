@@ -8,6 +8,7 @@ export type EnterpriseCapabilityCatalogChange = {
   agentId?: string;
 };
 
+/** 派发能力目录变更事件，通知已订阅方刷新工具、技能、知识或 SOP 列表。 */
 export function announceEnterpriseCapabilityCatalogChange(
   detail: EnterpriseCapabilityCatalogChange,
 ) {
@@ -19,6 +20,11 @@ export function announceEnterpriseCapabilityCatalogChange(
   );
 }
 
+/**
+ * 订阅能力目录刷新信号：窗口聚焦、页面重新显示、标签页转为可见或收到目录变更事件时触发回调。
+ *
+ * 返回取消订阅函数，调用方应在清理阶段执行以避免事件监听泄漏。
+ */
 export function subscribeEnterpriseCapabilityCatalogRefresh(listener: () => void) {
   const onFocus = () => listener();
   const onPageShow = () => listener();

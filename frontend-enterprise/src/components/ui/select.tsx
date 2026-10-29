@@ -6,12 +6,14 @@ import { Select as SelectPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
+/** 下拉选择根组件，透传 Radix Select.Root 并注入 data-slot。 */
 function Select({
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />
 }
 
+/** 选项分组容器，为组内选项提供统一的内边距与滚动边距。 */
 function SelectGroup({
   className,
   ...props
@@ -25,12 +27,14 @@ function SelectGroup({
   )
 }
 
+/** 展示当前选中值的占位组件，实际文本渲染由 Radix 接管。 */
 function SelectValue({
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Value>) {
   return <SelectPrimitive.Value data-slot="select-value" {...props} />
 }
 
+/** 触发器按钮，展示当前值与下拉箭头，支持 sm 和 default 两种高度。 */
 function SelectTrigger({
   className,
   size = "default",
@@ -57,6 +61,7 @@ function SelectTrigger({
   )
 }
 
+/** 下拉内容浮层，经 Portal 渲染，并附带上下滚动按钮与选项视口。 */
 function SelectContent({
   className,
   children,
@@ -90,6 +95,7 @@ function SelectContent({
   )
 }
 
+/** 选项分组标题，用于在列表中标注一组选项的类别。 */
 function SelectLabel({
   className,
   ...props
@@ -103,6 +109,7 @@ function SelectLabel({
   )
 }
 
+/** 单个可选项，选中时在右侧显示勾选标记。 */
 function SelectItem({
   className,
   children,
@@ -127,6 +134,7 @@ function SelectItem({
   )
 }
 
+/** 选项之间的水平分隔线。 */
 function SelectSeparator({
   className,
   ...props
@@ -140,6 +148,7 @@ function SelectSeparator({
   )
 }
 
+/** 下拉列表顶部的滚动按钮，选项内容溢出时出现。 */
 function SelectScrollUpButton({
   className,
   ...props
@@ -159,6 +168,7 @@ function SelectScrollUpButton({
   )
 }
 
+/** 下拉列表底部的滚动按钮，选项内容溢出时出现。 */
 function SelectScrollDownButton({
   className,
   ...props

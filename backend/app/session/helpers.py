@@ -5,6 +5,7 @@ from app.session.session_schema import SessionPublic
 
 
 def public_session(session: ChatSession) -> SessionPublic:
+    """把会话 ORM 记录转换为对外返回的 Pydantic 视图，并对空 JSON 字段做兜底。"""
     return SessionPublic(
         session_id=session.id,
         tenant_id=session.tenant_id,

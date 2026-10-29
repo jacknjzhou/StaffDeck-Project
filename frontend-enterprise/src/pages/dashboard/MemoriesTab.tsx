@@ -50,6 +50,11 @@ type MemoryUserGroup = {
 
 const EMPTY_FILTER: MemoryFilter = { username: '', user_id: '', q: '' };
 
+/**
+ * 用户记忆面板：按当前数字员工查询并聚合用户长期记忆，支持按用户、关键字筛选与分页查看。
+ *
+ * 挂载时监听员工范围变化事件并重新查询；可清空当前用户自己的记忆。
+ */
 export default function MemoriesTab({
   currentUser,
   agent,
@@ -64,6 +69,10 @@ export default function MemoriesTab({
   const [agentId, setAgentId] = useState(readEmployeeScope);
   const [filter, setFilter] = useState<MemoryFilter>(EMPTY_FILTER);
 
+  /**
+   * 查询记忆列表：按传入筛选条件（默认使用当前 filter）拼接查询参数。
+   * 成功后覆盖列表数据，失败时提示错误。
+   */
   async function load(next: MemoryFilter = filter) {
     setLoading(true);
     try {
@@ -112,11 +121,16 @@ export default function MemoriesTab({
     ? '当前员工暂无用户记忆；新的对话记忆会按员工和用户隔离沉淀。'
     : '暂无记忆';
 
+  /** 重置筛选条件，并立即按空条件重新查询。 */
   function resetFilter() {
     setFilter(EMPTY_FILTER);
     void load(EMPTY_FILTER);
   }
 
+  /**
+   * 清空当前员工/租户下“我的”长期记忆，执行前需用户确认。
+   * 成功后关闭详情弹窗并刷新列表。
+   */
   async function clearOwnMemories() {
     const scopeText = agentId ? '当前员工下你的长期记忆' : '当前租户下你的长期记忆';
     if (!window.confirm(`将清空${scopeText}，不会影响其他用户。确定继续？`)) {
@@ -206,6 +220,7 @@ export default function MemoriesTab({
     },
   ];
 
+  /** 渲染移动端记忆分组卡片，展示类型标签、摘要与最近更新时间。 */
   const renderMobileCard = (row: MemoryUserGroup) => (
     <article className={MOBILE_CARD_CLASS} key={row.key}>
       <div className="flex min-w-0 items-start justify-between gap-[10px]">
@@ -365,6 +380,7 @@ export default function MemoriesTab({
   );
 }
 
+/** 带前缀标签的输入框，用于记忆查询表单中的单个筛选字段。 */
 function PrefixInput({
   label,
   placeholder,
@@ -395,6 +411,7 @@ function PrefixInput({
   );
 }
 
+/** 记忆类型徽标：按类型映射配色，未识别的类型回退为灰色。 */
 function MemoryKindBadge({ kind }: { kind: string }) {
   const tone = MEMORY_KIND_TONE[kind] ?? 'gray';
   return (
@@ -409,6 +426,7 @@ function MemoryKindBadge({ kind }: { kind: string }) {
   );
 }
 
+/** 记忆详情弹窗：展示某个用户的记忆概况，以及逐条记忆内容与 metadata。 */
 function MemoryDetailDialog({
   detail,
   onClose,
@@ -492,6 +510,10 @@ const MEMORY_KIND_TONE_CLASS: Record<MemoryTone, string> = {
   gray: 'bg-[#f2f3f7] text-[#858b9c]',
 };
 
+/**
+ * 按用户名（缺省时用用户 ID）聚合记忆，组内按更新时间倒序并生成摘要。
+ * 返回结果按各组最近更新时间倒序排列。
+ */
 function groupMemories(rows: MemoryRead[]): MemoryUserGroup[] {
   const map = new Map<string, MemoryRead[]>();
   rows.forEach((row) => {

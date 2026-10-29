@@ -58,7 +58,13 @@ GRAPH_FIELDS = {"edges", "start_node_id", "terminal_node_ids"}
 
 
 class SkillEditor:
+    """技能局部改写服务：把编辑指令转成受控 patch，只落到指定目标并保留其余内容。
+
+    越界路径与未配置的工具动作会被剔除并转为告警，改写结果还要过一遍反射复查。
+    """
+
     def rewrite(self, request: SkillRewriteRequest, model_config: ModelConfig) -> SkillRewriteResponse:
+        """同步执行一次技能改写，返回合并校验并复查后的草稿、变更路径与告警。"""
         client = LLMClient(skill_model_config(model_config))
         payload = self._payload(request)
         raw = client.generate_json(PROMPT_PATH.read_text(encoding="utf-8"), payload)
@@ -77,6 +83,10 @@ class SkillEditor:
     def stream_text(
         self, request: SkillRewriteRequest, model_config: ModelConfig
     ) -> Iterator[dict[str, object]]:
+        """流式改写技能：逐个产出 status/message_chunk/complete 事件，供前端实时展示。
+
+        模型输出不可解析时自动修复重试一次；仍失败则原样返回当前技能并附告警。
+        """
         chunks: list[str] = []
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
         payload = self._payload(request)
@@ -129,12 +139,14 @@ class SkillEditor:
         yield {"event": "complete", "data": response.model_dump(mode="json")}
 
     def _response_from_text(self, text: str, request: SkillRewriteRequest) -> SkillRewriteResponse:
+        """从模型纯文本中抽出 JSON 对象并归一化；非 JSON 输出直接抛 ValueError。"""
         raw = json.loads(_extract_json(text))
         if not isinstance(raw, dict):
             raise ValueError("模型输出不是 JSON object")
         return self._normalize_response(raw, request)
 
     def _payload(self, request: SkillRewriteRequest) -> dict[str, Any]:
+        """拼装提示词输入：当前技能、指令、目标路径、最近对话与可用工具/嵌套 SOP。"""
         return {
             "current_skill": request.current_skill.model_dump(mode="json"),
             "instruction": request.instruction,
@@ -166,6 +178,10 @@ class SkillEditor:
     def _normalize_response(
         self, raw: dict[str, Any], request: SkillRewriteRequest
     ) -> SkillRewriteResponse:
+        """把模型原始输出归一化成可信草稿：应用 patch、按目标合并、清工具与校验嵌套。
+
+        最终 changed_paths 取模型自报与实际比对的并集；工具建议只保留已存在或新候选两类。
+        """
         target_paths = _target_paths(request)
         patched = _skill_from_patches(raw, request, target_paths)
         draft = (
@@ -235,6 +251,7 @@ class SkillEditor:
 
 
 def _target_paths(request: SkillRewriteRequest) -> list[str]:
+    """取出本次改写的目标路径列表并去重；缺省或含 all 时收敛为 ["all"]。"""
     paths = [path.strip() for path in request.target_paths if path.strip()]
     if not paths:
         paths = [request.target_path.strip() or "all"]
@@ -252,6 +269,10 @@ def _skill_from_patches(
     request: SkillRewriteRequest,
     target_paths: list[str],
 ) -> SkillCard | None:
+    """把模型给出的 patches 逐个应用到当前技能上，返回新技能卡；无可应用项时返回 None。
+
+    越界路径不落盘，而是追加一条 warnings 说明；结果仍走 SkillCard 校验。
+    """
     patches = raw.get("patches")
     if not isinstance(patches, list):
         return None
@@ -281,6 +302,10 @@ def _skill_from_patches(
 
 
 def _patch_allowed(data: dict[str, Any], path: str, target_paths: list[str]) -> bool:
+    """判断该 patch 路径是否落在用户选中的改写范围内，越界即拒。
+
+    basic/graph 按字段归类；节点路径要求命中 nodes[i] 或 nodes.<node_id> 目标。
+    """
     if "all" in target_paths:
         return _patch_path_is_known(data, path)
     if _basic_patch_field(path):
@@ -300,6 +325,7 @@ def _patch_allowed(data: dict[str, Any], path: str, target_paths: list[str]) -> 
 
 
 def _patch_path_is_known(data: dict[str, Any], path: str) -> bool:
+    """全量改写模式下只接受已知结构路径：基本字段、图字段或已存在的节点。"""
     return (
         bool(_basic_patch_field(path))
         or path in {*GRAPH_FIELDS, "nodes"}
@@ -308,6 +334,7 @@ def _patch_path_is_known(data: dict[str, Any], path: str) -> bool:
 
 
 def _apply_patch(data: dict[str, Any], path: str, value: Any) -> bool:
+    """就地写入单个 patch，返回是否生效；类型不符或路径不认识时保持原值并返回 False。"""
     basic_field = _basic_patch_field(path)
     if basic_field:
         data[basic_field] = value
@@ -342,11 +369,13 @@ def _apply_patch(data: dict[str, Any], path: str, value: Any) -> bool:
 
 
 def _basic_patch_field(path: str) -> str | None:
+    """把 basic.<字段> 形式的路径还原成 BASIC_FIELDS 内的字段名，否则返回 None。"""
     normalized = path.removeprefix("basic.")
     return normalized if normalized in BASIC_FIELDS else None
 
 
 def _patch_node_index(data: dict[str, Any], path: str) -> int | None:
+    """按 nodes[i] 或 nodes.<node_id> 定位节点下标；路径非法或节点不存在时返回 None。"""
     nodes = [node for node in data.get("nodes", []) if isinstance(node, dict)]
     bracket_match = re.fullmatch(r"nodes\[(\d+)\](?:\.[A-Za-z_][A-Za-z0-9_]*)?", path)
     if bracket_match:
@@ -360,6 +389,7 @@ def _patch_node_index(data: dict[str, Any], path: str) -> int | None:
 
 
 def _patch_node_field(path: str) -> str | None:
+    """取节点级 patch 的字段名；不是节点字段或不在 NODE_FIELDS 内时返回 None。"""
     bracket_match = re.fullmatch(r"nodes\[\d+\]\.([A-Za-z_][A-Za-z0-9_]*)", path)
     dot_match = re.fullmatch(r"nodes\.[^.]+\.([A-Za-z_][A-Za-z0-9_]*)", path)
     field = bracket_match.group(1) if bracket_match else dot_match.group(1) if dot_match else None
@@ -373,6 +403,11 @@ def _merge_targets(
     *,
     allow_graph_changes: bool = False,
 ) -> SkillCard:
+    """按目标路径把模型候选技能合并回当前技能，未选中的部分一律沿用原值。
+
+    节点新增/删除/换序时整块替换 nodes、edges 与起止节点；allow_graph_changes
+    为真时再额外接受模型给出的图拓扑变更。
+    """
     if "all" in target_paths:
         return candidate
     if _has_node_structure_change(current, candidate, target_paths):
@@ -398,6 +433,7 @@ def _merge_targets(
 
 
 def _has_node_structure_change(current: SkillCard, candidate: SkillCard, target_paths: list[str]) -> bool:
+    """判断受影响的节点集合是否发生结构性变化：数量变化或同集合换序。"""
     if not any(_is_node_target(path) for path in target_paths):
         return False
     current_nodes = [node for node in current.model_dump(mode="json").get("nodes", []) if isinstance(node, dict)]
@@ -410,10 +446,12 @@ def _has_node_structure_change(current: SkillCard, candidate: SkillCard, target_
 
 
 def _is_node_target(path: str) -> bool:
+    """判断目标路径指向单个节点（nodes.<id> 或 nodes[i]）。"""
     return path.startswith("nodes.") or path.startswith("nodes[")
 
 
 def _response_requests_graph_change(raw: dict[str, Any], target_paths: list[str]) -> bool:
+    """判断模型是否主动要求改动图拓扑：目标含 all/graph、自报 graph 或 patch 了图字段。"""
     if "all" in target_paths or "graph" in target_paths:
         return True
     if "graph" in [str(item) for item in raw.get("changed_paths", [])]:
@@ -426,6 +464,7 @@ def _response_requests_graph_change(raw: dict[str, Any], target_paths: list[str]
 
 
 def _merge_graph_topology(current: SkillCard, candidate: SkillCard) -> SkillCard:
+    """把候选技能的图字段（edges、起止节点）覆盖到当前技能；无差异时原样返回。"""
     current_data = current.model_dump(mode="json")
     candidate_data = candidate.model_dump(mode="json")
     if not any(current_data.get(field) != candidate_data.get(field) for field in GRAPH_FIELDS):
@@ -436,6 +475,10 @@ def _merge_graph_topology(current: SkillCard, candidate: SkillCard) -> SkillCard
 
 
 def _merge_target(current: SkillCard, candidate: SkillCard, target_path: str) -> SkillCard:
+    """合并单个目标：basic 整体换字段，节点目标只覆盖 NODE_FIELDS 内的字段。
+
+    节点 node_id 被改写时同步修正 start_node_id、terminal_node_ids 与 edges 引用。
+    """
     normalized_path = target_path.strip() or "all"
     if normalized_path == "all":
         return candidate
@@ -475,6 +518,7 @@ def _merge_target(current: SkillCard, candidate: SkillCard, target_path: str) ->
 
 
 def _replace_node_reference(data: dict[str, Any], old_node_id: str, new_node_id: str) -> None:
+    """把图里所有指向旧 node_id 的引用（起点、终点、边端点）就地替换为新 id。"""
     if data.get("start_node_id") == old_node_id:
         data["start_node_id"] = new_node_id
     data["terminal_node_ids"] = [
@@ -491,6 +535,7 @@ def _replace_node_reference(data: dict[str, Any], old_node_id: str, new_node_id:
 
 
 def _changed_paths(previous: SkillCard, next_skill: SkillCard) -> list[str]:
+    """对比改写前后技能，列出发生变化的路径：basic、graph 与按下标的 nodes[i]。"""
     previous_data = previous.model_dump(mode="json")
     next_data = next_skill.model_dump(mode="json")
     changed: list[str] = []
@@ -509,6 +554,7 @@ def _changed_paths(previous: SkillCard, next_skill: SkillCard) -> list[str]:
 
 
 def _node_target_index(current_data: dict[str, Any], path: str) -> int | None:
+    """解析纯节点目标 nodes[i] / nodes.<node_id> 得到当前下标，未命中返回 None。"""
     current_nodes = [node for node in current_data.get("nodes", []) if isinstance(node, dict)]
     bracket_match = re.fullmatch(r"nodes\[(\d+)\]", path)
     if bracket_match:
@@ -529,6 +575,7 @@ def _replacement_node(
     target_index: int,
     prefer_index: bool = False,
 ) -> dict[str, Any] | None:
+    """在候选节点里挑出用于替换的节点：优先下标，其次唯一的同 node_id，最后按下标兜底。"""
     if prefer_index and target_index < len(candidate_nodes):
         return candidate_nodes[target_index]
     node_id = str(current_node.get("node_id") or "")
@@ -542,6 +589,7 @@ def _replacement_node(
 
 
 def _extract_json(text: str) -> str:
+    """剥掉模型输出外的 ``` 围栏与前言后记，截取最外层 {...}；找不到则不裁剪。"""
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.strip("`").strip()
@@ -555,5 +603,6 @@ def _extract_json(text: str) -> str:
 
 
 def _chunk_text(text: str, size: int = 12) -> Iterator[str]:
+    """把文本按固定长度切块，供流式接口逐块推给前端。"""
     for index in range(0, len(text), size):
         yield text[index : index + size]

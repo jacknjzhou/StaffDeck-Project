@@ -7,6 +7,7 @@ from app.harness.execution_context import SandboxExecutionContext
 
 
 def test_bubblewrap_maps_only_declared_path_fields(tmp_path: Path) -> None:
+    """验证 bubblewrap 只重写声明为路径的参数、环境变量与载荷字段，其余值保持原样。"""
     workspace = tmp_path / "task"
     skill = workspace / "run" / "skill"
     skill.mkdir(parents=True)
@@ -30,6 +31,7 @@ def test_bubblewrap_maps_only_declared_path_fields(tmp_path: Path) -> None:
 
 
 def test_execution_context_rejects_cwd_outside_workspace(tmp_path: Path) -> None:
+    """验证工作目录位于工作区之外时解析失败并抛出执行错误。"""
     workspace = tmp_path / "task"
     workspace.mkdir()
     context = SandboxExecutionContext(workspace, "srt")
@@ -39,6 +41,7 @@ def test_execution_context_rejects_cwd_outside_workspace(tmp_path: Path) -> None
 
 
 def test_execution_context_rejects_unknown_backend(tmp_path: Path) -> None:
+    """验证未知沙箱后端在创建上下文时被拒绝，错误码为 SANDBOX_BACKEND_INVALID。"""
     workspace = tmp_path / "task"
     workspace.mkdir()
 

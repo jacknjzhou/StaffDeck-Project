@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api, TENANT_ID } from '../api/client';
 import { EnterpriseRoute } from '../enums/routes';
 
-/** Backward-compatible entry that opens the team's single persistent group chat. */
+/** 向后兼容入口：打开该团队唯一的常驻群聊。 */
 export default function TeamChatPage() {
   const { teamId = '' } = useParams<{ teamId: string }>();
   const navigate = useNavigate();

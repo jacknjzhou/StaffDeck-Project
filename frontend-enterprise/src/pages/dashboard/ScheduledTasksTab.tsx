@@ -46,6 +46,12 @@ const MOBILE_TITLE_CLASS =
   'min-w-0 wrap-break-word text-[14px] font-semibold text-[#18181a]';
 const MOBILE_SUMMARY_CLASS = 'mt-[8px] line-clamp-2 text-[12px] leading-[1.55] text-[#858b9c]';
 
+/**
+ * 定时任务面板：按当前数字员工加载任务与执行记录，支持筛选、分页、启停、立即执行、
+ * 查看执行记录与删除。
+ *
+ * 挂载时加载员工列表；员工范围变化（含全局范围事件）时重新拉取任务数据。
+ */
 export default function ScheduledTasksTab() {
   const [rows, setRows] = useState<ScheduledTaskRead[]>([]);
   const [agents, setAgents] = useState<AgentProfileRead[]>([]);
@@ -81,6 +87,7 @@ export default function ScheduledTasksTab() {
     if (agentId) void load();
   }, [agentId]);
 
+  /** 拉取当前租户的数字员工列表，失败时降级为空列表。 */
   async function loadAgents() {
     try {
       const result = await api.get<AgentProfileRead[]>(`/api/enterprise/agents?tenant_id=${TENANT_ID}`);
@@ -90,6 +97,7 @@ export default function ScheduledTasksTab() {
     }
   }
 
+  /** 并行加载当前员工的任务列表与最近执行记录，并维护 loading 与错误提示。 */
   async function load() {
     setLoading(true);
     try {
@@ -110,6 +118,10 @@ export default function ScheduledTasksTab() {
     }
   }
 
+  /**
+   * 切换任务启停状态：已删除、已完成的任务不允许直接切换。
+   * 更新成功后重新加载列表。
+   */
   async function toggleStatus(row: ScheduledTaskRead) {
     if (row.status === 'archived') {
       notify.warning('已删除的定时任务不能重新启用');
@@ -132,6 +144,7 @@ export default function ScheduledTasksTab() {
     }
   }
 
+  /** 立即触发一次任务执行，已删除的任务会被拦截；成功后刷新列表。 */
   async function runNow(row: ScheduledTaskRead) {
     if (row.status === 'archived') {
       notify.warning('已删除的定时任务不能运行');
@@ -148,10 +161,12 @@ export default function ScheduledTasksTab() {
     }
   }
 
+  /** 记录待删除任务并打开删除确认框。 */
   function remove(row: ScheduledTaskRead) {
     setDeleteTarget(row);
   }
 
+  /** 确认删除当前任务：调用删除接口，成功后关闭确认框并刷新列表。 */
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -167,6 +182,7 @@ export default function ScheduledTasksTab() {
     }
   }
 
+  /** 打开执行记录弹窗并加载该任务的执行记录，加载失败时提示错误。 */
   async function openRuns(row: ScheduledTaskRead) {
     setRunsOpen(true);
     setRunLoading(true);
@@ -182,6 +198,7 @@ export default function ScheduledTasksTab() {
     }
   }
 
+  /** 在新标签页打开会话详情；sessionId 为空时不做任何事。 */
   function openChatSession(sessionId?: string) {
     if (!sessionId) return;
     window.open(`/workspace/chat/${sessionId}`, '_blank', 'noopener,noreferrer');
@@ -197,6 +214,7 @@ export default function ScheduledTasksTab() {
   const runPagination = useClientPagination(visibleRunRows, TASK_PAGE_SIZE, runFilter);
   const runsModalPagination = useClientPagination(runRows, TASK_PAGE_SIZE, runRows);
 
+  /** 渲染任务行操作菜单，并注入查看记录、编辑、执行与删除回调。 */
   const renderTaskActions = (row: ScheduledTaskRead) => (
     <TaskActionsMenu
       task={row}
@@ -331,6 +349,7 @@ export default function ScheduledTasksTab() {
     },
   ];
 
+  /** 渲染移动端任务卡片，字段与桌面端任务表格保持一致。 */
   const renderTaskMobileCard = (row: ScheduledTaskRead) => (
     <article className={MOBILE_CARD_CLASS} key={row.id}>
       <div className={MOBILE_CARD_HEAD_CLASS}>
@@ -360,6 +379,7 @@ export default function ScheduledTasksTab() {
     </article>
   );
 
+  /** 渲染移动端执行记录卡片，附带归档标记与查看会话入口。 */
   const renderRunMobileCard = (row: ScheduledTaskRunRead) => (
     <article className={MOBILE_CARD_CLASS} key={row.id}>
       <div className={MOBILE_CARD_HEAD_CLASS}>
@@ -525,6 +545,7 @@ export default function ScheduledTasksTab() {
   );
 }
 
+/** 标记来源任务已被删除的执行记录徽标。 */
 function ArchivedTag() {
   return (
     <StatusBadge tone="gray">任务已删除</StatusBadge>

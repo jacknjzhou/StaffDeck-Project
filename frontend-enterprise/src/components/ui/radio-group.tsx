@@ -5,6 +5,11 @@ import { RadioGroup as RadioGroupPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * 单选组容器：包装 Radix RadioGroup.Root，统一网格布局与选项间距。
+ *
+ * 透传 value/onValueChange 等属性，并附加 data-slot="radio-group" 便于样式定位。
+ */
 function RadioGroup({
   className,
   ...props
@@ -18,6 +23,11 @@ function RadioGroup({
   )
 }
 
+/**
+ * 单选组选项：包装 Radix RadioGroup.Item，并在选中时渲染中心圆点指示器。
+ *
+ * 负责边框、聚焦环、禁用态与 aria-invalid 状态的样式，附加 data-slot="radio-group-item"。
+ */
 function RadioGroupItem({
   className,
   ...props

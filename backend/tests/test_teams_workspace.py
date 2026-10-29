@@ -129,6 +129,7 @@ def test_purge_orphaned_chat_sessions_cleans_pre_fix_leftovers(
 
 
 def test_tl_session_get_or_create_idempotent() -> None:
+    """验证 TL 会话按团队 get-or-create：重复请求返回同一个会话。"""
     with _test_session() as db:
         team = _seed_team(db)
         admin = _admin_user()
@@ -153,6 +154,7 @@ def test_tl_session_get_or_create_idempotent() -> None:
 
 
 def test_tl_session_survives_leader_change_without_creating_another_room() -> None:
+    """验证换帅后仍复用同一 TL 会话，只更新会话上的 agent_id。"""
     with _test_session() as db:
         team = _seed_team(db)
         admin = _admin_user()
@@ -172,6 +174,7 @@ def test_tl_session_survives_leader_change_without_creating_another_room() -> No
 
 
 def test_tl_session_requires_leader() -> None:
+    """验证团队未设置 TL 时创建 TL 会话返回 400。"""
     with _test_session() as db:
         _seed_team(db)  # 种子租户/员工
         bare = create_team(
@@ -297,11 +300,13 @@ def test_delete_team_purges_team_chat_sessions() -> None:
 
 
 def test_tl_chat_session_carries_team_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 TL 对话入口新建的会话携带所属团队的 team_id。"""
     with _test_session() as db:
         team = _seed_team(db)
         _stub_start_wakeup(monkeypatch)
 
         def fake_handle_turn(self, request):
+            """桩实现：不调用模型，直接返回固定回复。"""
             return ChatTurnResponse(
                 reply="收到,先讨论。",
                 session_id=request.session_id,
@@ -326,6 +331,7 @@ def test_tl_chat_session_carries_team_id(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def _make_tl_session(db: Session, team, *, team_id: str | None) -> ChatSession:
+    """直接落库一条指定团队归属的 TL 会话，供对话入口测试使用。"""
     session = ChatSession(
         id="session_tl",
         tenant_id="tenant_demo",
@@ -343,6 +349,7 @@ def _make_tl_session(db: Session, team, *, team_id: str | None) -> ChatSession:
 def test_chat_turn_team_tl_session_injects_context_and_creates_tasks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证团队会话对话注入花名册上下文，并按回复创建任务与唤醒。"""
     with _test_session() as db:
         team = _seed_team(db)
         session = _make_tl_session(db, team, team_id=team.id)
@@ -353,6 +360,7 @@ def test_chat_turn_team_tl_session_injects_context_and_creates_tasks(
         seen: dict[str, str] = {}
 
         def fake_handle_turn(self, request):
+            """桩实现：记录注入内容并返回带派任务块的回复。"""
             seen["message"] = request.message
             seen["context_injection"] = request.context_injection
             seen["interaction_mode"] = request.interaction_mode
@@ -422,6 +430,7 @@ def test_chat_turn_plain_session_unchanged(monkeypatch: pytest.MonkeyPatch) -> N
         seen: dict[str, str] = {}
 
         def fake_handle_turn(self, request):
+            """桩实现：记录请求字段并返回固定回复。"""
             seen["message"] = request.message
             seen["context_injection"] = request.context_injection
             seen["interaction_mode"] = request.interaction_mode

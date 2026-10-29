@@ -25,12 +25,18 @@ T = TypeVar("T")
 
 
 def zod_len(value: str) -> int:
-    """Length as JavaScript sees it: UTF-16 code units, not code points."""
+    """按 JavaScript 的长度口径计数，即 UTF-16 码元数而非码点数。
+
+    用于和前端 zod 的 max 校验对齐：一个 emoji 计 2，一个汉字计 1。
+    """
     return len((value or "").encode("utf-16-le")) // 2
 
 
 def clamp_text(value: str, limit: int) -> tuple[str, bool]:
-    """Trim to at most `limit` UTF-16 code units without splitting a surrogate pair."""
+    """把文本裁剪到至多 `limit` 个 UTF-16 码元，且不拆开代理对。
+
+    返回 (裁剪后的文本, 是否发生裁剪)；边界上的 emoji 会整体丢弃而不是留下半个字符。
+    """
     text = value or ""
     if zod_len(text) <= limit:
         return text, False
@@ -44,6 +50,7 @@ def clamp_text(value: str, limit: int) -> tuple[str, bool]:
 
 
 def clamp_items(values: list[T], limit: int) -> tuple[list[T], bool]:
+    """保留列表前 `limit` 项，返回 (保留的新列表, 是否发生裁剪)。"""
     if len(values) <= limit:
         return list(values), False
     return list(values[:limit]), True

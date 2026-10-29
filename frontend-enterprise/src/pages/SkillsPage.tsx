@@ -92,6 +92,11 @@ type NumericSkillMetric =
   | 'recent_positive_rate'
   | 'recent_negative_rate';
 
+/**
+ * SOP 管理页：按员工作用域展示广场或本地 SOP，并提供复制、启停、版本与排行能力。
+ *
+ * 是否管理广场由 isOverallAgent 与当前员工权限共同决定；写操作成功后统一刷新列表。
+ */
 export default function SkillsPage({
   currentUser,
   onLogout,
@@ -134,6 +139,11 @@ export default function SkillsPage({
   const [promoteTarget, setPromoteTarget] = useState<SkillRead | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
 
+  /**
+   * 拉取当前作用域的 SOP 列表，并同步数字员工列表与 overall 标记。
+   *
+   * 失败时仅提示错误、保留原列表；加载态在 finally 中复位。
+   */
   const load = async () => {
     setLoading(true);
     try {
@@ -285,6 +295,7 @@ export default function SkillsPage({
     },
   ];
 
+  /** 渲染行内操作菜单；无当前作用域管理权限时只保留「版本管理」。 */
   function renderActions(row: SkillRead) {
     if (isOverallAgent && !canManageCurrentScope) {
       return (
@@ -364,6 +375,7 @@ export default function SkillsPage({
     );
   }
 
+  /** 渲染移动端 SOP 卡片，聚合状态、本地版本与调用/评价摘要。 */
   const renderMobileCard = (row: SkillRead) => {
     const preset = STATUS_BADGE[row.status] || { tone: 'gray' as BadgeTone, text: row.status };
     return (
@@ -391,6 +403,11 @@ export default function SkillsPage({
     );
   };
 
+  /**
+   * 打开复制 SOP 弹窗，并预加载来源列表与首屏来源的 SOP。
+   *
+   * selectedResourceId 来自 URL 参数，命中来源列表时自动勾选该项。
+   */
   async function openImport(mode: 'plaza' | 'employee' = 'plaza', selectedResourceId?: string) {
     try {
       const agentRows = agents.length
@@ -417,6 +434,11 @@ export default function SkillsPage({
     }
   }
 
+  /**
+   * 加载指定来源员工的 SOP，只保留已启用项并写回弹窗状态。
+   *
+   * 返回过滤后的列表供调用方定位 URL 资源；失败时提示并返回空数组。
+   */
   async function loadImportSourceSkills(sourceAgentId: string): Promise<SkillRead[]> {
     setImportSourceSkills([]);
     setImportSelectedSkillIds([]);
@@ -432,6 +454,11 @@ export default function SkillsPage({
     }
   }
 
+  /**
+   * 把选中的来源 SOP 复制到当前数字员工。
+   *
+   * 提交前校验员工、来源与选中项；成功后关闭弹窗并刷新列表。
+   */
   async function submitImportSkills() {
     if (!agentId) {
       notify.warning('请先选择一个数字员工');
@@ -468,6 +495,7 @@ export default function SkillsPage({
     }
   }
 
+  /** 跳转蒸馏页新建空白 SOP，并带上当前员工与新建工作区 ID。 */
   function openCreate() {
     const params = new URLSearchParams({
       mode: 'create',
@@ -477,11 +505,13 @@ export default function SkillsPage({
     navigate(`/enterprise/skills/distill?${params.toString()}`);
   }
 
+  /** 携带 skill_id 与当前员工跳转蒸馏页编辑该 SOP。 */
   function openEdit(row: SkillRead) {
     const suffix = agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
     navigate(`/enterprise/skills/distill?skill_id=${encodeURIComponent(row.skill_id)}${suffix}`);
   }
 
+  /** 启用指定 SOP（本地作用域下为启用本地版本），成功后刷新列表。 */
   async function publish(row: SkillRead) {
     try {
       await api.post(`/api/enterprise/skills/${row.skill_id}/publish?tenant_id=${TENANT_ID}${agentQuery()}`);
@@ -492,6 +522,7 @@ export default function SkillsPage({
     }
   }
 
+  /** 停用指定 SOP，成功后刷新列表。 */
   async function archive(row: SkillRead) {
     try {
       await api.post(`/api/enterprise/skills/${row.skill_id}/archive?tenant_id=${TENANT_ID}${agentQuery()}`);
@@ -502,6 +533,7 @@ export default function SkillsPage({
     }
   }
 
+  /** 将 SOP 转为草稿，成功后刷新列表。 */
   async function markDraft(row: SkillRead) {
     try {
       await api.post(`/api/enterprise/skills/${row.skill_id}/draft?tenant_id=${TENANT_ID}${agentQuery()}`);
@@ -512,6 +544,7 @@ export default function SkillsPage({
     }
   }
 
+  /** 打开版本管理弹窗并加载该 SOP 的历史版本；失败时列表保持为空。 */
   async function openVersions(row: SkillRead) {
     setVersionSkill(row);
     setVersionModalOpen(true);
@@ -526,6 +559,7 @@ export default function SkillsPage({
     }
   }
 
+  /** 按版本号拉取完整版本详情，供详情弹窗展示。 */
   async function showVersionDetail(row: SkillVersionRead) {
     try {
       const result = await api.get<SkillVersionRead>(
@@ -537,6 +571,11 @@ export default function SkillsPage({
     }
   }
 
+  /**
+   * 用广场版本覆盖当前员工的本地 SOP。
+   *
+   * 未选择数字员工时直接返回；成功后刷新列表。
+   */
   async function syncFromOverall(row: SkillRead) {
     if (!agentId) return;
     try {
@@ -550,6 +589,11 @@ export default function SkillsPage({
     }
   }
 
+  /**
+   * 确认删除或移除 SOP。
+   *
+   * 广场作用域下为删除、本地作用域下为移除；成功后关闭确认框并刷新列表。
+   */
   async function confirmDelete() {
     const row = deleteTarget;
     if (!row) return;
@@ -567,6 +611,11 @@ export default function SkillsPage({
     }
   }
 
+  /**
+   * 将 SOP 回滚到选中的历史版本。
+   *
+   * 成功后刷新列表，并重新打开该 SOP 的版本管理弹窗。
+   */
   async function confirmRollback() {
     const row = rollbackTarget;
     if (!row) return;
@@ -586,6 +635,11 @@ export default function SkillsPage({
     }
   }
 
+  /**
+   * 把当前员工的本地 SOP 发布为广场新版本。
+   *
+   * 需已选择数字员工；成功后关闭确认框并刷新列表。
+   */
   async function confirmPromote() {
     const row = promoteTarget;
     if (!row || !agentId) return;
@@ -604,6 +658,7 @@ export default function SkillsPage({
     }
   }
 
+  /** 返回带 agent_id 的查询串片段，未选择员工时为空串。 */
   function agentQuery() {
     return agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
   }
@@ -879,6 +934,7 @@ export default function SkillsPage({
   );
 }
 
+/** 生成新建蒸馏工作区 ID：优先 crypto.randomUUID，否则回退到时间戳加随机串。 */
 function createDistillWorkspaceId(): string {
   if (typeof window.crypto?.randomUUID === 'function') {
     return window.crypto.randomUUID();
@@ -886,6 +942,7 @@ function createDistillWorkspaceId(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** 渲染 SOP 的本地版本徽标，区分广场版、已停用、本地版本与已同步。 */
 function renderBranchBadge(row: SkillRead, isOverallAgent: boolean) {
   if (isOverallAgent) return <StatusBadge tone="gray">广场版</StatusBadge>;
   if (row.branch_status === 'inactive') return <StatusBadge tone="gray">已停用</StatusBadge>;
@@ -897,6 +954,7 @@ function renderBranchBadge(row: SkillRead, isOverallAgent: boolean) {
   );
 }
 
+/** 排行卡片上的「当前 / 总榜」统计范围切换控件。 */
 function ScopeToggle({ value, onChange }: { value: RankingScope; onChange: (scope: RankingScope) => void }) {
   return (
     <div className="inline-flex items-center rounded-[8px] bg-[#f2f3f7] p-[2px]">
@@ -919,6 +977,11 @@ function ScopeToggle({ value, onChange }: { value: RankingScope; onChange: (scop
   );
 }
 
+/**
+ * 排行榜卡片：展示前若干名 SOP 与指定指标。
+ *
+ * 传入 scope 与 onScopeChange 时显示范围切换；点击「查看更多」触发 onMore。
+ */
 function RankingCard({
   title,
   rows,
@@ -978,6 +1041,11 @@ function RankingCard({
   );
 }
 
+/**
+ * 排行完整弹窗：以分页表格展示指定排行模式与统计范围的明细。
+ *
+ * 表格列标题与取值随 mode、scope 变化；modal 为 null 时关闭。
+ */
 function RankingDialog({
   modal,
   rows,
@@ -1066,6 +1134,7 @@ function RankingDialog({
   );
 }
 
+/** SOP 版本管理弹窗：展示历史版本，并提供详情查看与回滚入口。 */
 function VersionsDialog({
   open,
   skill,
@@ -1169,6 +1238,7 @@ function VersionsDialog({
   );
 }
 
+/** 版本详情弹窗：展示版本指标与 SOP 源码文本，detail 为 null 时关闭。 */
 function VersionDetailDialog({
   detail,
   onClose,
@@ -1211,6 +1281,11 @@ function VersionDetailDialog({
   );
 }
 
+/**
+ * 按数值指标对 SOP 降序排名，并写入从 1 开始的名次。
+ *
+ * 主指标相同时依次用 tieBreaker、callTieBreaker 比较，保证排序稳定。
+ */
 function rankByMetric(
   rows: SkillRead[],
   field: NumericSkillMetric,
@@ -1230,16 +1305,19 @@ function rankByMetric(
     .map((row, index) => ({ ...row, rank: index + 1 }));
 }
 
+/** 把 0-1 的比例格式化为整数百分比文本，缺省值按 0 处理。 */
 function percent(value: number | undefined): string {
   return `${Math.round((value || 0) * 100)}%`;
 }
 
+/** 返回排行弹窗标题，按排行模式与统计范围区分。 */
 function rankingTitle(mode: RankingMode, scope: RankingScope): string {
   if (mode === 'calls') return '完整排行：全历史调用';
   if (mode === 'positive') return scope === 'current' ? '完整排行：当前版本好评率' : '完整排行：历史总榜好评率';
   return scope === 'current' ? '完整排行：当前版本差评率' : '完整排行：历史总榜差评率';
 }
 
+/** 按排行模式与统计范围，从预计算榜单中取出对应行。 */
 function rankingRowsFor(
   rows: {
     calls: RankedSkill[];
@@ -1256,34 +1334,41 @@ function rankingRowsFor(
   return scope === 'current' ? rows.negativeCurrent : rows.negativeTotal;
 }
 
+/** 返回排行条目的版本文本：当前范围显示 v{版本}，总榜显示「全版本」。 */
 function rankingVersionText(row: SkillRead, scope: RankingScope): string {
   return scope === 'current' ? `v${row.version}` : '全版本';
 }
 
+/** 返回排行表格指标列的表头文案。 */
 function rankingMetricTitle(mode: RankingMode, scope: RankingScope): string {
   if (mode === 'calls') return '全历史调用';
   if (mode === 'positive') return scope === 'current' ? '当前好评率' : '总好评率';
   return scope === 'current' ? '当前差评率' : '总差评率';
 }
 
+/** 返回排行表格指标列的展示值。 */
 function rankingMetricValue(row: SkillRead, mode: RankingMode, scope: RankingScope): string {
   if (mode === 'calls') return `${row.total_call_count || 0} 次`;
   if (mode === 'positive') return percent(scope === 'current' ? row.positive_rate : row.total_positive_rate);
   return percent(scope === 'current' ? row.negative_rate : row.total_negative_rate);
 }
 
+/** 返回条目在指定范围内的调用次数，缺省按 0 处理。 */
 function rankingCalls(row: SkillRead, scope: RankingScope): number {
   return scope === 'current' ? row.call_count || 0 : row.total_call_count || 0;
 }
 
+/** 返回条目在指定范围内的好评率，缺省按 0 处理。 */
 function rankingPositiveRate(row: SkillRead, scope: RankingScope): number {
   return scope === 'current' ? row.positive_rate || 0 : row.total_positive_rate || 0;
 }
 
+/** 返回条目在指定范围内的差评率，缺省按 0 处理。 */
 function rankingNegativeRate(row: SkillRead, scope: RankingScope): number {
   return scope === 'current' ? row.negative_rate || 0 : row.total_negative_rate || 0;
 }
 
+/** 返回「好评数/差评数」形式的反馈数文本。 */
 function rankingFeedbackText(row: SkillRead, scope: RankingScope): string {
   if (scope === 'current') {
     return `${row.positive_feedback_count || 0}/${row.negative_feedback_count || 0}`;
@@ -1291,10 +1376,12 @@ function rankingFeedbackText(row: SkillRead, scope: RankingScope): string {
   return `${row.total_positive_feedback_count || 0}/${row.total_negative_feedback_count || 0}`;
 }
 
+/** 把 SOP 状态码转换为界面文案，未知状态原样返回。 */
 function statusText(status: string): string {
   return STATUS_BADGE[status as SkillRead['status']]?.text || status;
 }
 
+/** 把版本内容渲染为 Markdown 文本，包含 SOP 元信息与各节点明细。 */
 function skillSourceText(row: SkillVersionRead): string {
   const skill = row.content;
   const nodes = skillGraphSteps(skill);
@@ -1324,6 +1411,7 @@ function skillSourceText(row: SkillVersionRead): string {
   ].join('\n');
 }
 
+/** 归一化 SOP 节点列表并补默认值；无节点时返回空数组。 */
 function skillGraphSteps(skill: SkillVersionRead['content']): Array<Record<string, unknown>> {
   if (Array.isArray(skill.nodes) && skill.nodes.length > 0) {
     return skill.nodes.map((node, index) => ({
@@ -1339,6 +1427,7 @@ function skillGraphSteps(skill: SkillVersionRead['content']): Array<Record<strin
   return [];
 }
 
+/** 把数组用逗号拼成单行文本；非数组或空数组返回「-」。 */
 function formatList(value: unknown): string {
   if (!Array.isArray(value) || value.length === 0) return '-';
   return value.map(String).join(', ');

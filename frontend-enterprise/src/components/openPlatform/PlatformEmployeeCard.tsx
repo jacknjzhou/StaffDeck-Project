@@ -11,13 +11,13 @@ export type PlatformStat = {
 };
 
 export type PlatformEmployeeCardProps = {
-  /** Avatar illustration, typically an <EmployeeAvatar />. */
+  /** 头像插画，通常传入 <EmployeeAvatar /> 组件。 */
   avatar: ReactNode;
   name: ReactNode;
   role: ReactNode;
   online?: boolean;
   description: ReactNode;
-  /** Bottom metric segments (资料 / 技能 / SOP …). */
+  /** 底部指标分段（资料 / 技能 / SOP 等），按传入顺序等宽排列。 */
   stats: PlatformStat[];
   onOpen?: () => void;
   onUnpublish?: () => void;
@@ -25,7 +25,12 @@ export type PlatformEmployeeCardProps = {
   className?: string;
 };
 
-/** Compact 数字员工广场 card with an admin-only gallery governance action. */
+/**
+ * 数字员工广场的紧凑卡片，附带仅管理员可见的「从广场下线」治理操作。
+ *
+ * 点击卡片主体触发 onOpen；悬停或聚焦时浮出下线按钮，仅在传入 onUnpublish 时渲染。
+ * unpublishing 为 true 时下线按钮禁用并呈等待光标。
+ */
 export default function PlatformEmployeeCard({
   avatar,
   name,

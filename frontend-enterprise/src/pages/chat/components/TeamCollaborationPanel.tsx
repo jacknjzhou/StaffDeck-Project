@@ -29,6 +29,7 @@ import ExecutionRecord from './ExecutionRecord';
 import HarnessArtifactDownloads from './HarnessArtifactDownloads';
 import KnowledgeCitationList from './KnowledgeCitationList';
 
+/** 取最近一次执行的 Trace 并转换为面板可渲染的结构，无记录时返回 null。 */
 function collaborationTrace(rows: TurnTraceRead[]): { turnId: string; trace: TurnTrace } | null {
   const ordered = [...rows].sort(
     (left, right) => Date.parse(left.started_at) - Date.parse(right.started_at),
@@ -59,6 +60,7 @@ function collaborationTrace(rows: TurnTraceRead[]): { turnId: string; trace: Tur
   };
 }
 
+/** 去掉协作会话标题中的内部前缀，空标题回退为「团队任务」。 */
 function conversationTitle(conversation: TeamConversationRead): string {
   return staffdeckDisplayText(conversation.title)
     .replace(/^团队任务验收:/, '')
@@ -67,6 +69,7 @@ function conversationTitle(conversation: TeamConversationRead): string {
     .trim() || '团队任务';
 }
 
+/** 生成派发给团队成员的 @ 提问文案，竞标类会话使用「请参与竞标」措辞。 */
 export function collaborationQuestion(conversation: TeamConversationRead): string {
   const memberName = conversation.agent_name || '团队成员';
   const title = conversationTitle(conversation);
@@ -75,6 +78,7 @@ export function collaborationQuestion(conversation: TeamConversationRead): strin
     : `@${memberName}，请处理「${title}」`;
 }
 
+/** 解析会话时间戳用于排序：优先创建时间，其次更新时间，均不可用时排到最后。 */
 function conversationTimestamp(conversation: TeamConversationRead): number {
   const createdAt = Date.parse(conversation.created_at);
   if (Number.isFinite(createdAt)) return createdAt;
@@ -86,6 +90,12 @@ export type TeamChatTimelineEntry =
   | { kind: 'message'; message: ChatMessage; messageIndex: number }
   | { kind: 'collaboration'; conversation: TeamConversationRead };
 
+/**
+ * 把团队协作会话按时间顺序插入到聊天消息时间线中。
+ *
+ * - 每条协作会话落在其时间戳之后的第一条消息之前。
+ * - 无后续消息时追加到时间线末尾，返回可直接渲染的有序条目。
+ */
 export function mergeTeamChatTimeline(
   messages: ChatMessage[],
   conversations: TeamConversationRead[],
@@ -117,6 +127,13 @@ export function mergeTeamChatTimeline(
   return timeline;
 }
 
+/**
+ * 拉取并轮询团队协作会话，供协作面板展示成员任务与竞标进度。
+ *
+ * - 团队为空时清空列表；切换团队或领导变化时重新加载。
+ * - 每 2 秒轮询一次，按成员与类型去重后取最近 4 条，按时间升序返回。
+ * - 请求失败时保留上一次成功的快照。
+ */
 export function useTeamCollaborations(team?: TeamRead | null): TeamConversationRead[] {
   const [conversations, setConversations] = useState<TeamConversationRead[]>([]);
   const leaderAgentId = team?.members.find((member) => member.role === 'leader')?.agent_id;
@@ -130,6 +147,7 @@ export function useTeamCollaborations(team?: TeamRead | null): TeamConversationR
       };
     }
     setConversations([]);
+    /** 请求一次协作会话列表，过滤领导会话与重复项后写入状态。 */
     const loadConversations = async () => {
       try {
         const response = await api.get<TeamConversationsResponse>(
@@ -163,6 +181,13 @@ export function useTeamCollaborations(team?: TeamRead | null): TeamConversationR
   return conversations;
 }
 
+/**
+ * 团队协作面板：展示项目领导派发给成员的任务与竞标消息。
+ *
+ * - 传入 conversation 时只渲染该条会话，否则轮询加载团队协作列表。
+ * - 展开成员回复时轮询流式内容与 Trace，任务完成后补齐消息列表。
+ * - 成员等待补充信息时提供输入框，提交后通过 resume 接口继续任务。
+ */
 export default function TeamCollaborationPanel({
   team,
   agents,
@@ -198,6 +223,7 @@ export default function TeamCollaborationPanel({
     let cancelled = false;
     let refreshing = false;
     let pollTimer: number | undefined;
+    /** 轮询展开会话的流式内容与 Trace，任务结束后补齐消息列表；失败时保留上次快照。 */
     const refreshStream = async () => {
       if (refreshing) return;
       refreshing = true;
@@ -239,6 +265,7 @@ export default function TeamCollaborationPanel({
     };
   }, [expandedSessionId, team.id]);
 
+  /** 展开或收起成员回复；首次展开时加载该会话的消息与 Trace。 */
   async function toggleReply(conversation: TeamConversationRead) {
     if (expandedSessionId === conversation.session_id) {
       setExpandedSessionId('');
@@ -269,6 +296,12 @@ export default function TeamCollaborationPanel({
     }
   }
 
+  /**
+   * 提交成员补充信息以恢复任务执行。
+   *
+   * - 缺少任务 ID、回答为空或已有提交进行中时直接跳过。
+   * - 成功后标记为已提交，失败时记录错误文案供输入区展示。
+   */
   async function resumeTask(conversation: TeamConversationRead) {
     const taskId = conversation.task_id;
     const answer = taskId ? (answerByTaskId[taskId] || '').trim() : '';

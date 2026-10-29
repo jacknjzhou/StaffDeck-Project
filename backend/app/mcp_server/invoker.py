@@ -19,10 +19,9 @@ from app.tools.tool_schema import ToolCall
 
 
 def extract_agent_id(params: dict[str, Any], principal_agent_id: str | None) -> str | None:
-    """Resolve the employee context for a ``tools/call``.
+    """解析一次 ``tools/call`` 应归属的数字员工。
 
-    The MCP ``_meta`` channel is the primary source; a credential bound to one
-    employee supplies a fallback. Nothing is guessed beyond that.
+    优先取 MCP ``_meta.agentId``；凭据绑定的员工只作兜底，不额外猜测。
     """
     meta = params.get("_meta")
     if isinstance(meta, dict):
@@ -33,6 +32,7 @@ def extract_agent_id(params: dict[str, Any], principal_agent_id: str | None) -> 
 
 
 def _text_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
+    """把任意负载包装成 MCP 的 text 内容块，非字符串负载序列化为 JSON。"""
     body = (
         payload
         if isinstance(payload, str)
@@ -44,7 +44,7 @@ def _text_result(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
 def _narrow_to_requested_bases(
     db: Session, tenant_id: str, allowed: list[str], requested: list[str]
 ) -> list[str]:
-    """Keep only visible versions belonging to the knowledge bases the caller named."""
+    """只保留调用方点名知识库下、且对员工可见的版本 id。"""
     rows = db.exec(
         select(KnowledgeBaseVersion.id).where(
             KnowledgeBaseVersion.tenant_id == tenant_id,
@@ -58,12 +58,10 @@ def _narrow_to_requested_bases(
 def _knowledge_search(
     db: Session, tenant_id: str, agent_id: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
-    """Search the employee's synced knowledge without going through the JWT layer.
+    """直接检索员工已同步的知识库，不经过 FastAPI 的 JWT 依赖层。
 
-    ``app.api.knowledge.search_knowledge`` is a FastAPI endpoint whose first act
-    is ``require_agent_scope_viewer(current_user)``; an MCP caller presents a
-    credential, not a ``User``, so that wrapper cannot be reused. Visibility is
-    enforced here instead through the same branching helper the wrapper uses.
+    ``app.api.knowledge.search_knowledge`` 首步即 ``require_agent_scope_viewer``，
+    但 MCP 调用方持有的是凭据而非 ``User``；这里改用同一个 branching 助手自行收窄可见范围。
     """
     query = str(arguments.get("query") or "")
     allowed = list(visible_knowledge_base_version_ids(db, tenant_id, agent_id))
@@ -95,11 +93,10 @@ def call_tool(
     name: str,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    """Execute one MCP tool call for one employee.
+    """为单个数字员工执行一次 MCP 工具调用。
 
-    Returns an MCP ``CallToolResult`` shape; protocol-level failures (bad name,
-    unknown employee) are reported as ``isError`` rather than raised, because a
-    tool error is a valid JSON-RPC response.
+    返回 MCP ``CallToolResult`` 结构；未知员工、未暴露的工具名等协议级失败以
+    ``isError`` 返回而不抛异常，因为工具错误本身也是合法的 JSON-RPC 响应。
     """
     agent = db.get(AgentProfile, agent_id)
     if agent is None or agent.tenant_id != tenant_id:

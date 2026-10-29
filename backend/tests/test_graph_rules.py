@@ -3,6 +3,7 @@ from app.skills.skill_schema import SkillCard, SkillGraphNode
 
 
 def _graph() -> dict:
+    """构造含并行分支的示例图内容，作为各规则用例的共享输入。"""
     return {
         "start_node_id": "start",
         "required_info": ["message_content"],
@@ -33,6 +34,7 @@ def _graph() -> dict:
 
 
 def test_graph_runtime_preserves_legacy_order_and_parallel_siblings() -> None:
+    """验证节点顺序、并行下一步与兄弟步骤沿用旧版排序语义。"""
     content = _graph()
 
     assert [node["node_id"] for node in GraphRules.ordered_nodes(content)] == [
@@ -49,6 +51,7 @@ def test_graph_runtime_preserves_legacy_order_and_parallel_siblings() -> None:
 
 
 def test_graph_runtime_keeps_exclusive_conditions_out_of_pending_siblings() -> None:
+    """验证互斥条件分支不会被当作待处理的并行兄弟步骤。"""
     content = _graph()
     content["edges"][0]["condition"] = "sensitive"
     content["edges"][1]["condition"] = "payee"
@@ -57,12 +60,14 @@ def test_graph_runtime_keeps_exclusive_conditions_out_of_pending_siblings() -> N
 
 
 def test_graph_runtime_normalizes_pending_without_reordering() -> None:
+    """验证待处理步骤会去空白、去重、丢弃空值，同时保持原有顺序。"""
     assert GraphRules.normalize_pending_steps(
         [" check_sensitive ", "report", "check_sensitive", "", None]
     ) == ["check_sensitive", "report"]
 
 
 def test_graph_runtime_default_next_step_matches_legacy_rules() -> None:
+    """验证默认下一步规则与旧实现一致，包括 else 条件分支的处理。"""
     content = _graph()
     assert GraphRules.default_next_step(content, "check_payee")["step_id"] == "report"
     assert GraphRules.default_next_step(content, "start") is None
@@ -72,6 +77,7 @@ def test_graph_runtime_default_next_step_matches_legacy_rules() -> None:
 
 
 def test_graph_runtime_terminal_position_preserves_legacy_slot_semantics() -> None:
+    """验证终态位置的判定继续沿用旧版对必填信息的槽位语义。"""
     content = _graph()
 
     assert not GraphRules.terminal_position(content, "report", {})
@@ -80,6 +86,7 @@ def test_graph_runtime_terminal_position_preserves_legacy_slot_semantics() -> No
 
 
 def test_graph_runtime_legacy_node_defaults_and_dangling_edges() -> None:
+    """验证节点缺失字段时的默认值，以及悬空边和非法节点会被忽略。"""
     content = {
         "start_node_id": "missing",
         "nodes": [{"node_id": "start"}, {"node_id": "end"}, "invalid"],
@@ -114,7 +121,7 @@ def test_graph_runtime_legacy_node_defaults_and_dangling_edges() -> None:
 
 
 def test_find_handoff_node_id_bfs_from_active_step() -> None:
-    """Should find the handoff node reachable from active_step_id, not array order."""
+    """验证从当前活跃步骤 BFS 查找转人工节点，而非按数组顺序返回。"""
     content = {
         "start_node_id": "intake",
         "nodes": [
@@ -131,7 +138,7 @@ def test_find_handoff_node_id_bfs_from_active_step() -> None:
 
 
 def test_find_handoff_node_id_fallback_to_start_when_no_active_step() -> None:
-    """Without active_step_id, should BFS from start_node_id."""
+    """验证没有活跃步骤时从起始节点开始 BFS 查找转人工节点。"""
     content = {
         "start_node_id": "start",
         "nodes": [
@@ -148,7 +155,7 @@ def test_find_handoff_node_id_fallback_to_start_when_no_active_step() -> None:
 
 
 def test_find_handoff_node_id_fallback_to_array_order_without_edges() -> None:
-    """With no edges, should fall back to array order."""
+    """验证图中没有边时按节点数组顺序回退查找转人工节点。"""
     content = {
         "start_node_id": "start",
         "nodes": [
@@ -162,7 +169,7 @@ def test_find_handoff_node_id_fallback_to_array_order_without_edges() -> None:
 
 
 def test_find_handoff_node_id_detects_handoff_human_action() -> None:
-    """Should detect handoff nodes by allowed_actions containing handoff_human."""
+    """验证 allowed_actions 含 handoff_human 的节点也会被识别为转人工节点。"""
     content = {
         "start_node_id": "start",
         "nodes": [
@@ -177,7 +184,7 @@ def test_find_handoff_node_id_detects_handoff_human_action() -> None:
 
 
 def test_find_handoff_node_id_prefers_unconditional_path_over_conditional() -> None:
-    """Should prefer handoff reachable via unconditional edge over conditional edge.
+    """验证优先走无条件边，即使条件边优先级更高也不误入条件分支。
 
     当当前节点有两条出边:无条件边指向 handoff_a,条件边指向 handoff_b,
     BFS 第一阶段(仅无条件边)应返回 handoff_a,不会误入条件分支。
@@ -199,7 +206,7 @@ def test_find_handoff_node_id_prefers_unconditional_path_over_conditional() -> N
 
 
 def test_find_handoff_node_id_falls_back_to_conditional_edges() -> None:
-    """When no unconditional path reaches a handoff node, should follow conditional edges."""
+    """验证无条件路径到不了转人工节点时，会继续沿条件边查找。"""
     content = {
         "start_node_id": "intake",
         "nodes": [
@@ -217,6 +224,7 @@ def test_find_handoff_node_id_falls_back_to_conditional_edges() -> None:
 
 
 def test_find_handoff_node_id_rejects_ambiguous_conditional_branches() -> None:
+    """验证多个条件分支各自通向不同转人工节点时返回 None，不随意选择。"""
     content = {
         "start_node_id": "decision",
         "nodes": [
@@ -242,7 +250,7 @@ def test_find_handoff_node_id_rejects_ambiguous_conditional_branches() -> None:
 
 
 def test_skill_graph_node_preserves_assignee_user_id() -> None:
-    """SkillGraphNode schema should preserve assignee_user_id through Pydantic round-trip."""
+    """验证 SkillGraphNode 经 Pydantic 序列化往返后仍保留 assignee_user_id。"""
     node = SkillGraphNode(
         node_id="handoff_node",
         type="handoff",
@@ -258,7 +266,7 @@ def test_skill_graph_node_preserves_assignee_user_id() -> None:
 
 
 def test_skill_graph_node_preserves_assignee_notify_channel() -> None:
-    """SkillGraphNode schema should preserve assignee_notify_channel through round-trip."""
+    """验证通知渠道字段在 SkillGraphNode 与步骤转换中都能正确保留。"""
     node = SkillGraphNode(
         node_id="handoff_node",
         type="handoff",
@@ -279,7 +287,7 @@ def test_skill_graph_node_preserves_assignee_notify_channel() -> None:
 
 
 def test_skill_card_round_trip_with_assignee_user_id() -> None:
-    """Full SkillCard validation should preserve assignee_user_id on handoff nodes."""
+    """验证 SkillCard 整体校验后转人工节点仍保留 assignee_user_id。"""
     card = SkillCard(
         skill_id="test_sop",
         name="测试SOP",

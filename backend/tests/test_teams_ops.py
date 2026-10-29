@@ -46,6 +46,7 @@ from app.teams.wakeup import enqueue_wake_event
 
 
 def _foreign_user() -> User:
+    """构造其他租户的管理员用户，用于验证跨租户访问被拒绝。"""
     return User(
         id="user_foreign",
         tenant_id="tenant_else",
@@ -58,6 +59,7 @@ def _foreign_user() -> User:
 def _make_assigned_task(
     db: Session, team: Team, *, title: str, assignee: str, status: str = "pending"
 ) -> TeamTask:
+    """创建并落库一条指派给指定成员的任务，便于测试成员排队与执行。"""
     task = TeamTask(
         team_id=team.id,
         tenant_id=team.tenant_id,
@@ -107,6 +109,7 @@ def test_member_needs_input_escalates_with_question(monkeypatch: pytest.MonkeyPa
 
 
 def test_member_concurrency_config_fallback() -> None:
+    """验证成员并发上限缺失时默认为 1，非法或非字典配置同样回退。"""
     base = {"tenant_id": "t", "name": "n", "owner_user_id": "u"}
     assert member_concurrency(Team(**base)) == 1
     assert member_concurrency(Team(**base, config_json={"member_concurrency": 3})) == 3
@@ -120,6 +123,7 @@ def test_member_concurrency_config_fallback() -> None:
 
 
 def test_execution_wake_queues_when_member_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证成员忙碌时执行类唤醒进入排队：事件保持 pending、记审计且任务不动。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         _make_assigned_task(db, team, title="执行中", assignee="agent_a", status="in_progress")
@@ -148,6 +152,7 @@ def test_execution_wake_queues_when_member_busy(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_member_queue_drains_after_task_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证任务进入终态后自动出队该成员最早的排队唤醒，且随后可正常执行。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         first = _make_assigned_task(db, team, title="先做", assignee="agent_a")
@@ -181,6 +186,7 @@ def test_member_queue_drains_after_task_reported(monkeypatch: pytest.MonkeyPatch
 
 
 def test_member_concurrency_config_allows_parallel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证提高成员并发上限后，成员忙碌时新任务可直接执行而不排队。"""
     with _test_session() as db:
         team = _seed_pool_team(db, config={"member_concurrency": 2})
         _make_assigned_task(db, team, title="执行中", assignee="agent_a", status="in_progress")
@@ -204,6 +210,7 @@ def test_member_concurrency_config_allows_parallel(monkeypatch: pytest.MonkeyPat
 
 
 def test_bid_wake_bypasses_member_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证竞标唤醒不受执行队列限制，正常提交竞标且不产生排队事件。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         _make_assigned_task(db, team, title="执行中", assignee="agent_a", status="in_progress")
@@ -235,6 +242,7 @@ def test_bid_wake_bypasses_member_queue(monkeypatch: pytest.MonkeyPatch) -> None
 def _make_timed_task(
     db: Session, team: Team, *, status: str, minutes_ago: float, assignee: str | None = None
 ) -> TeamTask:
+    """构造指定状态与超时时长的任务，供超时清扫用例使用。"""
     task = TeamTask(
         team_id=team.id,
         tenant_id=team.tenant_id,
@@ -250,6 +258,7 @@ def _make_timed_task(
 
 
 def test_sweep_escalates_timed_out_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证清扫只升级超时任务，标记其唤醒失败并释放额度出队排队唤醒。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         started = _stub_start_wakeup(monkeypatch)
@@ -292,6 +301,7 @@ def test_sweep_escalates_timed_out_tasks(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_sweep_respects_team_timeout_config() -> None:
+    """验证清扫按团队自定义的超时分钟数判定任务是否超时。"""
     with _test_session() as db:
         team = _seed_pool_team(db, config={"task_timeout_minutes": 5})
         stale = _make_timed_task(db, team, status="bidding", minutes_ago=10)
@@ -304,6 +314,7 @@ def test_sweep_respects_team_timeout_config() -> None:
 
 
 def test_task_timeout_minutes_config_fallback() -> None:
+    """验证任务超时配置缺失或非法时回退到默认分钟数。"""
     base = {"tenant_id": "t", "name": "n", "owner_user_id": "u"}
     assert task_timeout_minutes(Team(**base)) == DEFAULT_TASK_TIMEOUT_MINUTES
     assert task_timeout_minutes(Team(**base, config_json={"task_timeout_minutes": 45})) == 45.0
@@ -320,6 +331,7 @@ def test_task_timeout_minutes_config_fallback() -> None:
 
 
 def test_team_events_endpoint_aggregates_desc_with_title() -> None:
+    """验证团队事件接口倒序聚合、带任务标题、支持 limit 并拒绝跨租户。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         admin = _admin_user()
@@ -349,6 +361,7 @@ def test_team_events_endpoint_aggregates_desc_with_title() -> None:
 
 
 def test_team_threads_aggregates_tl_chat_and_tasks() -> None:
+    """验证统一线程聚合 TL 对话与任务线程，按更新时间倒序并拒绝跨租户。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         admin = _admin_user()
@@ -406,6 +419,7 @@ def test_team_threads_aggregates_tl_chat_and_tasks() -> None:
 def test_blackboard_promote_creates_ingest_job_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证黑板条目沉淀会创建知识库摄取任务，重复沉淀幂等且需管理权限。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         admin = _admin_user()
@@ -482,6 +496,7 @@ def test_blackboard_promote_creates_ingest_job_idempotent(
 def test_late_bid_wake_after_override_records_bid_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证人改判后迟到的竞标唤醒只记 bid_skipped，不执行对话也不写竞标。"""
     with _test_session() as db:
         team = _seed_pool_team(db)
         task = _make_pool_task(db, team, title="调研")
@@ -489,6 +504,7 @@ def test_late_bid_wake_after_override_records_bid_skipped(
         calls: list[str] = []
 
         def fake_turn(*args, **kw):
+            """记录被调用的智能体并返回固定竞标回复，用于观察迟到竞标行为。"""
             calls.append(kw["agent"].id)
             return _bid_reply("方案")
 

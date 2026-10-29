@@ -26,6 +26,7 @@ TOOL_FAILURE_SUGGESTION = "请检查工具配置、调用参数或外部服务�
 
 
 def public_error_detail(value: object, fallback: str = "未知原因") -> str:
+    """把内部异常细节压成可对外展示的文本：压缩空白、打码 sk-/pt- 密钥并限长 500。"""
     detail = re.sub(r"\s+", " ", str(value or "")).strip()
     detail = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "sk-***", detail)
     detail = re.sub(r"\bpt-[A-Za-z0-9_-]{8,}\b", "pt-***", detail)
@@ -40,6 +41,7 @@ def format_runtime_failure_reply(
     code: str | None = None,
     suggestion: str | None = None,
 ) -> str:
+    """拼一条面向用户的失败提示：标题、可选错误码、脱敏细节与下一步建议。"""
     normalized_detail = public_error_detail(detail)
     normalized_code = public_error_detail(code, "").strip()
     code_part = f"（{normalized_code}）" if normalized_code else ""
@@ -49,10 +51,12 @@ def format_runtime_failure_reply(
 
 
 def model_failure_suggestion(detail: object) -> str:
+    """返回模型调用失败时给用户的固定排查建议，detail 仅用于保持调用签名一致。"""
     return MODEL_FAILURE_SUGGESTION
 
 
 def tool_failure_reply(tool_result: ToolResult) -> str:
+    """把工具失败的 error 转成用户可读提示；没有 error 时按未返回可用结果处理。"""
     error = tool_result.error
     code = error.code if error else None
     detail = error.message if error else "工具未返回可用结果"
@@ -65,6 +69,8 @@ def tool_failure_reply(tool_result: ToolResult) -> str:
 
 
 class ResponseGenerator:
+    """把本轮对话、步骤结果与工具结果交给模型，产出最终用户可见的回复文本。"""
+
     def generate(
         self,
         message: str,
@@ -79,6 +85,10 @@ class ResponseGenerator:
         conversation_context: dict[str, object] | None = None,
         task_results: list[dict[str, object]] | None = None,
     ) -> str:
+        """生成一次性回复：能直出步骤答复就省掉模型调用，工具失败时直接给失败提示。
+
+        模型异常会被兜底成脱敏的失败文案，保证调用方始终拿到可展示的字符串。
+        """
         if self._can_use_step_reply_directly(step_result, tool_result, task_results):
             return step_result.reply.strip()
         raw_payload = self._payload(
@@ -121,6 +131,7 @@ class ResponseGenerator:
         conversation_context: dict[str, object] | None = None,
         task_results: list[dict[str, object]] | None = None,
     ) -> Iterator[str]:
+        """流式生成回复：逐块产出文本，模型无有效输出时回落到步骤答复或兜底文案。"""
         if self._can_use_step_reply_directly(step_result, tool_result, task_results):
             yield from self.chunk_text(step_result.reply or "")
             return
@@ -177,6 +188,7 @@ class ResponseGenerator:
             )
 
     def chunk_text(self, text: str, chunk_size: int = 8) -> Iterator[str]:
+        """按固定字符数切块输出，忽略首尾空白；空文本不产出任何块。"""
         stripped = text.strip()
         if not stripped:
             return
@@ -189,6 +201,10 @@ class ResponseGenerator:
         tool_result: ToolResult | None,
         task_results: list[dict[str, object]] | None = None,
     ) -> bool:
+        """判断能否跳过模型、直接返回步骤答复。
+
+        仅当 clarify/ask_user 且没有工具调用、知识检索或并行任务结果时成立。
+        """
         return bool(
             not task_results
             and str(step_result.reply or "").strip()
@@ -211,6 +227,7 @@ class ResponseGenerator:
         conversation_context: dict[str, object] | None = None,
         task_results: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
+        """组装提示词数据：有任务结果时走多任务投影，否则给当前步骤、进度、槽位与知识上下文。"""
         projected_task_results = self._project_task_results(task_results)
         if projected_task_results:
             return {
@@ -246,6 +263,7 @@ class ResponseGenerator:
     def _project_task_results(
         self, task_results: list[dict[str, object]] | None
     ) -> list[dict[str, object]]:
+        """把并行任务结果压成统一投影结构，非字典项直接丢弃，缺失字段用空值兜底。"""
         if not isinstance(task_results, list):
             return []
         projected: list[dict[str, object]] = []
@@ -301,6 +319,7 @@ class ResponseGenerator:
         session: ChatSession,
         step_result: StepAgentResult,
     ) -> list[dict[str, object]]:
+        """取本轮步骤的知识检索结果；没有命中时返回空列表。"""
         if step_result.knowledge_results:
             return list(step_result.knowledge_results)
         return []
@@ -314,6 +333,7 @@ class ResponseGenerator:
         tool_result: ToolResult | None,
         skill: Skill | None = None,
     ) -> str:
+        """在多个候选里挑第一条非空回复；全部为空时返回通用兜底话术。"""
         completion_ready = self._skill_completion_ready(session, skill, step_result, tool_result)
         completion_fallback = self._completion_fallback() if completion_ready else ""
         prefer_step_reply = bool(step_result.reply and router_decision.decision == "clarify")
@@ -343,6 +363,7 @@ class ResponseGenerator:
         completion_ready: bool,
         prefer_step_reply: bool,
     ) -> tuple[str, ...]:
+        """按优先级排列候选回复：clarify 追问时以步骤答复为先，完成态时以完成话术为先。"""
         if prefer_step_reply:
             return (
                 step_reply,
@@ -382,6 +403,7 @@ class ResponseGenerator:
         step_result: StepAgentResult,
         tool_result: ToolResult | None,
     ) -> dict[str, object]:
+        """汇总进度：缺失的当前步骤信息、缺失的必填信息、是否可完成以及步骤是否完成。"""
         if not skill:
             return {
                 "missing_current_step_info": [],
@@ -402,6 +424,7 @@ class ResponseGenerator:
         step_result: StepAgentResult,
         tool_result: ToolResult | None,
     ) -> bool:
+        """判断技能是否已可收尾：步骤完成、工具成功且当前步骤与全局必填信息都已齐备。"""
         if not skill or not step_result.is_step_completed:
             return False
         if tool_result and not tool_result.success:
@@ -409,6 +432,7 @@ class ResponseGenerator:
         return not self._missing_current_step_info(session, skill) and not self._missing_required_info(session, skill)
 
     def _missing_current_step_info(self, session: ChatSession, skill: Skill) -> list[str]:
+        """列出当前步骤 expected_user_info 中尚未填值的字段；无当前步骤时为空列表。"""
         step = self._current_step(session, skill)
         if not step:
             return []
@@ -419,6 +443,7 @@ class ResponseGenerator:
         ]
 
     def _missing_required_info(self, session: ChatSession, skill: Skill) -> list[str]:
+        """列出技能 required_info 中尚未填值的字段，用于判断能否结束整个技能。"""
         return [
             str(field)
             for field in (skill.content_json or {}).get("required_info", [])
@@ -426,6 +451,7 @@ class ResponseGenerator:
         ]
 
     def _current_step(self, session: ChatSession, skill: Skill) -> dict | None:
+        """按 session.active_step_id 在技能节点里查当前步骤的精简描述，找不到返回 None。"""
         for node in (skill.content_json or {}).get("nodes", []):
             if isinstance(node, dict) and node.get("node_id") == session.active_step_id:
                 return {
@@ -439,26 +465,35 @@ class ResponseGenerator:
         return None
 
     def _slot_has_value(self, slots: dict, field: str) -> bool:
+        """判断槽位字段是否已填：None 与空字符串都算未填，其余值（含 0）视为已填。"""
         value = slots.get(field)
         return value is not None and value != ""
 
     def _completion_fallback(self) -> str:
+        """信息已齐全时的固定收尾话术，避免模型空回复让客户以为对话中断。"""
         return "已记录完整信息。请问还有其他需要帮助的吗？"
 
     def _minimal_fallback_for_session(self, session: ChatSession) -> str:
+        """模型无输出时用于追问诉求的最低限度话术，保证会话能继续推进。"""
         return "请您再补充一下具体诉求，我会继续帮您处理。"
 
     def _minimal_fallback(self, router_decision: RouterDecision) -> str:
+        """兜底文案：clarify 决策优先复用路由给出的澄清问题，否则用通用道歉话术。"""
         if router_decision.decision == "clarify" and router_decision.clarification_question:
             return router_decision.clarification_question
         return FALLBACK_REPLY
 
     def _system_prompt(self, persona_prompt: str | None) -> str:
+        """返回统一系统提示词；persona 由 stage payload 单独注入，故此处忽略入参。"""
         return unified_system_prompt()
 
     def _stage_payload(
         self, payload: dict[str, object], persona_prompt: str | None
     ) -> dict[str, object]:
+        """把载荷包装成分阶段调用协议：拆出 user_message 与对话上下文，其余放进 stage_data。
+
+        有员工人设时以 employee_identity 置于最前，并追加只输出正文的产出约定。
+        """
         stage_data = {
             key: value
             for key, value in payload.items()

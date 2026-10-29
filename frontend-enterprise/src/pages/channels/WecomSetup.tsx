@@ -19,6 +19,13 @@ const DEFAULT_FIELDS: ChannelCredentialFieldRead[] = [
   { key: 'corp_id', label: '企业 ID' },
 ];
 
+/**
+ * 企业微信渠道凭证配置卡片：已配置时展示摘要，否则或点击「重新配置」后展示表单。
+ *
+ * @param binding 当前渠道绑定，提供已配置的 bot_id / corp_id 与连接状态
+ * @param meta 渠道元数据，其 credential_fields 优先于内置字段定义
+ * @param onChanged 保存成功后回调最新的渠道绑定
+ */
 export default function WecomSetup({
   binding,
   meta,
@@ -40,6 +47,11 @@ export default function WecomSetup({
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
+  /**
+   * 校验并提交企业微信凭证；非可选字段为空时仅提示，不发起请求。
+   *
+   * 提交成功后清空输入、退出编辑态并回调最新绑定。
+   */
   async function save() {
     const incomplete = fields.some(
       (field) => !field.optional && !String(values[field.key] || '').trim(),

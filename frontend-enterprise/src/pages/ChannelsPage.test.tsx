@@ -83,6 +83,7 @@ const teamBinding: ChannelBindingRead = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+/** 构造返回指定 JSON 体的成功响应桩。 */
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -92,6 +93,7 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+/** 构造覆盖渠道页各接口的 fetch 桩，可按需覆盖绑定、团队与员工返回。 */
 function makeFetchMock(overrides: { bindings?: unknown; teams?: unknown; agents?: unknown } = {}) {
   const bindings = overrides.bindings ?? [];
   const teams = overrides.teams ?? [team];
@@ -123,6 +125,7 @@ function makeFetchMock(overrides: { bindings?: unknown; teams?: unknown; agents?
   });
 }
 
+/** 以管理员身份渲染渠道页面。 */
 function renderPage() {
   return render(
     <I18nProvider>
@@ -133,6 +136,7 @@ function renderPage() {
   );
 }
 
+/** 走完接入渠道弹窗的选渠道与命名步骤，停在绑定对象选择。 */
 async function openCreateDialog(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getAllByRole('button', { name: /接入渠道/ })[0]);
   await user.click(await screen.findByRole('button', { name: /微信/ }));
@@ -142,6 +146,7 @@ async function openCreateDialog(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByText('选择绑定对象');
 }
 
+/** 取出创建渠道接入的请求体，并断言该请求已发出。 */
 function createPostBody(fetchMock: ReturnType<typeof makeFetchMock>): Record<string, unknown> {
   const call = fetchMock.mock.calls.find(
     ([input, init]) => init?.method === 'POST' && String(input).endsWith('/api/enterprise/channels'),
@@ -150,12 +155,14 @@ function createPostBody(fetchMock: ReturnType<typeof makeFetchMock>): Record<str
   return JSON.parse(String(call?.[1]?.body)) as Record<string, unknown>;
 }
 
+/** 每个用例结束后清理 DOM 并移除全局桩。 */
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe('ChannelsPage', () => {
+  /** 验证选择员工作为绑定对象时提交 agent_id 且不携带 team_id。 */
   it('creates a binding with agent_id when the agent target is selected', async () => {
     const user = userEvent.setup();
     const fetchMock = makeFetchMock();
@@ -182,6 +189,7 @@ describe('ChannelsPage', () => {
     });
   });
 
+  /** 验证创建接入时提交用户编辑后的接入名称。 */
   it('sends the edited binding name when creating', async () => {
     const user = userEvent.setup();
     const fetchMock = makeFetchMock();
@@ -206,6 +214,7 @@ describe('ChannelsPage', () => {
     });
   });
 
+  /** 验证可从详情页重命名渠道接入并同步更新标题。 */
   it('renames a binding from the detail view', async () => {
     const user = userEvent.setup();
     const namedBinding: ChannelBindingRead = {
@@ -250,6 +259,7 @@ describe('ChannelsPage', () => {
     expect(await screen.findByText('售前飞书群')).toBeTruthy();
   });
 
+  /** 验证无需进入详情页即可在列表卡片上重命名接入。 */
   it('renames a binding directly from the list card without entering the detail view', async () => {
     const user = userEvent.setup();
     const namedBinding: ChannelBindingRead = {
@@ -292,6 +302,7 @@ describe('ChannelsPage', () => {
     expect(screen.queryByText('选择绑定对象')).toBeNull();
   });
 
+  /** 验证选择团队作为绑定对象时提交 team_id 且不携带 agent_id。 */
   it('creates a binding with team_id when the team target is selected', async () => {
     const user = userEvent.setup();
     const fetchMock = makeFetchMock();
@@ -314,6 +325,7 @@ describe('ChannelsPage', () => {
     });
   });
 
+  /** 验证团队绑定的详情中团队为只读，不可编辑或改选。 */
   it('shows the team as read-only in the detail of a team binding', async () => {
     const user = userEvent.setup();
     const fetchMock = makeFetchMock({ bindings: [teamBinding] });
@@ -330,6 +342,7 @@ describe('ChannelsPage', () => {
     expect(within(section).queryByRole('radio')).toBeNull();
   });
 
+  /** 验证没有可用团队时展示空状态与创建团队入口。 */
   it('shows an empty state with a create-team link when no team exists', async () => {
     const user = userEvent.setup();
     const fetchMock = makeFetchMock({ teams: [] });

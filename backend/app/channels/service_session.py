@@ -77,6 +77,7 @@ def find_channel_session(
     agent_id: str,
     external_conv_id: str,
 ) -> ChatSession | None:
+    """按 (agent_id, channel, binding, external_conv_id) 查找已锚定的渠道会话,未命中返回 None。"""
     return db.exec(
         select(ChatSession).where(
             ChatSession.agent_id == agent_id,

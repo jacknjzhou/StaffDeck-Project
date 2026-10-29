@@ -15,6 +15,7 @@ from app.general_skills.schema import GeneralSkillExecutionPlan
 def test_same_runner_keeps_parallel_workspaces_isolated(
     monkeypatch, tmp_path: Path
 ) -> None:
+    """验证同一 runner 并发执行时，各任务的 workspace、cwd 与产物目录互不串扰。"""
     barrier = threading.Barrier(2)
     observed: dict[str, dict[str, str]] = {}
     observed_lock = threading.Lock()
@@ -29,6 +30,7 @@ def test_same_runner_keeps_parallel_workspaces_isolated(
     )
 
     def fake_sandboxed_process(**kwargs):
+        """伪造沙箱子进程：用屏障对齐两个任务，记录工作目录并写入各自产物。"""
         query = str(kwargs["stdin_json"]["query"])
         workspace = Path(kwargs["workspace"])
         artifact_dir = Path(kwargs["stdin_json"]["artifact_dir"])
@@ -70,6 +72,7 @@ def test_same_runner_keeps_parallel_workspaces_isolated(
     roots = {name: tmp_path / name for name in ("task-a", "task-b")}
 
     def execute(name: str):
+        """在指定 workspace_root 下执行计划，返回结果用于断言并发隔离。"""
         return runner._execute_plan(
             skill,
             name,

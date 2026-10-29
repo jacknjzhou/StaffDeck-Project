@@ -18,9 +18,10 @@ from app.harness.registry import HarnessRegistry
 
 
 class HarnessExecutor:
-    """Validates and executes a single registered tool call."""
+    """校验并执行单次已注册的 Harness 工具调用。"""
 
     def __init__(self, registry: HarnessRegistry) -> None:
+        """注入工具注册表，后续调用按注册信息解析工具与参数模型。"""
         self.registry = registry
 
     def execute(
@@ -28,6 +29,11 @@ class HarnessExecutor:
         context: HarnessToolContext,
         call: HarnessToolCall,
     ) -> HarnessToolResult:
+        """校验并执行一次工具调用，所有失败都收敛为 success=False 的结果对象。
+
+        依次做注册表查找、按 argument_model 校验参数、执行 handler 并序列化返回值；
+        未注册、参数非法、IO 异常与意外异常分别转成对应错误码而不向调用方抛出。
+        """
         started = time.monotonic()
         registered = self.registry.get(call.name)
         if registered is None:
@@ -107,6 +113,10 @@ class HarnessExecutor:
 
     @staticmethod
     def _json_object(value: Mapping[str, Any]) -> dict[str, Any]:
+        """确认 handler 返回值是 JSON 可序列化的对象，并返回其浅拷贝。
+
+        非 Mapping 或含 NaN 等不可序列化值时抛 INVALID_TOOL_RESULT。
+        """
         if not isinstance(value, Mapping):
             raise HarnessExecutionError(
                 "INVALID_TOOL_RESULT",
@@ -127,6 +137,7 @@ class HarnessExecutor:
         error: HarnessToolError,
         started: float,
     ) -> HarnessToolResult:
+        """按原始调用与错误对象拼装失败结果，并带上已消耗的耗时。"""
         return HarnessToolResult(
             call_id=call.call_id,
             tool_name=call.name,
@@ -137,6 +148,7 @@ class HarnessExecutor:
 
     @staticmethod
     def _duration_ms(started: float) -> int:
+        """把单调时钟起点换算成整数毫秒耗时，负数按 0 处理。"""
         return max(0, round((time.monotonic() - started) * 1000))
 
 

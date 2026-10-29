@@ -10,7 +10,9 @@ type Row = {
   name: string;
 };
 
+/** DataTable 的列宽计算与固定操作列渲染行为。 */
 describe('DataTable', () => {
+  /** 验证横向滚动表格中固定操作列的单元格与表头均保持右侧吸附。 */
   it('keeps a sticky action column visible in a horizontally scrollable table', () => {
     const columns: DataTableColumn<Row>[] = [
       { key: 'name', title: '名称', dataIndex: 'name', width: 320 },

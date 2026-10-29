@@ -40,7 +40,11 @@ from app.security.encryption import decrypt_secret
 
 
 class LLMError(Exception):
-    """Raised when an LLM provider request or response normalization fails."""
+    """LLM 供应商请求失败或响应归一化失败时抛出的统一异常。
+
+    除展示消息外还携带 code、上游状态码、供应商错误码与 retryable 标记,
+    供上层决定是否重试,并向用户展示一致且已脱敏的错误详情。
+    """
 
     def __init__(
         self,
@@ -54,6 +58,10 @@ class LLMError(Exception):
         request_id: str | None = None,
         retryable: bool = False,
     ) -> None:
+        """用展示消息和可选的上游错误元数据初始化异常对象。
+
+        未显式给出 code 时,若消息本身形如 MODEL_* 错误码则自动采用。
+        """
         super().__init__(message)
         self.code = code or (
             message if message.startswith("MODEL_") and " " not in message else None
@@ -66,6 +74,10 @@ class LLMError(Exception):
         self.retryable = retryable
 
     def public_detail(self) -> dict[str, Any]:
+        """返回可安全下发给前端的错误详情字典。
+
+        code 缺失时回退为 MODEL_CONNECTION_FAILED,其余字段原样透出。
+        """
         return {
             "code": self.code or "MODEL_CONNECTION_FAILED",
             "message": str(self),
@@ -85,11 +97,20 @@ DEFAULT_MODEL_API_TIMEOUT_SECONDS = 600.0
 DEFAULT_INPUT_TOKEN_BUDGET = 32_000
 TURN_STAGE_MESSAGE_MARKER = "_agent_turn_message"
 class _CurrentStageText(str):
-    pass
+    """标记已渲染的阶段输入,组装请求时不再加"本轮输入"前缀。"""
 
 
 class LLMClient:
+    """按单条 ModelConfig 封装多协议的大模型调用入口。
+
+    构造时解密 API key、选择协议驱动,并合并 extra_body 与 thinking 配置;
+    请求失败统一抛出 LLMError。
+    """
     def __init__(self, model_config: ModelConfig):
+        """初始化协议客户端与调用参数。
+
+        协议不支持或 API key 缺失时抛出 LLMError,不发起网络请求。
+        """
         try:
             protocol = ModelApiProtocol(
                 getattr(model_config, "api_protocol", "openai_chat_completions")
@@ -178,6 +199,11 @@ class LLMClient:
         response_format: dict[str, str] | None = None,
         cancellation: CancellationToken | None = None,
     ) -> str:
+        """执行一次非流式文本生成并返回完整回复。
+
+        空响应会按 operation 策略重试;若上游拒绝图片参数,会剥离图片后在同轮重试;
+        成功后将本轮输入输出记录到阶段消息缓冲(延迟记录模式除外)。
+        """
         operation = current_llm_operation()
         max_output_tokens = operation_output_tokens(operation, self.max_output_tokens)
         empty_response_retries = operation_empty_response_retries(
@@ -306,6 +332,11 @@ class LLMClient:
         user_payload: dict[str, Any] | str,
         cancellation: CancellationToken | None = None,
     ) -> Iterator[str]:
+        """以迭代器形式产出流式生成的文本块。
+
+        丢弃仅含空白的开头块,首个非空块整体产出;全部尝试都为空时抛出 LLMError。
+        调用方需耗尽迭代器,传输与阶段记录才会完成。
+        """
         operation = current_llm_operation()
         max_output_tokens = operation_output_tokens(operation, self.max_output_tokens)
         empty_response_retries = operation_empty_response_retries(
@@ -520,6 +551,7 @@ class LLMClient:
         | AnthropicMessagesDriver
         | GeminiGenerateContentDriver
     ):
+        """返回当前协议驱动;实例上没有时按 api_protocol 懒加载并缓存。"""
         driver = getattr(self, "driver", None)
         if driver is None:
             protocol = getattr(
@@ -547,6 +579,11 @@ class LLMClient:
         *,
         accept_json_sequence: bool = False,
     ) -> Any:
+        """生成并解析 JSON,解析失败时携带错误信息重试修复。
+
+        最多尝试 JSON_REPAIR_ATTEMPTS 次修复;accept_json_sequence 为真时允许
+        连续多个顶层 JSON 值。全部失败抛出 LLMError 并附各次输出预览。
+        """
         outputs: list[str] = []
         next_payload = user_payload
         last_error: json.JSONDecodeError | None = None
@@ -634,13 +671,11 @@ class LLMClient:
         user_payload: dict[str, Any],
         cancellation: CancellationToken | None = None,
     ) -> Any:
-        """Accept consecutive top-level JSON values for sequence-aware consumers.
+        """接受连续多个顶层 JSON 值,供序列感知的调用方使用。
 
-        Most callers require exactly one JSON document and continue to use
-        :meth:`generate_json`. Harness is sequence-aware: some Responses-compatible
-        providers flatten multiple valid action items into consecutive JSON objects.
-        This opt-in entry point preserves those objects in provider order instead of
-        spending all repair attempts on text that is individually valid per item.
+        多数调用方只需要一个 JSON 文档,仍应使用 generate_json。Harness 需要序列感知:
+        部分兼容 Responses 的供应商会把多个合法动作项摊平成连续 JSON 对象,此入口按
+        供应商顺序保留它们,避免把逐项合法的文本耗在修复重试上。
         """
 
         return self.generate_json(
@@ -657,7 +692,13 @@ class LLMClient:
         json_mode_supported: bool,
         cancellation: CancellationToken | None = None,
     ) -> str:
+        """产出一次 JSON 候选文本,按协议决定是否启用 JSON 模式。
+
+        Anthropic 没有 response_format,改为在 system 提示中追加只输出 JSON 的约束;
+        上游不支持 JSON 模式时返回错误消息,供调用方降级重试。
+        """
         def call_generate_text(prompt: str, payload: dict[str, Any], **kwargs: Any) -> str:
+            """转发到 generate_text,并注入本轮调用的取消令牌。"""
             if cancellation is not None:
                 kwargs["cancellation"] = cancellation
             return self.generate_text(prompt, payload, **kwargs)
@@ -690,6 +731,10 @@ class LLMClient:
 
 
 def _completion_message_content(completion: Any) -> str:
+    """提取 completion 首个 choice 的 message.content 文本。
+
+    结构缺失或类型异常时返回空串,由调用方按空响应处理。
+    """
     try:
         choice = completion.choices[0]
         message = getattr(choice, "message", None)
@@ -700,11 +745,10 @@ def _completion_message_content(completion: Any) -> str:
 
 
 def _observable_completion_message(completion: Any) -> dict[str, Any]:
-    """Preserve the provider message before business-level response parsing.
+    """把供应商的原始 message 保留为审计数据,再交给业务解析。
 
-    Some SDKs expose extension fields such as ``reasoning_content`` or function-call
-    arguments outside ``content``. Keeping the complete message here prevents those
-    fields from disappearing when Harness later consumes only the visible text.
+    部分 SDK 把 reasoning_content、函数调用参数等扩展字段放在 content 之外,
+    先完整留存可避免 Harness 只消费可见文本时丢失这些字段。
     """
 
     try:
@@ -720,6 +764,7 @@ def _observable_completion_message(completion: Any) -> dict[str, Any]:
 
 
 def _observable_provider_payload(value: Any) -> Any:
+    """提取用于审计的供应商原始负载,缺失时回退到对象自身。"""
     provider_value = getattr(value, "provider_response", None)
     if provider_value is None:
         provider_value = getattr(value, "provider_event", None)
@@ -732,6 +777,7 @@ def _driver_observable_request(
     *,
     stream: bool,
 ) -> dict[str, Any]:
+    """取驱动自带的可见请求视图;旧驱动回退为去掉私有字段的请求副本。"""
     observable_request = getattr(driver, "observable_request", None)
     if callable(observable_request):
         return observable_request(request, stream=stream)
@@ -788,7 +834,11 @@ def _observable_model_value(
     _seen: set[int] | None = None,
     _depth: int = 0,
 ) -> Any:
-    """Convert provider SDK objects to lossless JSON-compatible audit data."""
+    """把供应商 SDK 对象转成无损、可 JSON 序列化的审计数据。
+
+    递归展开 Mapping、list 与 model_dump/to_dict,并截断超深嵌套与循环引用;
+    密钥字段按 _OBSERVABILITY_SECRET_KEYS 脱敏。
+    """
 
     if value is None or isinstance(value, (str, int, float, bool)):
         return _observable_value(value)
@@ -855,6 +905,10 @@ def _request_shape_metrics(
     serialized_payload: str | list[dict[str, Any]],
     request_messages: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """汇总请求形状指标,供观测与调试对比。
+
+    包含各段字符数、消息数量与角色、以及前缀指纹,不修改传入的消息。
+    """
     context_chars = sum(
         len(_content_text(message.get("content"))) for message in context_messages
     )
@@ -877,6 +931,7 @@ def _request_shape_metrics(
 
 
 def _request_prefix_fingerprints(messages: list[dict[str, Any]]) -> list[str]:
+    """按消息顺序计算滚动 SHA-256 前缀指纹,用于判断多轮请求的公共前缀。"""
     digest = hashlib.sha256()
     fingerprints: list[str] = []
     for message in messages:
@@ -897,11 +952,16 @@ def _request_prefix_fingerprints(messages: list[dict[str, Any]]) -> list[str]:
 
 
 def _normalize_thinking_mode(value: Any) -> str:
+    """归一化 thinking 开关;仅接受 enabled/disabled,其他值返回空串。"""
     mode = str(value or "").strip().lower()
     return mode if mode in {"enabled", "disabled"} else ""
 
 
 def _thinking_mode_for_model(mode: Any, configured_models: Any, model: Any) -> str:
+    """在模型命中允许列表时返回配置的 thinking 模式,否则返回空串。
+
+    allowed_models 为空表示对所有模型生效。
+    """
     normalized_mode = _normalize_thinking_mode(mode)
     if not normalized_mode:
         return ""
@@ -916,13 +976,17 @@ def _thinking_mode_for_model(mode: Any, configured_models: Any, model: Any) -> s
 
 
 def _normalize_extra_body(value: Any) -> dict[str, Any]:
+    """把映射型 extra_body 深拷贝为可变 dict;非映射输入返回空 dict。"""
     if not isinstance(value, Mapping):
         return {}
     return {str(key): _mutable_copy(item) for key, item in value.items()}
 
 
 def _merge_extra_body(base: Any, override: Any) -> dict[str, Any]:
-    """Merge provider fields with normalized protocol options without dropping either."""
+    """递归合并供应商 extra_body 与协议选项,两边字段都不丢弃。
+
+    同名键两侧都是 dict 时逐层合并,否则以 override 为准。
+    """
     merged = _normalize_extra_body(base)
     for key, value in _normalize_extra_body(override).items():
         current = merged.get(key)
@@ -934,6 +998,7 @@ def _merge_extra_body(base: Any, override: Any) -> dict[str, Any]:
 
 
 def _mutable_copy(value: Any) -> Any:
+    """递归复制为可变结构:tuple 转 list、Mapping 转 dict,其余深拷贝。"""
     if isinstance(value, Mapping):
         return {str(key): _mutable_copy(item) for key, item in value.items()}
     if isinstance(value, tuple):
@@ -942,6 +1007,7 @@ def _mutable_copy(value: Any) -> Any:
 
 
 def _thinking_mode_from_extra_body(extra_body: Any) -> str:
+    """从 extra_body.thinking.type 读取 thinking 模式,结构不符时返回空串。"""
     normalized = _normalize_extra_body(extra_body)
     thinking = normalized.get("thinking")
     if not isinstance(thinking, dict):
@@ -950,6 +1016,7 @@ def _thinking_mode_from_extra_body(extra_body: Any) -> str:
 
 
 def _thinking_request_kwargs(mode: Any, extra_body: Any = None) -> dict[str, Any]:
+    """构造请求用的 extra_body 参数,必要时写入 thinking.type。"""
     body = _normalize_extra_body(extra_body)
     normalized = _normalize_thinking_mode(mode)
     if normalized:
@@ -966,6 +1033,10 @@ def _request_messages(
     context_messages: list[dict[str, Any]],
     serialized_payload: str | list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """组装 system 提示、对话历史与当前输入的 messages 列表。
+
+    当前输入非空时作为最后一条 user 消息;无历史且输入为空时补一条 "{}"。
+    """
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt.rstrip()}
     ]
@@ -993,6 +1064,10 @@ def _request_messages(
 
 
 def _with_json_mode_instruction(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """深拷贝消息,并在最后一条 user 消息内容末尾追加"只输出 JSON"指令。
+
+    返回新列表,不修改入参。
+    """
     projected = copy.deepcopy(messages)
     instruction = (
         "Return exactly one valid json object. Do not output Markdown, code fences, "
@@ -1011,6 +1086,7 @@ def _with_json_mode_instruction(messages: list[dict[str, Any]]) -> list[dict[str
 
 
 def _messages_have_images(messages: list[dict[str, Any]]) -> bool:
+    """判断消息内容中是否包含 image/image_url/input_image 分段。"""
     return any(
         isinstance(part, dict)
         and str(part.get("type") or "") in {"image", "image_url", "input_image"}
@@ -1024,6 +1100,7 @@ def _messages_have_images(messages: list[dict[str, Any]]) -> bool:
 
 
 def _without_image_parts(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """深拷贝并剔除消息中的图片分段,文本为空时替换为图片不可用提示。"""
     stripped = copy.deepcopy(messages)
     for message in stripped:
         content = message.get("content")
@@ -1048,6 +1125,10 @@ def _without_image_parts(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _image_parameter_unsupported(exc: BaseException) -> bool:
+    """沿异常链收集文本,判断是否为"上游不支持图片参数"错误。
+
+    需同时命中图片相关关键词与不支持类关键词,避免误判普通失败。
+    """
     fragments: list[str] = []
     current: BaseException | None = exc
     visited: set[int] = set()
@@ -1095,6 +1176,11 @@ def _image_parameter_unsupported(exc: BaseException) -> bool:
 def _fit_request_messages(
     messages: list[dict[str, Any]], token_budget: int = DEFAULT_INPUT_TOKEN_BUDGET
 ) -> list[dict[str, Any]]:
+    """按 token 预算裁剪历史消息,保证请求落在预算内。
+
+    优先删除普通历史,再截断或成对丢弃轮次阶段消息,最后裁剪末条输入;
+    system 与最后一条输入始终保留。
+    """
     projected = copy.deepcopy(messages)
     while len(projected) > 2 and _request_tokens(projected) > token_budget:
         removable_index = next(
@@ -1138,6 +1224,7 @@ def _fit_request_messages(
 
 
 def _request_tokens(messages: list[dict[str, Any]]) -> int:
+    """按 UTF-8 字节数除以 4 粗估消息 token 数,并为每条消息计 6 token 开销。"""
     return sum(
         max(1, math.ceil(len(_content_text(message.get("content")).encode("utf-8")) / 4))
         + 6
@@ -1146,6 +1233,7 @@ def _request_tokens(messages: list[dict[str, Any]]) -> int:
 
 
 def _is_history_summary_message(message: dict[str, Any]) -> bool:
+    """按固定中文前缀判断消息是否为历史摘要(裁剪时优先保留)。"""
     content = _content_text(message.get("content")).lstrip()
     return content.startswith(
         ("历史的信息可以被总结为：", "近期的历史信息总结为：")
@@ -1153,12 +1241,17 @@ def _is_history_summary_message(message: dict[str, Any]) -> bool:
 
 
 def _is_turn_stage_message(message: dict[str, Any]) -> bool:
+    """判断消息是否带有轮次阶段标记。"""
     return message.get(TURN_STAGE_MESSAGE_MARKER) is True
 
 
 def _trim_turn_stage_messages(
     messages: list[dict[str, Any]], token_budget: int
 ) -> None:
+    """超预算时截断最长的轮次阶段消息,直到回到预算内。
+
+    只处理超过 512 字符的阶段消息,截断无实际缩短时停止以避免死循环。
+    """
     while _request_tokens(messages) > token_budget:
         candidates = [
             (len(_content_text(message.get("content"))), index)
@@ -1181,6 +1274,7 @@ def _trim_turn_stage_messages(
 def _drop_oldest_turn_stage_exchanges(
     messages: list[dict[str, Any]], token_budget: int
 ) -> None:
+    """超预算时成对丢弃最旧的轮次阶段问答,至少保留两条阶段消息。"""
     while _request_tokens(messages) > token_budget:
         stage_indices = [
             index
@@ -1204,6 +1298,10 @@ def _drop_oldest_turn_stage_exchanges(
 def _trim_request_message(
     message: dict[str, Any], token_budget: int
 ) -> dict[str, Any]:
+    """按 token 预算截断单条消息的文本,返回新字典而不改原消息。
+
+    列表型内容只截断第一个文本分段。
+    """
     content = message.get("content")
     byte_budget = max(4, token_budget * 4)
     if isinstance(content, list):
@@ -1225,6 +1323,10 @@ def _trim_request_message(
 
 
 def _trim_request_text(text: str, byte_budget: int) -> str:
+    """按 UTF-8 字节预算保留首尾,中间插入省略标记。
+
+    head 约占 70%,tail 占剩余部分,并按字符边界安全解码。
+    """
     encoded = text.encode("utf-8")
     if len(encoded) <= byte_budget:
         return text
@@ -1239,6 +1341,7 @@ def _trim_request_text(text: str, byte_budget: int) -> str:
 
 
 def _completion_span_metrics(completion: Any) -> dict[str, Any]:
+    """提取非流式 completion 的 span 指标:响应 id、结束原因与用量。"""
     if completion is None:
         return {}
     choices = getattr(completion, "choices", None) or []
@@ -1257,6 +1360,7 @@ def _completion_span_metrics(completion: Any) -> dict[str, Any]:
 
 
 def _usage_span_metrics(usage: Any) -> dict[str, Any]:
+    """兼容各协议字段名提取 usage 指标,并计算未命中缓存的输入 token 数。"""
     if usage is None:
         return {}
     input_tokens = _usage_value(usage, "prompt_tokens", "input_tokens")
@@ -1288,6 +1392,7 @@ def _usage_span_metrics(usage: Any) -> dict[str, Any]:
 
 
 def _usage_object(source: Any, *names: str) -> Any:
+    """按给定字段名依次读取 usage 字段,同时兼容 dict 与对象属性。"""
     for name in names:
         value = source.get(name) if isinstance(source, dict) else getattr(source, name, None)
         if value is not None:
@@ -1296,6 +1401,7 @@ def _usage_object(source: Any, *names: str) -> Any:
 
 
 def _usage_value(source: Any, *names: str) -> int | None:
+    """读取 usage 数值并转成 int;布尔、缺失或非数值返回 None。"""
     value = _usage_object(source, *names)
     if isinstance(value, bool):
         return None
@@ -1305,6 +1411,7 @@ def _usage_value(source: Any, *names: str) -> int | None:
 
 
 def _content_text(content: Any) -> str:
+    """把字符串、内容分段列表或单个分段拼成纯文本。"""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -1313,6 +1420,7 @@ def _content_text(content: Any) -> str:
 
 
 def _content_part_text(item: Any) -> str:
+    """从单个内容分段(dict 或对象)提取 text 文本,取不到时返回空串。"""
     if isinstance(item, str):
         return item
     text: Any = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
@@ -1325,6 +1433,7 @@ def _content_part_text(item: Any) -> str:
 
 
 def _completion_empty_diagnostic(completion: Any, attempt: int) -> str:
+    """生成单次空响应的诊断串,包含响应 id、结束原因与内容形状。"""
     choices = getattr(completion, "choices", None) or []
     response_id = _safe_fragment(getattr(completion, "id", None), 48) or "missing"
     if not choices:
@@ -1362,6 +1471,7 @@ def _stream_empty_diagnostic(
     finish_reasons: set[str],
     response_ids: set[str],
 ) -> str:
+    """生成单次空流式响应的诊断串,包含 chunk 数、结束原因与响应 id。"""
     return (
         f"attempt_{attempt}: stream_chunks={chunk_count}, choice_chunks={choice_chunk_count}, "
         f"finish_reason={','.join(sorted(finish_reasons)) or 'missing'}, text_chars=0, "
@@ -1370,6 +1480,7 @@ def _stream_empty_diagnostic(
 
 
 def _empty_response_detail(client: Any, diagnostics: list[str]) -> str:
+    """汇总各次空响应诊断,拼出带模型与端点的错误消息。"""
     attempts = max(1, len(diagnostics))
     model = _safe_fragment(getattr(client, "model", None), 80) or "unknown"
     endpoint = _endpoint_label(getattr(client, "base_url", None))
@@ -1381,6 +1492,10 @@ def _empty_response_detail(client: Any, diagnostics: list[str]) -> str:
 
 
 def _provider_failure_detail(client: Any, exc: Exception) -> str:
+    """拼装供应商调用失败详情,并对错误信息做脱敏与截断。
+
+    尽量提取状态码、供应商错误码、请求 id 与上游响应体,缺失字段自动省略。
+    """
     model = _safe_fragment(getattr(client, "model", None), 80) or "unknown"
     endpoint = _endpoint_label(getattr(client, "base_url", None))
     timeout = getattr(client, "timeout_seconds", None)
@@ -1421,6 +1536,7 @@ def _provider_failure_detail(client: Any, exc: Exception) -> str:
 
 
 def _llm_error_from_protocol(client: Any, exc: ProtocolCallError) -> LLMError:
+    """把驱动层的 ProtocolCallError 转成携带可重试标记的 LLMError。"""
     return LLMError(
         _provider_failure_detail(client, exc),
         code=exc.code,
@@ -1434,6 +1550,7 @@ def _llm_error_from_protocol(client: Any, exc: ProtocolCallError) -> LLMError:
 
 
 def _content_shape(content: Any) -> str:
+    """描述 content 的类型与有效字符数,用于空响应诊断。"""
     if content is None:
         return "null"
     text = _content_text(content)
@@ -1445,6 +1562,7 @@ def _content_shape(content: Any) -> str:
 
 
 def _reasoning_text(value: Any) -> str:
+    """依次尝试 reasoning_content、reasoning、thinking 字段,返回首个非空推理文本。"""
     if value is None:
         return ""
     for key in ("reasoning_content", "reasoning", "thinking"):
@@ -1456,6 +1574,7 @@ def _reasoning_text(value: Any) -> str:
 
 
 def _safe_fragment(value: Any, limit: int) -> str:
+    """压缩空白、脱敏常见密钥格式,并把文本截断到指定长度。"""
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     text = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "sk-***", text)
     text = re.sub(r"\bpt-[A-Za-z0-9_-]{8,}\b", "pt-***", text)
@@ -1468,6 +1587,7 @@ def _safe_fragment(value: Any, limit: int) -> str:
 
 
 def _endpoint_label(value: Any) -> str:
+    """生成不含查询串与凭证的端点标签;无法解析时返回占位值。"""
     raw = str(value or "").strip()
     if not raw:
         return "unknown"
@@ -1486,6 +1606,7 @@ def _endpoint_label(value: Any) -> str:
 
 
 def _extract_json(text: str) -> str:
+    """去掉 Markdown 代码围栏,并截取最外层花括号之间的 JSON 文本。"""
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.strip("`").strip()
@@ -1499,6 +1620,11 @@ def _extract_json(text: str) -> str:
 
 
 def _loads_llm_json(text: str) -> Any:
+    """依次尝试多种修复后的 JSON 变体解析文本。
+
+    普通 json.loads 全失败后回退 ast.literal_eval 接受 Python 字面量;
+    仍失败则抛出最后一次 JSONDecodeError。
+    """
     candidate = _extract_json(text)
     last_error: json.JSONDecodeError | None = None
     seen: set[str] = set()
@@ -1522,7 +1648,10 @@ def _loads_llm_json(text: str) -> Any:
 
 
 def _loads_llm_json_sequence(text: str) -> list[Any]:
-    """Decode two or more consecutive top-level JSON values without reordering."""
+    """按原顺序解析两个及以上连续的顶层 JSON 值,不重排顺序。
+
+    单个 JSON 文档仍应走 generate_json;此处只接受至少两个值,否则抛错。
+    """
 
     candidate = _extract_json(text)
     last_error: json.JSONDecodeError | None = None
@@ -1557,6 +1686,7 @@ def _loads_llm_json_sequence(text: str) -> list[Any]:
 
 
 def _json_candidate_variants(text: str) -> tuple[str, ...]:
+    """生成 JSON 候选变体:原文、去尾逗号、修复字符串及两者叠加。"""
     stripped = text.strip()
     no_trailing_commas = _remove_trailing_commas(stripped)
     repaired_strings = _repair_json_string_content(stripped)
@@ -1570,10 +1700,15 @@ def _json_candidate_variants(text: str) -> tuple[str, ...]:
 
 
 def _remove_trailing_commas(text: str) -> str:
+    """删除对象或数组结尾多余的逗号。"""
     return re.sub(r",\s*([}\]])", r"\1", text)
 
 
 def _repair_json_string_content(text: str) -> str:
+    """修复字符串内部未转义的换行与引号,使常见非法 JSON 可解析。
+
+    仅在引号不像结构闭合时补转义,避免破坏合法字符串边界。
+    """
     output: list[str] = []
     in_string = False
     index = 0
@@ -1613,6 +1748,7 @@ def _repair_json_string_content(text: str) -> str:
 
 
 def _quote_likely_closes_string(text: str, quote_index: int) -> bool:
+    """判断引号后是否紧跟 : , } ] 或文本末尾,以区分字符串闭合与内部引号。"""
     index = quote_index + 1
     while index < len(text) and text[index].isspace():
         index += 1
@@ -1620,6 +1756,7 @@ def _quote_likely_closes_string(text: str, quote_index: int) -> bool:
 
 
 def _preview(text: str, limit: int = 1200) -> str:
+    """截断文本用于错误预览,超出 limit 时追加 truncated 标记。"""
     if len(text) <= limit:
         return text
     return text[:limit] + "\n...<truncated>"
@@ -1636,11 +1773,10 @@ _OBSERVABILITY_SECRET_KEYS = {
 
 
 def _observable_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return the exact textual model input without persisting binary image bodies.
+    """返回模型输入的文本副本用于审计,不保留图片二进制内容。
 
-    Conversation logs are an operator-facing debugging surface, so text is intentionally
-    not truncated. Embedded data URLs are the exception: retaining their base64 payload
-    would make a single trace event impractically large while adding no prompt insight.
+    对话日志面向运维排查,因此文本不截断;内嵌 data URL 只保留头部与长度,
+    避免单条 trace 因 base64 载荷膨胀。
     """
 
     return [_observable_value(message) for message in messages]
@@ -1653,6 +1789,7 @@ def _observable_request_parameters(
     response_format: dict[str, str] | None,
     stream: bool,
 ) -> dict[str, Any]:
+    """归一化记录本次请求的关键参数,便于对比不同尝试。"""
     parameters: dict[str, Any] = {
         "temperature": temperature,
         "max_output_tokens": max_output_tokens,
@@ -1664,6 +1801,11 @@ def _observable_request_parameters(
 
 
 def _observable_value(value: Any, *, key: str = "") -> Any:
+    """深拷贝可观测值,并对敏感字段与 base64 data URL 做脱敏处理。
+
+    密钥键名按 _OBSERVABILITY_SECRET_KEYS 命中即替换为 [REDACTED];
+    data URL 只保留头部与 base64 长度。
+    """
     if key.lower() in _OBSERVABILITY_SECRET_KEYS:
         return "[REDACTED]"
     if isinstance(value, dict):
@@ -1680,6 +1822,7 @@ def _observable_value(value: Any, *, key: str = "") -> Any:
 
 
 def _response_format_unsupported(message: str) -> bool:
+    """判断错误消息是否表示上游不支持 response_format 参数。"""
     lowered = message.lower()
     return "response_format" in lowered and any(
         phrase in lowered
@@ -1696,12 +1839,18 @@ def _response_format_unsupported(message: str) -> bool:
 
 
 def _empty_response(message: str) -> bool:
+    """判断错误消息是否为模型返回空响应。"""
     return EMPTY_RESPONSE_MESSAGE.lower() in message.lower()
 
 
 def _project_context_messages(
     user_payload: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """拆分对话上下文与当前输入,过滤空消息与非 user/assistant 角色。
+
+    末条历史 user 消息与 user_message 相同时去掉重复的当前输入,
+    返回 (历史消息, 去掉空值的剩余负载)。
+    """
     payload = copy.deepcopy(user_payload)
     context = payload.pop("conversation_context", None)
     if not isinstance(context, dict):
@@ -1747,6 +1896,11 @@ def _project_context_messages(
 def _prepare_user_input(
     user_payload: dict[str, Any] | str,
 ) -> tuple[list[dict[str, Any]], str | list[dict[str, Any]]]:
+    """把调用方输入归一化为 (历史消息, 当前输入) 二元组。
+
+    字符串输入直接作为当前输入;阶段协议输入走 _prepare_stage_user_input;
+    其余情况投影对话历史并序列化剩余负载。
+    """
     if isinstance(user_payload, str):
         return [], user_payload.strip()
     if isinstance(user_payload.get(STAGE_PROTOCOL_KEY), dict):
@@ -1758,6 +1912,10 @@ def _prepare_user_input(
 def _prepare_stage_user_input(
     user_payload: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], str | list[dict[str, Any]]]:
+    """准备阶段协议请求:历史消息、轮次消息与渲染后的当前阶段输入。
+
+    当前 user 消息若已重复出现在历史末尾则移出历史,其图片附件并入本轮输入。
+    """
     context = user_payload.get("conversation_context")
     payload = copy.deepcopy(
         {
@@ -1800,6 +1958,10 @@ def _prepare_stage_user_input(
 
 
 def _project_messages_from_context(context: Any) -> list[dict[str, Any]]:
+    """从 conversation_context.messages 投影合法的 user/assistant 消息。
+
+    用户图片统一转成 image_url 分段;无文本无图片的消息被丢弃。
+    """
     if not isinstance(context, dict) or not isinstance(context.get("messages"), list):
         return []
     projected: list[dict[str, Any]] = []
@@ -1827,6 +1989,7 @@ def _project_messages_from_context(context: Any) -> list[dict[str, Any]]:
 
 
 def _project_turn_stage_messages(context: Any) -> list[dict[str, Any]]:
+    """投影带轮次标记的 user/assistant 阶段消息,空内容消息被丢弃。"""
     if not isinstance(context, dict):
         return []
     messages = context.get(TURN_STAGE_MESSAGES_KEY)
@@ -1856,6 +2019,11 @@ def _record_stage_exchange(
     *,
     request_user_content: Any = None,
 ) -> None:
+    """把本轮用户输入与助手输出追加到阶段消息缓冲。
+
+    非阶段协议、缺少 conversation_context 或输出为空时直接返回;
+    请求输入不可用时按阶段模板重新渲染。
+    """
     if not isinstance(context_payload, dict):
         return
     if not isinstance(context_payload.get(STAGE_PROTOCOL_KEY), dict):
@@ -1884,6 +2052,7 @@ def _record_stage_exchange(
 
 
 def _drop_empty_values(value: Any) -> Any:
+    """递归移除 None、空串、空列表与空 dict,返回新结构。"""
     if isinstance(value, dict):
         projected = {
             key: _drop_empty_values(item)
@@ -1905,6 +2074,7 @@ def _drop_empty_values(value: Any) -> Any:
 
 
 def _normalize_image_parts(value: Any) -> list[dict[str, Any]]:
+    """只保留含非空 url 的 image_url 分段,并透传可选 detail 字段。"""
     if not isinstance(value, list):
         return []
     parts: list[dict[str, Any]] = []

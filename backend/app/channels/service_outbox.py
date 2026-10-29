@@ -59,6 +59,10 @@ def _stage_failed_delivery(
     error: str,
     idempotency_key: str | None = None,
 ) -> None:
+    """把必然失败的投递直接落库为 failed 状态，不进入重试队列。
+
+    同一 idempotency_key 已存在时直接返回，避免重复记录；这里不 commit，随调用方事务提交。
+    """
     stable_key = idempotency_key or message.id
     existing = db.exec(
         select(ChannelDelivery).where(ChannelDelivery.idempotency_key == stable_key)
@@ -83,6 +87,10 @@ def _stage_failed_delivery(
 
 
 def _message_client_turn_id(db: Session, message: Message) -> str:
+    """取回复所属客户端轮次的 client_turn_id，用于构造稳定的投递幂等键。
+
+    优先读被回复用户消息的元数据，回退当前消息自身的元数据；都没有时返回空串。
+    """
     metadata = message.metadata_json or {}
     user_message_id = str(metadata.get("user_message_id") or "").strip()
     user_message = db.get(Message, user_message_id) if user_message_id else None
@@ -94,6 +102,7 @@ def _message_client_turn_id(db: Session, message: Message) -> str:
 
 
 def _reply_idempotency_key(db: Session, binding_id: str, message: Message) -> str:
+    """按 binding 与 client_turn_id 生成回复幂等键；无轮次标识时退回 message.id。"""
     client_turn_id = _message_client_turn_id(db, message)
     if client_turn_id:
         return f"channel-reply:{binding_id}:{client_turn_id}"
@@ -106,6 +115,11 @@ def _immutable_delivery_target(
     chat_session: ChatSession,
     message: Message,
 ) -> dict:
+    """确定回复的投递目标快照，避免 worker 稍后读到已被改写的会话目标。
+
+    有 client_turn_id 时取该轮入站事件的 target_json；legacy 会话无轮次标识时
+    退化为会话当前 channel_target_json 的拷贝。
+    """
     client_turn_id = _message_client_turn_id(db, message)
     if not client_turn_id:
         # Legacy sessions may not carry a turn id. Snapshot the target at staging time;
@@ -257,6 +271,11 @@ def stage_channel_delivery(db: Session, chat_session: ChatSession, message: Mess
 
 
 def _deliver_due(db: Session, *, reaction_lane: bool = False) -> int:
+    """领取并投递本批次到期的 pending 投递，返回真正领取成功的条数。
+
+    只处理 next_attempt_at 已到期的行，并按 reaction_lane 过滤普通消息或 reaction；
+    单条失败不影响同批其余投递。
+    """
     now = utc_now()
     statement = (
         select(ChannelDelivery)
@@ -288,6 +307,11 @@ def _claim_delivery(
     now,
     reaction_lane: bool,
 ) -> ChannelDelivery | None:
+    """用条件 UPDATE 把一条 pending 投递抢占为本代 worker 的 sending，返回领取结果。
+
+    状态或到期时间不满足时不生效，返回 None 表示已被其它 worker 抢走；
+    内部 commit 以及时释放写锁。
+    """
     owner = new_id("delivery-owner")
     claim = (
         update(ChannelDelivery)
@@ -328,7 +352,11 @@ def _finish_delivery_claim(
     next_attempt_at=None,
     delivered_at=None,
 ) -> bool:
-    """Commit a delivery outcome only for the worker generation that owns it."""
+    """仅当投递仍由本代 worker 持有时写入终态，返回是否写入成功。
+
+    用 delivery_owner 与 delivery_generation 校验所有权，避免超时被接管的旧 worker
+    覆盖新一代结果；内部 commit。
+    """
     result = db.exec(
         update(ChannelDelivery)
         .where(
@@ -357,12 +385,18 @@ def _reaction_event_for_delivery(
     delivery: ChannelDelivery,
     channel: str,
 ) -> ChannelInboundEvent | None:
+    """定位 reaction 投递对应的入站事件，边界校验不通过时返回 None。
+
+    target.event_pk 优先，缺失时按租户/binding/渠道/事件 id 查询；
+    命中后还要求事件 event_id 与 target.message_id 一致。
+    """
     target = dict(delivery.target_json or {})
     message_id = str(target.get("message_id") or "").strip()
     if not message_id:
         return None
 
     def valid(event: ChannelInboundEvent | None) -> bool:
+        """校验事件是否落在该投递的租户、binding 与渠道边界内。"""
         return bool(
             event
             and event.binding_id == delivery.binding_id
@@ -390,6 +424,11 @@ def _stage_reaction_removal(
     delivery: ChannelDelivery,
     event: ChannelInboundEvent,
 ) -> None:
+    """登记一条 reaction_remove 投递，用于撤回挂在消息上的标记。
+
+    同一事件与 reaction_id 只登记一次；目标沿用原事件并补上 reaction_id 与
+    渠道所需的 reaction_token。
+    """
     reaction_id = str(event.reaction_id or "").strip()
     if not reaction_id:
         return
@@ -424,6 +463,11 @@ def _event_has_delivered_response(
     db: Session,
     event: ChannelInboundEvent,
 ) -> bool:
+    """判断该入站事件是否已有投递成功的最终回复。
+
+    跳过 reaction 类投递；只有 reply/error_notice 或带 reaction_final 标记的投递，
+    且目标 message_id 与事件 id 一致时才算命中。
+    """
     deliveries = db.exec(
         select(ChannelDelivery).where(
             ChannelDelivery.binding_id == event.binding_id,
@@ -443,6 +487,10 @@ def _event_has_delivered_response(
 
 
 def _deliver_one(db: Session, delivery: ChannelDelivery) -> None:
+    """在 binding 生命周期锁内刷新投递，再执行一次发送。
+
+    刷新后若已不是 sending(被接管或已结束)则直接返回，不再重复发送。
+    """
     from app.channels import binding_lifecycle_lock
 
     with binding_lifecycle_lock(delivery.binding_id):
@@ -454,6 +502,11 @@ def _deliver_one(db: Session, delivery: ChannelDelivery) -> None:
 
 
 def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
+    """执行单条投递：先校验绑定与会话边界，再按 kind 调用适配器。
+
+    失败时依据 retryable 与最大重试次数决定转 failed 还是指数退避重排；
+    成功后回写 handoff message_id，并在最终回复时登记 reaction 撤回。
+    """
     from app.channels.adapters import get_channel_adapter
 
     settings = get_settings()
@@ -624,7 +677,11 @@ def cleanup_channel_reactions_before_binding_delete(
     db: Session,
     binding: ChannelBinding,
 ) -> None:
-    """Delete known remote reactions before their binding credentials are removed."""
+    """删除绑定前清理远端残留的 reaction 标记。
+
+    先撤回状态不确定的 reaction_add(重挂幂等则直接撤回，否则先回查)；
+    再按事件上记录的 reaction_id 撤回，并清空本地字段。
+    """
     token = channel_reaction_token(binding.channel)
     if not token:
         return
@@ -694,6 +751,11 @@ def cleanup_channel_reactions_before_binding_delete(
 
 
 def _reset_stuck_deliveries(db: Session, *, reaction_lane: bool = False) -> None:
+    """把超过租约仍处于 sending 的投递恢复为可再处理状态。
+
+    非 reaction 投递的远端结果未知，直接判 failed(remote_state_unknown)；
+    reaction 投递有回查或幂等语义，重置为 pending 交给新一代 worker。
+    """
     now = utc_now()
     stale_before = now - timedelta(seconds=SENDING_STALE_SECONDS)
     statement = select(ChannelDelivery).where(
@@ -739,6 +801,7 @@ def run_delivery_daemon(
     poll_seconds: float | None = None,
     db_engine=None,
 ) -> None:
+    """启动普通消息投递守护循环(不处理 reaction)，可直接作为线程 target。"""
     _run_delivery_lane(
         once=once,
         poll_seconds=poll_seconds,
@@ -753,6 +816,7 @@ def run_reaction_delivery_daemon(
     poll_seconds: float | None = None,
     db_engine=None,
 ) -> None:
+    """启动只处理 reaction_add/reaction_remove 的投递守护循环。"""
     _run_delivery_lane(
         once=once,
         poll_seconds=poll_seconds,
@@ -768,6 +832,11 @@ def _run_delivery_lane(
     db_engine,
     reaction_lane: bool,
 ) -> None:
+    """投递通道公共循环：先重置卡死投递，再按固定间隔轮询到期任务。
+
+    once=True 只跑一轮；轮询间隔取 poll_seconds，未指定时用渠道投递配置；
+    单轮异常只记日志，不中断循环。
+    """
     use_engine = db_engine or engine
     interval = poll_seconds if poll_seconds is not None else get_settings().channel_delivery_poll_seconds
     with Session(use_engine) as db:
@@ -785,6 +854,7 @@ def _run_delivery_lane(
 
 
 def start_delivery_daemon(*, db_engine=None) -> None:
+    """启动普通与 reaction 两条投递守护线程，已在运行的线程不重复创建。"""
     global _delivery_thread, _reaction_delivery_thread
     _delivery_stop.clear()
     if not (_delivery_thread and _delivery_thread.is_alive()):
@@ -806,6 +876,10 @@ def start_delivery_daemon(*, db_engine=None) -> None:
 
 
 def stop_delivery_daemon(timeout_seconds: float = 5.0) -> bool:
+    """通知投递守护线程退出并在超时内等待结束，返回是否全部停止。
+
+    全部停止时清空线程引用，便于之后重新 start；超时未退出的线程保留引用。
+    """
     global _delivery_thread, _reaction_delivery_thread
     _delivery_stop.set()
     threads = [_delivery_thread, _reaction_delivery_thread]

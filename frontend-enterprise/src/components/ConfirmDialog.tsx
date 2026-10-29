@@ -15,25 +15,27 @@ import IconWarningFill from '../assets/icons/warning-fill.svg?react';
 export type ConfirmDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Header title. Supports rich content (e.g. the target name in a `<strong>`). */
+  /** 头部标题，支持富内容（例如用 `<strong>` 包裹目标名称）。 */
   title: ReactNode;
-  /** Optional supporting copy shown below the title. */
+  /** 可选的补充说明，展示在标题下方。 */
   description?: ReactNode;
   confirmText?: string;
   cancelText?: string;
   onConfirm: () => void;
-  /** When true, buttons are disabled and closing via overlay/esc is blocked. */
+  /** 为 true 时按钮禁用，并禁止通过遮罩或 ESC 关闭。 */
   loading?: boolean;
-  /** Destructive (red) confirm button. Defaults to true — matches the delete flow. */
+  /** 确认按钮是否使用危险（红色）样式，默认 true，与删除流程一致。 */
   destructive?: boolean;
-  /** Override the leading header icon. Pass `null` to hide it. */
+  /** 覆盖头部前置图标；传入 `null` 可隐藏图标。 */
   icon?: ReactNode;
 };
 
 /**
- * Confirmation popup matching the SD1 design (node 281:5153): a warning icon +
- * title header, a muted description, and a right-aligned cancel / confirm footer.
- * Built on the Radix `AlertDialog` primitives so focus trapping and a11y are handled.
+ * 删除/危险操作确认弹窗（对齐 SD1 设计稿 node 281:5153）。
+ *
+ * - 结构：警示图标 + 标题头部、灰色说明文案，以及右对齐的「取消 / 确认」底部按钮。
+ * - 基于 Radix `AlertDialog` 原语实现，焦点捕获与无障碍语义由其负责。
+ * - `loading` 为 true 时按钮禁用，并拦截遮罩/ESC 触发的关闭。
  */
 export function ConfirmDialog({
   open,

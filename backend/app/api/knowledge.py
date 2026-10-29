@@ -90,6 +90,11 @@ def upload_document(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeIngestJobRead:
+    """上传文档并创建异步入库任务。
+
+    未指定知识库时按标题或文件名新建（名称在租户内去重），随后解析上传版本并排队
+    knowledge_ingest 任务；接口立即返回任务视图，解析进度需轮询 /jobs。
+    """
     ensure_tenant(db, request.tenant_id)
     creator_metadata = user_creator_metadata(current_user, request.metadata or {})
     knowledge_base = _resolve_upload_knowledge_base(
@@ -134,6 +139,11 @@ def import_okf_bundle(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """把 OKF bundle 导入为一份文档与若干概念页。
+
+    先解码并解析概念 markdown，再建文档、批量 upsert 概念并生成证据行；解码失败或
+    包内没有概念文件时返回 400。返回文档 id、版本与概念数量的导入摘要。
+    """
     ensure_tenant(db, request.tenant_id)
     try:
         content = base64.b64decode(request.content_base64)
@@ -240,6 +250,11 @@ def _resolve_upload_knowledge_base(
     current_user: object | None = None,
     creator_metadata: dict[str, Any] | None = None,
 ) -> KnowledgeBase:
+    """解析上传的目标知识库，必要时按上传信息新建并绑定分支。
+
+    指定 knowledge_base_id 时校验租户、归档状态与管理员权限；未指定时创建知识库，
+    agent 私有调用会打私有标记并建私有分支，否则登记为 open gallery 资源。
+    """
     agent = (
         ensure_agent_scope_manager(db, request.tenant_id, agent_id, current_user)
         if agent_id
@@ -301,6 +316,7 @@ def _resolve_upload_knowledge_base(
 
 
 def _knowledge_base_name_from_upload(request: KnowledgeDocumentUploadRequest) -> str:
+    """取上传标题或文件名主干作为新知识库名称，都为空时回落到“未命名知识库”。"""
     title = (request.title or "").strip()
     if title:
         return title
@@ -309,6 +325,7 @@ def _knowledge_base_name_from_upload(request: KnowledgeDocumentUploadRequest) ->
 
 
 def _unique_knowledge_base_name(db: Session, tenant_id: str, base_name: str) -> str:
+    """返回租户内尚未占用的知识库名称，重名时依次追加 " 2"、" 3" 等后缀。"""
     normalized_base = base_name.strip() or "未命名知识库"
     existing_names = set(
         db.exec(select(KnowledgeBase.name).where(KnowledgeBase.tenant_id == tenant_id)).all()
@@ -335,6 +352,10 @@ def list_jobs(
     limit: int = Query(8, ge=1, le=50),
     db: Session = Depends(get_session),
 ) -> list[KnowledgeIngestJobRead]:
+    """列出当前可见知识库版本下的入库任务，按创建时间倒序供前端轮询。
+
+    先收敛长期停留在取消请求中的任务；status 支持逗号分隔多值过滤，limit 上限 50。
+    """
     ensure_tenant(db, tenant_id)
     KnowledgeService(db).finalize_stale_cancel_requested_jobs(tenant_id)
     visible_version_ids = visible_knowledge_base_version_ids(
@@ -369,6 +390,7 @@ def get_job(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> KnowledgeIngestJobRead:
+    """读取单个入库任务，校验租户与版本可见性，并顺带收敛陈旧的取消请求。"""
     ensure_tenant(db, tenant_id)
     job = db.get(KnowledgeIngestJob, job_id)
     if not job or job.tenant_id != tenant_id:
@@ -385,6 +407,7 @@ def cancel_job(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeIngestJobRead:
+    """取消入库任务，仅该知识库的管理角色可操作；任务不存在时返回 404。"""
     ensure_current_user_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     existing = db.get(KnowledgeIngestJob, job_id)
@@ -410,6 +433,11 @@ def list_documents(
     include_all_versions: bool = Query(False),
     db: Session = Depends(get_session),
 ) -> list[KnowledgeDocumentRead]:
+    """列出当前范围可见的知识文档。
+
+    include_all_versions 为真时按知识库过滤（含历史版本），否则只取可见版本下的文档；
+    无可见版本或知识库不在范围内时返回空列表。
+    """
     ensure_tenant(db, tenant_id)
     visible_versions = visible_knowledge_base_versions(
         db, tenant_id, agent_id, include_inactive=True
@@ -446,6 +474,7 @@ def get_document(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> KnowledgeDocumentRead:
+    """按 id 读取文档，并校验其知识库版本在当前 agent 或画廊范围内可见。"""
     row = _get_document(db, tenant_id, document_id)
     _ensure_knowledge_version_visible(db, tenant_id, row.knowledge_base_version_id, agent_id)
     return document_read(row)
@@ -459,6 +488,11 @@ def update_document(
     current_user: User = Depends(get_current_user),
     agent_id: str | None = Query(None),
 ) -> KnowledgeDocumentRead:
+    """更新文档内容、标题、状态或元数据。
+
+    非 overall 的 agent 会先在本分支复制出文档再写入；content_md 交给服务层重建分块，
+    传入 expected_updated_at 时做乐观并发校验，版本不一致返回 409。
+    """
     source_row = _get_document(db, request.tenant_id, document_id)
     if request.expected_updated_at and source_row.updated_at.isoformat() != request.expected_updated_at:
         raise HTTPException(
@@ -533,6 +567,11 @@ def _document_for_version(
     source: KnowledgeDocument,
     version_id: str,
 ) -> KnowledgeDocument:
+    """在目标版本中定位源文档的分支副本。
+
+    版本相同直接返回源文档；否则按文件名与类型匹配，优先标题和创建时间都一致的行，
+    找不到副本时抛 404。
+    """
     if source.knowledge_base_version_id == version_id:
         return source
     rows = db.exec(
@@ -563,6 +602,7 @@ def get_document_buckets(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> list[KnowledgeBucketRead]:
+    """列出文档下各知识桶，并带上分块数量与 ready/incomplete 状态。"""
     document = _get_document(db, tenant_id, document_id)
     _ensure_knowledge_version_visible(db, tenant_id, document.knowledge_base_version_id, agent_id)
     rows = _safe_document_bucket_rows(db, tenant_id, document_id)
@@ -586,6 +626,10 @@ def update_bucket(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeBucketRead:
+    """更新知识桶标题、摘要与元数据，并回写文档派生的 OKF 概念。
+
+    返回带分块统计的桶视图；桶不存在或不属于该租户时返回 404。
+    """
     ensure_tenant(db, request.tenant_id)
     row = db.get(KnowledgeBucket, bucket_id)
     if not row or row.tenant_id != request.tenant_id:
@@ -627,6 +671,7 @@ def get_bucket_chunks(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> list[KnowledgeChunkRead]:
+    """按 chunk_index 顺序返回知识桶内的分块；桶需属于该租户且版本可见。"""
     ensure_tenant(db, tenant_id)
     bucket = db.get(KnowledgeBucket, bucket_id)
     if not bucket or bucket.tenant_id != tenant_id:
@@ -643,6 +688,10 @@ def update_chunk(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeChunkRead:
+    """更新分块内容、摘要与元数据，并用分块内容回填所属桶的聚合文本。
+
+    同时刷新文档派生的 OKF 概念；分块或租户不匹配时返回 404。
+    """
     ensure_tenant(db, request.tenant_id)
     row = db.get(KnowledgeChunk, chunk_id)
     if not row or row.tenant_id != request.tenant_id:
@@ -676,6 +725,11 @@ def search_knowledge(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> KnowledgeSearchResponse:
+    """在可见知识范围内执行检索问答。
+
+    先校验调用者的 agent 视图权限，再把请求的版本 id 收敛到可见集合；无可见知识时
+    直接返回带 trace 的空响应，不触达检索模型。
+    """
     require_agent_scope_viewer(request.tenant_id, request.agent_id, current_user, db)
     ensure_tenant(db, request.tenant_id)
     model_config = _get_request_model(db, request.tenant_id, request.model_config_id)
@@ -700,6 +754,7 @@ def search_knowledge(
 
 
 def _get_default_model(db: Session, tenant_id: str) -> ModelConfig | None:
+    """取租户内启用的默认模型并解析为运行时配置，未配置时返回 None。"""
     row = db.exec(
         select(ModelConfig).where(
             ModelConfig.tenant_id == tenant_id,
@@ -713,6 +768,10 @@ def _get_default_model(db: Session, tenant_id: str) -> ModelConfig | None:
 def _get_request_model(
     db: Session, tenant_id: str, model_config_id: str | None = None
 ) -> ModelConfig | None:
+    """按 id 解析请求指定的模型配置，未指定时回落到默认模型。
+
+    配置不存在、跨租户或已禁用时抛 404。
+    """
     if not model_config_id:
         return _get_default_model(db, tenant_id)
     model_config = db.get(ModelConfig, model_config_id)
@@ -722,6 +781,7 @@ def _get_request_model(
 
 
 def _runtime_model(db: Session, tenant_id: str, row: ModelConfig):
+    """把数据库中的模型配置解析成运行时配置（含密钥与端点覆盖）。"""
     return resolve_model_config_for_runtime(db, tenant_id, row.id)
 
 
@@ -737,6 +797,11 @@ def list_discoveries(
     agent_id: str | None = Query(None),
     db: Session = Depends(get_session),
 ) -> list[KnowledgeDiscoveryRead]:
+    """列出知识发现建议，只包含当前范围可见版本的数据。
+
+    status 可精确过滤；pending 的 skill 类建议会先校验 payload，不合法的直接跳过，
+    避免前端展示无法确认的条目。
+    """
     ensure_tenant(db, tenant_id)
     visible_versions = visible_knowledge_base_versions(
         db, tenant_id, agent_id, include_inactive=True
@@ -777,6 +842,7 @@ def confirm_discovery(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """确认一条知识发现建议并落库；payload 校验失败返回 422，重复确认等冲突返回 409。"""
     row = _get_discovery(db, tenant_id, suggestion_id)
     _ensure_open_gallery_knowledge_admin(db, tenant_id, row.knowledge_base_id, current_user)
     try:
@@ -795,6 +861,7 @@ def reject_discovery(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """拒绝一条知识发现建议；建议已被处理时返回 409。"""
     row = _get_discovery(db, tenant_id, suggestion_id)
     _ensure_open_gallery_knowledge_admin(db, tenant_id, row.knowledge_base_id, current_user)
     try:
@@ -805,6 +872,10 @@ def reject_discovery(
 
 
 def _refresh_document_okf_concepts(db: Session, document: KnowledgeDocument) -> None:
+    """按文档当前章节树与知识桶重建其 Source Document/Source Section 概念。
+
+    先删除旧派生概念再整体 upsert；文档既无章节树也无桶时直接返回。
+    """
     metadata = document.metadata_json or {}
     section_nodes = (
         metadata.get("section_tree") if isinstance(metadata.get("section_tree"), list) else []
@@ -845,6 +916,10 @@ def _sync_bucket_content_from_chunks(
     tenant_id: str,
     bucket_id: str,
 ) -> KnowledgeBucket | None:
+    """用桶内分块内容重算桶的聚合文本、分块数与代表分块 id。
+
+    聚合文本截断到 6000 字符；桶缺失或租户不匹配时返回 None，事务由调用方提交。
+    """
     bucket = db.get(KnowledgeBucket, bucket_id)
     if not bucket or bucket.tenant_id != tenant_id:
         return None
@@ -866,6 +941,7 @@ def _sync_bucket_content_from_chunks(
 
 
 def job_read(row: KnowledgeIngestJob) -> KnowledgeIngestJobRead:
+    """把入库任务记录转成 API 返回模型，并剔除大字段 content_base64。"""
     return KnowledgeIngestJobRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -889,6 +965,7 @@ def job_read(row: KnowledgeIngestJob) -> KnowledgeIngestJobRead:
 
 
 def document_read(row: KnowledgeDocument) -> KnowledgeDocumentRead:
+    """把文档记录转成 API 返回模型，时间统一序列化为 ISO 字符串。"""
     return KnowledgeDocumentRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -908,6 +985,7 @@ def document_read(row: KnowledgeDocument) -> KnowledgeDocumentRead:
 
 
 def bucket_read_with_stats(row: KnowledgeBucket, chunk_count: int) -> KnowledgeBucketRead:
+    """用分块数量补充桶视图并推导状态：有分块且摘要非空才算 ready，否则 incomplete。"""
     item = bucket_read(row)
     item.chunk_count = chunk_count
     item.status = "ready" if chunk_count > 0 and row.summary.strip() else "incomplete"
@@ -915,6 +993,11 @@ def bucket_read_with_stats(row: KnowledgeBucket, chunk_count: int) -> KnowledgeB
 
 
 def _blob_cast(name: str, dialect_name: str) -> str:
+    """按方言生成列表达式，SQLite 下把文本列强转为 BLOB 以便容错解码。
+
+    SQLite 可能存入非法编码文本，转成字节后由 _safe_text 依次尝试 utf-8 与 gb18030；
+    PostgreSQL 的 TEXT 始终合法，原样返回列名。
+    """
     # SQLite: read text columns as raw bytes so _safe_text can decode robustly.
     # PostgreSQL has no BLOB type and TEXT columns are always valid text.
     if dialect_name == "sqlite":
@@ -925,6 +1008,7 @@ def _blob_cast(name: str, dialect_name: str) -> str:
 def _safe_document_bucket_rows(
     db: Session, tenant_id: str, document_id: str
 ) -> list[Mapping[str, Any]]:
+    """用原生 SQL 按创建时间读取文档下的知识桶，绕开 ORM 以容忍脏编码文本。"""
     dialect = db.get_bind().dialect.name
     return list(
         db.execute(
@@ -956,6 +1040,7 @@ def _safe_document_bucket_rows(
 
 
 def _safe_bucket_chunk_rows(db: Session, tenant_id: str, bucket_id: str) -> list[Mapping[str, Any]]:
+    """用原生 SQL 读取桶内分块，按 chunk_index 升序返回。"""
     dialect = db.get_bind().dialect.name
     return list(
         db.execute(
@@ -990,6 +1075,10 @@ def _safe_bucket_chunk_rows(db: Session, tenant_id: str, bucket_id: str) -> list
 def _bucket_read_mapping_with_stats(
     row: Mapping[str, Any], chunk_count: int
 ) -> KnowledgeBucketRead:
+    """把原生 SQL 行转成桶视图，文本容错解码并补齐分块数与状态。
+
+    分块数优先用实测值，为 0 时回落到 metadata 中的 chunk_count 或代表分块数量。
+    """
     summary = _safe_text(row.get("summary"))
     metadata = _safe_json_object(row.get("metadata_json"))
     return KnowledgeBucketRead(
@@ -1013,6 +1102,7 @@ def _bucket_read_mapping_with_stats(
 
 
 def _chunk_read_mapping(row: Mapping[str, Any]) -> KnowledgeChunkRead:
+    """把原生 SQL 行转成分块视图，摘要与来源为空时保留 None。"""
     return KnowledgeChunkRead(
         id=_safe_text(row.get("id")),
         tenant_id=_safe_text(row.get("tenant_id")),
@@ -1030,6 +1120,10 @@ def _chunk_read_mapping(row: Mapping[str, Any]) -> KnowledgeChunkRead:
 
 
 def _safe_text(value: Any, fallback: str = "") -> str:
+    """把任意值容错转成字符串。
+
+    bytes 先按 utf-8 再按 gb18030 解码，仍失败则替换非法字节；None 返回 fallback。
+    """
     if value is None:
         return fallback
     if isinstance(value, str):
@@ -1045,6 +1139,7 @@ def _safe_text(value: Any, fallback: str = "") -> str:
 
 
 def _safe_optional_text(value: Any) -> str | None:
+    """同 _safe_text，但空值返回 None，用于区分“没有值”和空字符串。"""
     if value is None:
         return None
     text_value = _safe_text(value)
@@ -1052,6 +1147,10 @@ def _safe_optional_text(value: Any) -> str | None:
 
 
 def _safe_json_object(value: Any) -> dict[str, Any]:
+    """把可能是 JSON 文本的值解析成 dict。
+
+    已是 dict 时原样返回；解析失败或结果不是对象时返回空 dict。
+    """
     if isinstance(value, dict):
         return value
     if value is None:
@@ -1064,6 +1163,7 @@ def _safe_json_object(value: Any) -> dict[str, Any]:
 
 
 def _safe_int(value: Any) -> int:
+    """把值转成 int，None 或无法解析时返回 0。"""
     try:
         return int(value or 0)
     except (TypeError, ValueError):
@@ -1071,12 +1171,14 @@ def _safe_int(value: Any) -> int:
 
 
 def _safe_datetime_text(value: Any) -> str:
+    """把 datetime 转成 ISO 字符串，其它值走 _safe_text 容错。"""
     if isinstance(value, datetime):
         return value.isoformat()
     return _safe_text(value)
 
 
 def discovery_read(row: KnowledgeDiscoverySuggestion) -> KnowledgeDiscoveryRead:
+    """把知识发现建议记录转成 API 返回模型。"""
     return KnowledgeDiscoveryRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -1095,6 +1197,7 @@ def discovery_read(row: KnowledgeDiscoverySuggestion) -> KnowledgeDiscoveryRead:
 
 
 def _get_document(db: Session, tenant_id: str, document_id: str) -> KnowledgeDocument:
+    """按 id 取文档并校验租户，缺失或跨租户一律抛 404。"""
     ensure_tenant(db, tenant_id)
     row = db.get(KnowledgeDocument, document_id)
     if not row or row.tenant_id != tenant_id:
@@ -1108,6 +1211,10 @@ def _ensure_knowledge_version_visible(
     knowledge_base_version_id: str | None,
     agent_id: str | None,
 ) -> None:
+    """校验知识库版本存在、属于该租户且在给定 agent 或画廊范围内可见。
+
+    版本绑定缺失、版本不存在或不在可见范围都按 404 处理，避免泄露其它范围资源。
+    """
     if not knowledge_base_version_id:
         raise HTTPException(
             status_code=404,
@@ -1134,6 +1241,7 @@ def _ensure_knowledge_version_visible(
 
 
 def _get_discovery(db: Session, tenant_id: str, suggestion_id: str) -> KnowledgeDiscoverySuggestion:
+    """按 id 取知识发现建议并校验租户，缺失或跨租户抛 404。"""
     ensure_tenant(db, tenant_id)
     row = db.get(KnowledgeDiscoverySuggestion, suggestion_id)
     if not row or row.tenant_id != tenant_id:
@@ -1147,6 +1255,11 @@ def _ensure_open_gallery_knowledge_admin(
     knowledge_base_id: str,
     current_user: object | None,
 ) -> None:
+    """校验当前用户有权管理该知识库。
+
+    配置了 owner_agent_id 时要求该 agent 的管理员身份；属于 open gallery 时要求画廊
+    管理员；其余情况直接返回，由调用方的租户与范围校验兜底。
+    """
     knowledge_base = db.get(KnowledgeBase, knowledge_base_id)
     metadata = (
         knowledge_base.metadata_json

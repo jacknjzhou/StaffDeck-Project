@@ -22,30 +22,39 @@ from app.session.slot_policy import strip_router_generated_message_slots
 
 
 class FakeEvents:
+    """记录事件写入的内存替身,便于断言 handoff 流程发出了哪些事件。"""
     def __init__(self) -> None:
+        """初始化空的事件记录列表。"""
         self.records: list[tuple[str, str, str, dict]] = []
 
     def record(self, tenant_id: str, session_id: str, event_type: str, payload: dict) -> None:
+        """按顺序收集事件元组(租户、会话、类型、载荷)。"""
         self.records.append((tenant_id, session_id, event_type, payload))
 
 
 class FakeExecResult:
+    """模拟 SQLModel 查询结果,支持取首行或取全部行。"""
     def __init__(self, rows: list[object] | None = None) -> None:
+        """保存待返回的行,默认空列表。"""
         self.rows = rows or []
 
     def first(self) -> object | None:
+        """返回首行,无行时返回 None。"""
         return self.rows[0] if self.rows else None
 
     def all(self) -> list[object]:
+        """返回全部行。"""
         return self.rows
 
 
 class FakeDb:
+    """可编排的数据库替身:按顺序吐出查询结果,并记录写入、提交与刷新。"""
     def __init__(
         self,
         exec_results: list[list[object]] | None = None,
         get_rows: dict[tuple[type[object], str], object] | None = None,
     ) -> None:
+        """保存查询结果队列、按主键预置的行,并初始化写入与提交计数。"""
         self.exec_results = list(exec_results or [])
         self.get_rows = get_rows or {}
         self.added: list[object] = []
@@ -53,24 +62,30 @@ class FakeDb:
         self.refreshed: list[object] = []
 
     def exec(self, _statement: object) -> FakeExecResult:
+        """依次弹出预置结果,队列为空时返回空结果。"""
         if self.exec_results:
             return FakeExecResult(self.exec_results.pop(0))
         return FakeExecResult()
 
     def get(self, model: type[object], row_id: str) -> object | None:
+        """按模型与主键从预置字典取行。"""
         return self.get_rows.get((model, row_id))
 
     def add(self, row: object) -> None:
+        """记录被加入的行,不做持久化。"""
         self.added.append(row)
 
     def commit(self) -> None:
+        """仅累加提交次数,用于断言事务次数。"""
         self.commits += 1
 
     def refresh(self, row: object) -> None:
+        """记录被刷新的行,不做实际刷新。"""
         self.refreshed.append(row)
 
 
 def _handoff_skill(step: dict | None = None) -> Skill:
+    """构造只含一个 handoff 节点的已发布技能,可按需替换该节点定义。"""
     node = step or {
         "node_id": "manual_review",
         "type": "handoff",
@@ -93,6 +108,7 @@ def _handoff_skill(step: dict | None = None) -> Skill:
 
 
 def _handoff_session() -> ChatSession:
+    """构造处于 handoff 步骤、带槽位与待办的会话,供转人工流程用例复用。"""
     return ChatSession(
         id="session_handoff",
         tenant_id="tenant_demo",
@@ -107,6 +123,7 @@ def _handoff_session() -> ChatSession:
 
 
 def _test_engine():
+    """创建内存 SQLite 测试引擎(StaticPool)并建表,使各用例数据相互隔离。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -117,6 +134,7 @@ def _test_engine():
 
 
 def _seed_handoff_users(db: Session) -> tuple[User, User, User]:
+    """写入租户与管理员、普通用户、其他用户三个账号并返回它们。"""
     admin = User(id="admin_user", tenant_id="tenant_demo", username="admin", role="admin", password_hash="x")
     user = User(id="user_demo", tenant_id="tenant_demo", username="user_demo", password_hash="x")
     other = User(id="other_user", tenant_id="tenant_demo", username="other", password_hash="x")
@@ -129,6 +147,7 @@ def _seed_handoff_users(db: Session) -> tuple[User, User, User]:
 
 
 def test_handoff_requires_structured_step_declaration():
+    """验证只有 allowed_actions 或节点类型显式声明时才认定该步骤支持转人工。"""
     loop = AgentLoop.__new__(AgentLoop)
 
     assert loop._step_declares_human_handoff({"allowed_actions": ["answer_user", "handoff_human"]})
@@ -142,6 +161,7 @@ def test_handoff_requires_structured_step_declaration():
 
 
 def test_handoff_assignee_uses_agent_owner_metadata_before_admin():
+    """验证员工配置了有效属主时,优先把工单派给该属主而非租户管理员。"""
     engine = _test_engine()
     session_id = "session_wecom_group_resume"
     with Session(engine) as db:
@@ -163,6 +183,7 @@ def test_handoff_assignee_uses_agent_owner_metadata_before_admin():
 
 
 def test_handoff_assignee_falls_back_to_tenant_admin_before_requester():
+    """验证员工无属主或未指定员工时,工单回退给租户管理员。"""
     engine = _test_engine()
     with Session(engine) as db:
         admin, user, _other = _seed_handoff_users(db)
@@ -184,6 +205,7 @@ def test_handoff_assignee_falls_back_to_tenant_admin_before_requester():
 
 
 def test_handoff_assignee_skips_invalid_agent_owner_metadata():
+    """验证属主账号已删除或属于其他租户时跳过该元数据,回退管理员。"""
     engine = _test_engine()
     with Session(engine) as db:
         admin, user, _other = _seed_handoff_users(db)
@@ -221,6 +243,7 @@ def test_handoff_assignee_skips_invalid_agent_owner_metadata():
 
 
 def test_handoff_assignee_does_not_fall_back_to_channel_customer():
+    """验证渠道客户不会被当成人工处理人,此时返回 None。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -243,6 +266,7 @@ def test_handoff_assignee_does_not_fall_back_to_channel_customer():
 
 
 def test_handoff_assignee_uses_requester_when_no_owner_or_admin_exists():
+    """验证既无属主也无管理员时,把工单派给发起人本人。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -265,6 +289,7 @@ def test_handoff_assignee_uses_requester_when_no_owner_or_admin_exists():
 
 
 def test_handoff_finalize_creates_pending_request_for_declared_step():
+    """验证声明了转人工的步骤会建待处理工单、写会话等待态并发事件。"""
     loop = AgentLoop.__new__(AgentLoop)
     db = FakeDb(
         exec_results=[
@@ -322,6 +347,7 @@ def test_handoff_finalize_creates_pending_request_for_declared_step():
 
 
 def test_handoff_finalize_reuses_existing_pending_request():
+    """验证已有待处理工单时复用该工单,不重复落库也不重复发事件。"""
     loop = AgentLoop.__new__(AgentLoop)
     existing = HumanHandoffRequest(
         id="handoff_existing",
@@ -352,6 +378,7 @@ def test_handoff_finalize_reuses_existing_pending_request():
 
 
 def test_handoff_request_is_ignored_when_step_does_not_declare_handoff():
+    """验证步骤未声明转人工时忽略模型请求,会话继续并记录忽略原因。"""
     loop = AgentLoop.__new__(AgentLoop)
     loop.db = FakeDb()
     loop.events = FakeEvents()
@@ -384,6 +411,7 @@ def test_handoff_request_is_ignored_when_step_does_not_declare_handoff():
 
 
 def test_handoff_list_filters_by_status_and_user_then_reply_restores_session(monkeypatch):
+    """验证工单列表按状态与处理人过滤,回复后会话恢复且触发异步续跑。"""
     engine = _test_engine()
     with Session(engine) as db:
         admin, user, other = _seed_handoff_users(db)
@@ -507,6 +535,7 @@ def test_handoff_list_filters_by_status_and_user_then_reply_restores_session(mon
 
 
 def test_handoff_list_hides_pilotdeck_sessions_but_keeps_the_records() -> None:
+    """验证 PilotDeck 会话的工单在列表中隐藏,但记录本身仍保留。"""
     engine = _test_engine()
     with Session(engine) as db:
         admin, user, _other = _seed_handoff_users(db)
@@ -568,6 +597,7 @@ def test_handoff_list_hides_pilotdeck_sessions_but_keeps_the_records() -> None:
 
 
 def test_handoff_assignee_can_read_original_session_without_owner_permissions():
+    """验证会话属主、被指派人、管理员都能读原会话,陌生人得到 404。"""
     engine = _test_engine()
     with Session(engine) as db:
         admin, user, other = _seed_handoff_users(db)
@@ -603,6 +633,7 @@ def test_handoff_assignee_can_read_original_session_without_owner_permissions():
 
 
 def test_reply_human_handoff_restores_session_and_schedules_resume(monkeypatch):
+    """验证人工回复后工单置为已回答、会话恢复活跃,并调度一次续跑。"""
     handoff = HumanHandoffRequest(
         id="handoff_reply",
         tenant_id="tenant_demo",
@@ -660,6 +691,7 @@ def test_reply_human_handoff_restores_session_and_schedules_resume(monkeypatch):
 
 
 def test_reply_human_handoff_rejects_non_pending_request(monkeypatch):
+    """验证对非待处理工单再次回复返回 409 且不产生任何提交。"""
     handoff = HumanHandoffRequest(
         id="handoff_done",
         tenant_id="tenant_demo",
@@ -689,6 +721,7 @@ def test_reply_human_handoff_rejects_non_pending_request(monkeypatch):
 
 
 def test_reply_human_handoff_rejects_missing_original_session(monkeypatch):
+    """验证原会话缺失时拒绝回复并返回 409,工单保持待处理且不调度续跑。"""
     handoff = HumanHandoffRequest(
         id="handoff_missing_session",
         tenant_id="tenant_demo",
@@ -723,14 +756,18 @@ def test_reply_human_handoff_rejects_missing_original_session(monkeypatch):
 
 
 def test_handoff_resume_worker_continues_original_session_once(monkeypatch):
+    """验证续跑 worker 只消费一次已回答工单,并向原会话投递人工答复。"""
     engine = _test_engine()
     handled_requests: list[ChatTurnRequest] = []
 
     class FakeAgentLoop:
+        """记录续跑请求的假 AgentLoop,避免真正执行一轮对话。"""
         def __init__(self, db: Session) -> None:
+            """保存注入的数据库会话。"""
             self.db = db
 
         def handle_turn(self, request: ChatTurnRequest) -> None:
+            """把续跑请求收进列表,供断言会话与答复内容。"""
             handled_requests.append(request)
 
     monkeypatch.setattr(chat_api, "engine", engine)
@@ -798,10 +835,13 @@ def test_handoff_resume_worker_prefers_session_user_after_rebind(monkeypatch):
     handled_requests: list[ChatTurnRequest] = []
 
     class FakeAgentLoop:
+        """记录续跑请求的假 AgentLoop,用于检查请求里的用户身份。"""
         def __init__(self, db: Session) -> None:
+            """保存注入的数据库会话。"""
             self.db = db
 
         def handle_turn(self, request: ChatTurnRequest) -> None:
+            """把续跑请求收进列表,供断言会话属主。"""
             handled_requests.append(request)
 
     monkeypatch.setattr(chat_api, "engine", engine)
@@ -842,15 +882,19 @@ def test_handoff_resume_worker_prefers_session_user_after_rebind(monkeypatch):
 
 
 def test_handoff_resume_worker_restores_original_wecom_group_target(monkeypatch):
+    """验证续跑时把企业微信群会话的渠道、绑定与目标恢复到原会话上。"""
     engine = _test_engine()
     session_id = "session_wecom_group_resume"
     handled_requests: list[ChatTurnRequest] = []
 
     class FakeAgentLoop:
+        """记录续跑请求的假 AgentLoop,只关心请求是否只投递一次。"""
         def __init__(self, db: Session) -> None:
+            """保存注入的数据库会话。"""
             self.db = db
 
         def handle_turn(self, request: ChatTurnRequest) -> None:
+            """把续跑请求收进列表,不做真实对话处理。"""
             handled_requests.append(request)
 
     monkeypatch.setattr(chat_api, "engine", engine)
@@ -911,13 +955,17 @@ def test_handoff_resume_worker_restores_original_wecom_group_target(monkeypatch)
 
 
 def test_handoff_resume_worker_persists_failed_resume(monkeypatch):
+    """验证续跑抛错时把工单标记为 failed,并记下开始时间、错误与事件。"""
     engine = _test_engine()
 
     class FailingAgentLoop:
+        """必定抛错的假 AgentLoop,用于模拟续跑失败。"""
         def __init__(self, db: Session) -> None:
+            """保存注入的数据库会话。"""
             self.db = db
 
         def handle_turn(self, request: ChatTurnRequest) -> None:
+            """抛出带会话号的运行时错误,触发失败落库路径。"""
             raise RuntimeError(f"resume failed for {request.session_id}")
 
     monkeypatch.setattr(chat_api, "engine", engine)
@@ -963,6 +1011,7 @@ def test_handoff_resume_worker_persists_failed_resume(monkeypatch):
 
 
 def test_router_generated_message_slots_are_not_persisted():
+    """验证清理逻辑剔除路由模型生成的改写字段,只保留真实业务槽位。"""
     cleaned = strip_router_generated_message_slots(
         {
             "message_content": "模型改写后的用户消息",

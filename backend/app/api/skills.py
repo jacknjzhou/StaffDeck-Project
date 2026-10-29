@@ -96,6 +96,7 @@ def skill_read(
     stats: dict[str, dict[str, float | int]] | None = None,
     recent_stats: dict[str, dict[str, object]] | None = None,
 ) -> SkillRead:
+    """把 Skill 主表行与统计信息映射为 SkillRead,并附加 agent 分支元数据。"""
     all_stats = stats or {}
     skill_stats = _stats_for(all_stats, row.skill_id, row.version)
     total_stats = all_stats.get(row.skill_id, {})
@@ -144,6 +145,7 @@ def skill_read(
 def skill_version_read(
     row: SkillVersion, stats: dict[str, dict[str, float | int]] | None = None
 ) -> SkillVersionRead:
+    """把 SkillVersion 快照行映射为 SkillVersionRead,统计按 skill_version 取。"""
     skill_stats = _stats_for(stats or {}, row.skill_id, row.version)
     content, _warnings = skill_card_with_unique_step_ids(
         skill_card_from_persisted(row.content_json)
@@ -169,6 +171,7 @@ def skill_version_read(
 
 
 def _branch_version_read(row: AgentSkillBranchVersion) -> SkillVersionRead:
+    """把 agent 技能分支版本映射为 SkillVersionRead,统计字段统一填零。"""
     content, _warnings = skill_card_with_unique_step_ids(
         skill_card_from_persisted(row.content_json)
     )
@@ -201,6 +204,7 @@ def list_skills(
     db: Session = Depends(get_session),
     agent_id: str | None = None,
 ) -> list[SkillRead]:
+    """列出当前租户(可按 agent 作用域过滤)可见的 SOP,附带历史与近期统计。"""
     ensure_tenant(db, tenant_id)
     rows = visible_skill_rows(db, tenant_id, agent_id, include_inactive=True)
     stats = _skill_stats(db, tenant_id)
@@ -314,6 +318,11 @@ def create_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SkillRead:
+    """创建 SOP:校验处理人、子 SOP 嵌套与 skill_id 唯一性后落库并生成版本快照。
+
+    未指定 agent 或指定整体 agent 时走开放画廊(需管理员),否则建立私有资源绑定
+    与该 agent 的技能分支。
+    """
     ensure_tenant(db, request.tenant_id)
     existing = db.exec(
         select(Skill).where(
@@ -401,6 +410,7 @@ def get_skill(
     agent_id: str | None = None,
     db: Session = Depends(get_session),
 ) -> SkillRead:
+    """读取单个 SOP 的卡片与统计;不可见时按 404 处理,不泄露存在性。"""
     row = _get_visible_skill_for_scope(db, tenant_id, skill_id, agent_id)
     stats = _skill_stats(db, tenant_id)
     return skill_read(row, stats, _recent_skill_stats(db, tenant_id, stats))
@@ -414,6 +424,10 @@ def update_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SkillRead:
+    """改写 SOP 内容:私有 agent 作用域写分支版本,整体 SOP 直接覆写主表行。
+
+    两条路径都会重新校验人工节点处理人与子 SOP 嵌套,并同步工具白名单。
+    """
     if request.content.skill_id != skill_id:
         raise HTTPException(status_code=400, detail="SOP skill_id cannot be modified")
     row = _get_skill(db, request.tenant_id, skill_id)
@@ -489,6 +503,10 @@ def publish_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SkillRead:
+    """发布 SOP:整体 SOP 置为 published 并激活开放画廊绑定,私有分支置为 active。
+
+    发布前按当前生效内容重新校验子 SOP 嵌套,非法嵌套返回 400。
+    """
     row = _get_skill(db, tenant_id, skill_id)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     validation_content = (
@@ -543,6 +561,7 @@ def archive_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SkillRead:
+    """归档 SOP:整体 SOP 置为 archived,私有 agent 分支置为 inactive。"""
     row = _get_skill(db, tenant_id, skill_id)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
@@ -576,6 +595,7 @@ def draft_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SkillRead:
+    """把整体 SOP 退回草稿状态;私有 agent 分支调用直接返回 403。"""
     row = _get_skill(db, tenant_id, skill_id)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
@@ -601,6 +621,10 @@ def delete_skill(
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """删除 SOP:私有 agent 作用域只把绑定与分支标记 deleted,整体范围物理删除。
+
+    整体删除会连带清理该 SOP 的反馈与历史版本行,返回最终处理状态。
+    """
     row = _get_skill(db, tenant_id, skill_id)
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
@@ -671,6 +695,7 @@ def list_skill_versions(
     db: Session = Depends(get_session),
     agent_id: str | None = None,
 ) -> list[SkillVersionRead]:
+    """列出 SOP 历史版本;私有 agent 作用域只返回该 agent 的分支版本。"""
     row = _get_visible_skill_for_scope(db, tenant_id, skill_id, agent_id)
     agent = get_agent(db, tenant_id, agent_id)
     if agent and not agent.is_overall:
@@ -706,6 +731,7 @@ def get_skill_version(
     agent_id: str | None = None,
     db: Session = Depends(get_session),
 ) -> SkillVersionRead:
+    """按版本号读取单个 SOP 版本;私有 agent 作用域从该 agent 的分支版本中查找。"""
     _get_visible_skill_for_scope(db, tenant_id, skill_id, agent_id)
     agent = get_agent(db, tenant_id, agent_id)
     if agent and not agent.is_overall:
@@ -732,6 +758,7 @@ def delete_skill_version(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """删除指定历史版本;当前活跃版本不允许删除,返回 409。"""
     skill = _get_skill(db, tenant_id, skill_id)
     ensure_open_gallery_admin(tenant_id, current_user)
     if skill.version == version:
@@ -751,6 +778,7 @@ def rollback_skill_version(
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ) -> SkillRead:
+    """把 SOP 回滚到指定历史版本:私有 agent 回滚分支,整体范围覆写主表行。"""
     agent = ensure_agent_scope_manager(db, tenant_id, agent_id, current_user)
     if agent and not agent.is_overall:
         branch = rollback_branch(db, tenant_id, agent.id, skill_id, version)
@@ -788,6 +816,7 @@ def rollback_skill_version(
 
 @router.post("/files/extract", response_model=SkillFileExtractResponse)
 def extract_skill_file(request: SkillFileExtractRequest) -> SkillFileExtractResponse:
+    """解析上传的 SOP 文件(md/txt/docx/doc)并返回纯文本,非 base64 或超 5MB 报错。"""
     try:
         data = base64.b64decode(request.content_base64, validate=True)
     except ValueError as exc:
@@ -806,6 +835,7 @@ def distill_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SkillDistillResponse:
+    """同步调用 SkillDistiller 蒸馏新 SOP,LLM 调用失败以 502 暴露。"""
     ensure_current_user_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
     _ensure_distill_agent_scope(db, request, current_user)
@@ -823,6 +853,7 @@ def distill_skill_stream(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    """以 SSE 流式返回 SOP 蒸馏过程:先建后台任务,再持续推送该任务事件。"""
     ensure_current_user_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
     _ensure_distill_agent_scope(db, request, current_user)
@@ -837,6 +868,7 @@ def rewrite_skill_stream(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    """以 SSE 流式返回 SOP 改写过程,路径 skill_id 必须与请求体 current_skill 一致。"""
     if request.current_skill.skill_id != skill_id:
         raise HTTPException(
             status_code=400, detail="Path skill_id must match current_skill.skill_id"
@@ -855,6 +887,7 @@ def create_distill_job(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """创建 SOP 蒸馏后台任务并返回 job_id,供前端轮询或订阅事件流。"""
     ensure_current_user_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
     _ensure_distill_agent_scope(db, request, current_user)
@@ -868,6 +901,7 @@ def create_rewrite_job(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """创建 SOP 改写后台任务并返回 job_id,路径 skill_id 需与请求体一致。"""
     if request.current_skill.skill_id != skill_id:
         raise HTTPException(
             status_code=400, detail="Path skill_id must match current_skill.skill_id"
@@ -884,6 +918,7 @@ def get_skill_stream_job(
     job_id: str,
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """读取流式任务的状态与最后一个事件序号,仅任务所有者可访问。"""
     job = _owned_stream_job(job_id, current_user)
     return {
         "job_id": job.id,
@@ -902,6 +937,7 @@ def stream_existing_skill_job(
     after_seq: int = Query(0),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    """从 after_seq 起续传已有流式任务的事件,用于页面断线重连。"""
     _owned_stream_job(job_id, current_user)
     return StreamingResponse(_stream_skill_job(job_id, after_seq), media_type="text/event-stream")
 
@@ -911,6 +947,7 @@ def cancel_skill_stream_job(
     job_id: str,
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """请求取消流式生成,并向事件流追加一条停止提示;取消是协作式的,不等待退出。"""
     _owned_stream_job(job_id, current_user)
     stream_jobs.cancel(job_id)
     stream_jobs.append(job_id, "status", {"text": "已请求停止生成"})
@@ -924,6 +961,7 @@ def rewrite_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SkillRewriteResponse:
+    """同步调用 SkillEditor 改写 SOP,LLM 或校验错误统一返回 502。"""
     if request.current_skill.skill_id != skill_id:
         raise HTTPException(
             status_code=400, detail="Path skill_id must match current_skill.skill_id"
@@ -940,6 +978,7 @@ def rewrite_skill(
 
 
 def _owned_stream_job(job_id: str, current_user: User) -> SkillStreamJob:
+    """取出属于当前用户的流式任务;不存在或跨租户、跨用户一律返回 404。"""
     job = stream_jobs.get(job_id)
     if not job or job.tenant_id != current_user.tenant_id or job.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -947,6 +986,7 @@ def _owned_stream_job(job_id: str, current_user: User) -> SkillStreamJob:
 
 
 def _start_distill_stream_job(request: SkillDistillRequest, current_user: User) -> str:
+    """创建蒸馏任务并投递异步执行作业,返回任务 id 供 SSE 与轮询使用。"""
     job = stream_jobs.create("skill.distill", request.tenant_id, current_user.id)
     stream_jobs.append(job.id, "job_started", {"job_id": job.id, "name": job.name})
     enqueue_async_job(
@@ -962,6 +1002,7 @@ def _start_distill_stream_job(request: SkillDistillRequest, current_user: User) 
 def _start_rewrite_stream_job(
     skill_id: str, request: SkillRewriteRequest, current_user: User
 ) -> str:
+    """创建改写任务并投递异步执行作业,返回任务 id 供 SSE 与轮询使用。"""
     job = stream_jobs.create("skill.rewrite", request.tenant_id, current_user.id)
     stream_jobs.append(
         job.id, "job_started", {"job_id": job.id, "name": job.name, "skill_id": skill_id}
@@ -978,6 +1019,10 @@ def _start_rewrite_stream_job(
 
 
 def _run_distill_stream_job(job_id: str, request_data: dict[str, object]) -> None:
+    """后台执行蒸馏任务:把模型流式输出逐条写入事件流,收到取消即提前结束。
+
+    异常统一转为任务失败状态,避免订阅端无限等待;结果本身通过事件流下发。
+    """
     stream_jobs.start(job_id)
     try:
         request = SkillDistillRequest.model_validate(request_data)
@@ -998,6 +1043,10 @@ def _run_distill_stream_job(job_id: str, request_data: dict[str, object]) -> Non
 
 
 def _run_rewrite_stream_job(job_id: str, skill_id: str, request_data: dict[str, object]) -> None:
+    """后台执行改写任务:先校验路径 skill_id 与请求体一致,再逐条推送模型事件。
+
+    异常统一转为任务失败状态,避免订阅端无限等待;结果本身通过事件流下发。
+    """
     stream_jobs.start(job_id)
     try:
         request = SkillRewriteRequest.model_validate(request_data)
@@ -1019,6 +1068,10 @@ def _run_rewrite_stream_job(job_id: str, skill_id: str, request_data: dict[str, 
 
 
 def _stream_skill_job(job_id: str, after_seq: int = 0) -> Iterator[str]:
+    """生成 SSE 事件流:先补发 job_attached,再增量推送任务事件直到终态。
+
+    以轮询读取任务快照(间隔 0.15s)实现;任务丢失时发送 error 并结束。
+    """
     last_seq = max(0, after_seq)
     yield _sse("job_attached", {"job_id": job_id, "after_seq": after_seq})
     while True:
@@ -1036,17 +1089,20 @@ def _stream_skill_job(job_id: str, after_seq: int = 0) -> Iterator[str]:
 
 
 def _sse_event(event: SkillStreamEvent, job_id: str) -> str:
+    """把单个流事件序列化为 SSE 文本,附带 job_id 与 seq 便于断线续传。"""
     data = {"job_id": job_id, "seq": event.seq, **event.data}
     return _sse(event.event, data)
 
 
 def get_session_engine():
+    """延迟导入并返回全局数据库引擎,避免模块导入期即建立连接。"""
     from app.db import engine
 
     return engine
 
 
 def _get_default_model(db: Session, tenant_id: str) -> ModelConfig:
+    """取租户内启用且标记为默认的模型配置,不存在时报 400。"""
     model_config = db.exec(
         select(ModelConfig).where(
             ModelConfig.tenant_id == tenant_id,
@@ -1060,12 +1116,14 @@ def _get_default_model(db: Session, tenant_id: str) -> ModelConfig:
 
 
 def _model_runtime_config(db: Session, tenant_id: str, row: ModelConfig):
+    """把模型配置行解析为运行时可用的配置(含凭据解析等运行时字段)。"""
     return resolve_model_config_for_runtime(db, tenant_id, row.id)
 
 
 def _get_request_model(
     db: Session, tenant_id: str, model_config_id: str | None = None
 ) -> ModelConfig:
+    """按 model_config_id 取租户内启用的模型配置,缺省时回退到默认模型。"""
     if not model_config_id:
         return _get_default_model(db, tenant_id)
     model_config = db.get(ModelConfig, model_config_id)
@@ -1080,6 +1138,10 @@ def _sync_skill_tool_bindings(
     skill_id: str,
     content: dict[str, object],
 ) -> None:
+    """把 SOP 中 call_tool:<name> 引用的工具补进各自的 allowed_skills_json 白名单。
+
+    只追加缺失的 skill_id,不改动工具其它字段;不提交事务,由调用方决定。
+    """
     tool_names: set[str] = set()
     for key in ("nodes", "steps"):
         items = content.get(key)
@@ -1125,6 +1187,7 @@ def _ensure_distill_agent_scope(
     request: SkillDistillRequest,
     current_user: User,
 ) -> None:
+    """请求带 agent_id 时校验当前用户是该 agent 的作用域管理者,否则直接放行。"""
     if request.agent_id:
         ensure_agent_scope_manager(db, request.tenant_id, request.agent_id, current_user)
 
@@ -1134,6 +1197,7 @@ def _visible_general_skill_rows_for_distill(
     tenant_id: str,
     agent_id: str | None,
 ) -> list[GeneralSkill]:
+    """筛选蒸馏可用的通用技能:整体范围取开放画廊,私有范围取该 agent 的有效绑定。"""
     agent = get_agent(db, tenant_id, agent_id)
     rows = db.exec(
         select(GeneralSkill).where(
@@ -1176,6 +1240,10 @@ def _with_available_context_for_distill(
     db: Session,
     request: SkillDistillRequest,
 ) -> SkillDistillRequest:
+    """把租户内可见的工具、通用技能与知识库合并进蒸馏请求上下文。
+
+    请求自带的候选项与库内数据按 id/name 等键去重,保证模型看到统一的能力目录。
+    """
     tools = visible_tool_rows(
         db,
         request.tenant_id,
@@ -1254,7 +1322,7 @@ def _with_available_context_for_distill(
 
 
 def _with_available_tools(db: Session, request: SkillDistillRequest) -> SkillDistillRequest:
-    """Backward-compatible alias for public API callers."""
+    """旧名兼容入口,内部转调 _with_available_context_for_distill。"""
 
     return _with_available_context_for_distill(db, request)
 
@@ -1262,6 +1330,7 @@ def _with_available_tools(db: Session, request: SkillDistillRequest) -> SkillDis
 def _with_available_context_for_rewrite(
     db: Session, request: SkillRewriteRequest
 ) -> SkillRewriteRequest:
+    """为改写请求补齐可用工具与可嵌套 SOP 目录,并标注每个 SOP 不可选的原因。"""
     tools = db.exec(
         select(Tool).where(Tool.tenant_id == request.tenant_id, Tool.enabled == True)  # noqa: E712
     ).all()
@@ -1335,6 +1404,7 @@ def _ensure_rewrite_agent_scope(
     request: SkillRewriteRequest,
     current_user: User,
 ) -> None:
+    """请求带 agent_id 时校验当前用户是该 agent 的作用域管理者,否则直接放行。"""
     if request.agent_id:
         ensure_agent_scope_manager(db, request.tenant_id, request.agent_id, current_user)
 
@@ -1343,6 +1413,7 @@ def _dedupe_capability_catalog(
     values: list[dict[str, object]],
     keys: tuple[str, ...],
 ) -> list[dict[str, object]]:
+    """按给定键顺序取首个非空值作为身份标识对能力目录去重,并保持原顺序。"""
     result: list[dict[str, object]] = []
     seen: set[str] = set()
     for item in values:
@@ -1358,11 +1429,13 @@ def _dedupe_capability_catalog(
 
 
 def _sse(event: object, data: object) -> str:
+    """把事件名与数据序列化为单条 SSE 帧,JSON 不转义中文。"""
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n"
 
 
 def _extract_uploaded_skill_file(filename: str, data: bytes) -> str:
+    """按扩展名分派解析:md/txt 走文本解码,docx 解 XML,doc 做宽松解码。"""
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if suffix in {"md", "txt"}:
         return _decode_text_bytes(data)
@@ -1374,6 +1447,7 @@ def _extract_uploaded_skill_file(filename: str, data: bytes) -> str:
 
 
 def _decode_text_bytes(data: bytes) -> str:
+    """依次尝试 utf-8-sig/utf-8/gb18030 解码,全部失败则忽略非法字节兜底。"""
     for encoding in ("utf-8-sig", "utf-8", "gb18030"):
         try:
             return data.decode(encoding)
@@ -1383,6 +1457,7 @@ def _decode_text_bytes(data: bytes) -> str:
 
 
 def _decode_legacy_doc_text(data: bytes) -> str:
+    """宽松提取老式 .doc 文本:去控制字符、压缩空白并丢弃空行。"""
     text = _decode_text_bytes(data)
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]+", " ", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
@@ -1390,6 +1465,7 @@ def _decode_legacy_doc_text(data: bytes) -> str:
 
 
 def _extract_docx_text(data: bytes) -> str:
+    """从 docx 的 word/document.xml 提取段落文本,保留制表符与手动换行。"""
     try:
         with zipfile.ZipFile(BytesIO(data)) as archive:
             document_xml = archive.read("word/document.xml")
@@ -1418,6 +1494,11 @@ def _extract_docx_text(data: bytes) -> str:
 
 
 def _skill_stats(db: Session, tenant_id: str) -> dict[str, dict[str, float | int]]:
+    """按 skill_id 与 skill_id@version 汇总调用次数与正负反馈率。
+
+    调用次数来自 AgentEvent 的 skill_started/skill_resumed 事件;反馈按
+    (skill_id, version, session_id, user_id) 聚合,同一会话同一用户只计一票。
+    """
     stats: dict[str, dict[str, float | int]] = {}
     events = db.exec(
         select(AgentEvent).where(
@@ -1464,6 +1545,7 @@ def _skill_stats(db: Session, tenant_id: str) -> dict[str, dict[str, float | int
 def _increment_call(
     stats: dict[str, dict[str, float | int]], skill_id: str, version: str | None
 ) -> None:
+    """把一次调用同时累加到 skill_id 汇总与 skill_id@version 明细。"""
     entries = [stats.setdefault(skill_id, _empty_stats())]
     if version:
         entries.append(stats.setdefault(_stats_key(skill_id, version), _empty_stats()))
@@ -1472,12 +1554,14 @@ def _increment_call(
 
 
 def _stats_key(skill_id: str, version: str) -> str:
+    """拼接 skill_id@version 形式的版本统计键。"""
     return f"{skill_id}@{version}"
 
 
 def _stats_for(
     stats: dict[str, dict[str, float | int]], skill_id: str, version: str
 ) -> dict[str, float | int]:
+    """取出指定 skill_id 与版本组合的统计,缺失时返回空字典。"""
     return stats.get(_stats_key(skill_id, version), {})
 
 
@@ -1486,6 +1570,7 @@ def _recent_skill_stats(
     tenant_id: str,
     stats: dict[str, dict[str, float | int]],
 ) -> dict[str, dict[str, object]]:
+    """聚合每个 SOP 最近 3 个版本的调用与反馈统计,供列表页展示近期表现。"""
     recent_versions: dict[str, list[str]] = {}
     version_rows = db.exec(
         select(SkillVersion)
@@ -1528,6 +1613,7 @@ def _recent_skill_stats(
 
 
 def _upsert_skill_version(db: Session, row: Skill) -> SkillVersion:
+    """按 (tenant_id, skill_id, version) 写入或更新版本快照,并自行提交事务。"""
     existing = db.exec(
         select(SkillVersion).where(
             SkillVersion.tenant_id == row.tenant_id,
@@ -1563,6 +1649,7 @@ def _upsert_skill_version(db: Session, row: Skill) -> SkillVersion:
 
 
 def _empty_stats() -> dict[str, float | int]:
+    """返回一份全零统计字典,避免调用方反复处理键缺失。"""
     return {
         "call_count": 0,
         "positive_feedback_count": 0,
@@ -1573,6 +1660,7 @@ def _empty_stats() -> dict[str, float | int]:
 
 
 def _get_skill(db: Session, tenant_id: str, skill_id: str) -> Skill:
+    """按 tenant_id 与 skill_id 取主表行;租户或 SOP 不存在时抛 HTTPException。"""
     ensure_tenant(db, tenant_id)
     row = db.exec(
         select(Skill).where(Skill.tenant_id == tenant_id, Skill.skill_id == skill_id)
@@ -1588,6 +1676,7 @@ def _get_visible_skill_for_scope(
     skill_id: str,
     agent_id: str | None,
 ) -> Skill:
+    """在当前 agent 作用域可见的 SOP 中按 skill_id 查找,不可见即 404。"""
     row = next(
         (
             item
@@ -1602,6 +1691,7 @@ def _get_visible_skill_for_scope(
 
 
 def _get_skill_version(db: Session, tenant_id: str, skill_id: str, version: str) -> SkillVersion:
+    """按 tenant_id、skill_id、version 取版本快照,缺失时报 404。"""
     ensure_tenant(db, tenant_id)
     row = db.exec(
         select(SkillVersion).where(

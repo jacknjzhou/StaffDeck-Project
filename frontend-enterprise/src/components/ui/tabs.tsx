@@ -6,6 +6,7 @@ import { Tabs as TabsPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/** Tabs 根容器，透传 Radix Tabs.Root 的属性，并按 `orientation` 决定横向或纵向布局。 */
 function Tabs({
   className,
   orientation = "horizontal",
@@ -24,6 +25,7 @@ function Tabs({
   )
 }
 
+/** Tabs 列表的样式变体：`default` 为胶囊底色，`line` 为无底色的下划线样式。 */
 const tabsListVariants = cva(
   "group/tabs-list inline-flex w-fit items-center justify-center rounded-lg p-[3px] text-muted-foreground group-data-horizontal/tabs:h-8 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none",
   {
@@ -39,6 +41,7 @@ const tabsListVariants = cva(
   }
 )
 
+/** Tabs 列表容器，套用 `variant` 对应样式并向下标记当前变体。 */
 function TabsList({
   className,
   variant = "default",
@@ -55,6 +58,12 @@ function TabsList({
   )
 }
 
+/**
+ * 单个标签触发器。
+ *
+ * - 处理选中态底色、文本色以及横向 / 纵向的伪元素指示条。
+ * - 同时提供 hover、focus-visible 与 disabled 状态的样式。
+ */
 function TabsTrigger({
   className,
   ...props
@@ -74,6 +83,7 @@ function TabsTrigger({
   )
 }
 
+/** 标签对应的内容面板，未激活时由 Radix 控制不渲染。 */
 function TabsContent({
   className,
   ...props

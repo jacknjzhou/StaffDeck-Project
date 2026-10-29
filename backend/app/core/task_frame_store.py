@@ -29,18 +29,29 @@ MAX_TASK_FRAMES_PER_TURN = 8
 
 
 class TaskFrameClaimConflict(RuntimeError):
-    pass
+    """TaskFrame 或 run 的抢占/续租被其它执行者打断时抛出的冲突错误。"""
 
 
 class TaskFrameStore:
+    """Harness v2 中 TaskFrame、run 与 agent loop 的持久化和调度状态机。
+
+    状态迁移依赖 state_version 与 lease_owner 做 fencing，防止同一帧被并发执行；
+    写操作只 flush，事务提交由调用方负责。
+    """
+
     def __init__(self, db: Session):
+        """绑定当前数据库会话，存储层不自行提交事务。"""
         self.db = db
 
     def ensure_agent_loop(
         self,
         row: HarnessTaskFrameRecord,
     ) -> HarnessAgentLoopRecord:
-        """Return the durable logical loop that owns this TaskFrame."""
+        """返回并维护拥有该 TaskFrame 的持久 agent loop。
+
+        loop_key 按 sop:{frame_id} 或 general:{session_id} 生成；已存在时接管所有权、
+        重置为 active 并递增 state_version，最后把 loop id 回写到 TaskFrame。
+        """
 
         loop = self.db.get(HarnessAgentLoopRecord, row.agent_loop_id) if row.agent_loop_id else None
         loop_key = f"sop:{row.id}" if row.kind == "sop" else f"general:{row.session_id}"
@@ -87,6 +98,10 @@ class TaskFrameStore:
         status: str | None = None,
         last_run_id: str | None = None,
     ) -> None:
+        """写入 loop 检查点，并按需更新状态、最后 run id 与结束时间。
+
+        状态进入 completed/failed/cancelled 时记录 finished_at，否则清空。
+        """
         loop.checkpoint_json = dict(checkpoint)
         if status is not None:
             loop.status = status
@@ -108,6 +123,11 @@ class TaskFrameStore:
         checkpoint: dict[str, Any],
         last_run_id: str | None,
     ) -> None:
+        """按 TaskFrame 的结果收敛其 agent loop 状态。
+
+        awaiting_user/waiting_external_task 挂起为 suspended；非 sop 帧保持 active；
+        其余按 completed/cancelled/failed 结束。帧未绑定 loop 时静默返回。
+        """
         if not row.agent_loop_id:
             return
         loop = self.db.get(HarnessAgentLoopRecord, row.agent_loop_id)
@@ -138,6 +158,11 @@ class TaskFrameStore:
         source_turn_id: str,
         plan: TurnPlan,
     ) -> list[HarnessTaskFrameRecord]:
+        """把本轮规划落库成 TaskFrame，并回填 session 的待办投影。
+
+        每轮最多 MAX_TASK_FRAMES_PER_TURN 帧；已终态的同名任务跳过，租约过期的 running
+        帧先弃置旧 run 再重新排队，仍被占用的则抛 RuntimeError。依赖只保留本批次内引用。
+        """
         self._apply_updates(session, plan)
         bounded_frames = list(plan.task_frames[:MAX_TASK_FRAMES_PER_TURN])
         bounded_task_ids = {
@@ -224,6 +249,11 @@ class TaskFrameStore:
         return sorted(records, key=lambda row: row.sequence)
 
     def mark_running(self, row: HarnessTaskFrameRecord) -> None:
+        """把排队的 TaskFrame 抢占为 running 并发放租约。
+
+        以 status 与 state_version 做乐观锁更新，未命中说明已被其它轮次抢走，
+        回滚后抛 TaskFrameClaimConflict。
+        """
         lease_owner = new_id("hlease")
         expected_version = int(row.state_version or 0)
         attempt_no = max(0, int(row.attempt_no or 0)) + 1
@@ -264,6 +294,11 @@ class TaskFrameStore:
         lease_owner: str | None = None,
         attempt_no: int | None = None,
     ) -> None:
+        """在租约围栏内更新 TaskFrame 的需求与槽位，并顺延租约。
+
+        仅当 owner、attempt 与未过期租约全部匹配时才生效，否则回滚并抛
+        TaskFrameClaimConflict。
+        """
         expected_owner = lease_owner or row.lease_owner
         expected_attempt = (
             int(attempt_no)
@@ -310,7 +345,10 @@ class TaskFrameStore:
         lease_owner: str,
         attempt_no: int,
     ) -> None:
-        """Renew one claimed frame and its active run under the same fence."""
+        """在同一围栏下续租已抢占的 TaskFrame 及其运行中的 run。
+
+        帧更新未命中则回滚并抛 TaskFrameClaimConflict；run 的续租不额外校验行数。
+        """
 
         if not lease_owner:
             raise TaskFrameClaimConflict(
@@ -366,6 +404,11 @@ class TaskFrameStore:
         lease_owner: str | None = None,
         attempt_no: int | None = None,
     ) -> None:
+        """把 TaskFrame 置为指定终态并释放租约。
+
+        行处于 running 或显式传入 lease_owner 时走围栏更新，owner/attempt/租约不匹配
+        即回滚抛 TaskFrameClaimConflict；否则直接改内存对象，由调用方提交。
+        """
         error = result.get("error")
         error_json = dict(error) if isinstance(error, dict) else {}
         should_fence = lease_owner is not None or row.status == "running"
@@ -432,6 +475,10 @@ class TaskFrameStore:
         lease_owner: str | None = None,
         attempt_no: int | None = None,
     ) -> HarnessRunRecord:
+        """为已抢占的 TaskFrame 新建 running 状态的 HarnessRunRecord 并 flush。
+
+        同步继承当前 owner、attempt 与租约到期时间，供后续围栏续租和收尾使用。
+        """
         expected_owner = lease_owner or row.lease_owner
         expected_attempt = (
             int(attempt_no)
@@ -463,7 +510,10 @@ class TaskFrameStore:
         requirement: dict[str, Any],
         capability_snapshot: dict[str, Any],
     ) -> None:
-        """Refresh the current-node projection without creating another run."""
+        """刷新当前节点的需求与能力快照投影，不新建 run。
+
+        同一 run 内切换步骤时用它同步上下文，避免 run 记录持续膨胀。
+        """
 
         run.task_requirement_json = dict(requirement)
         run.capability_snapshot_json = dict(capability_snapshot)
@@ -480,6 +530,11 @@ class TaskFrameStore:
         lease_owner: str | None = None,
         attempt_no: int | None = None,
     ) -> None:
+        """在租约围栏内结束 run，写入状态、动作数与结果。
+
+        owner/attempt/未过期租约任一不匹配（或 run 已结束）时回滚并抛
+        TaskFrameClaimConflict。
+        """
         expected_owner = lease_owner or run.lease_owner
         expected_attempt = (
             int(attempt_no)
@@ -524,7 +579,11 @@ class TaskFrameStore:
         self,
         rows: list[HarnessTaskFrameRecord],
     ) -> None:
-        """Keep unstarted frames durable and resumable after the turn budget ends."""
+        """把本轮预算耗尽而未启动的帧保留为可恢复的排队状态。
+
+        跳过终态与 ready_to_resume 的帧，其余标记 queued、清空租约并写入
+        TURN_ACTION_BUDGET_DEFERRED，供下一轮续跑。
+        """
 
         for row in rows:
             if row.status in TERMINAL_FRAME_STATUSES or row.status == "ready_to_resume":
@@ -548,6 +607,7 @@ class TaskFrameStore:
         self,
         session: ChatSession,
     ) -> HarnessTaskFrameRecord | None:
+        """取会话中最近更新的、正在等待用户输入的对话型 TaskFrame。"""
         return self.db.exec(
             select(HarnessTaskFrameRecord)
             .where(
@@ -573,6 +633,10 @@ class TaskFrameStore:
         lease_owner: str | None = None,
         attempt_no: int | None = None,
     ) -> list[HarnessRunRecord]:
+        """结束某一源轮次遗留的 running run，可用 owner/attempt 收窄范围。
+
+        返回被结束的 run 列表，供取消或异常收尾时统一清理。
+        """
         filters = [
             HarnessRunRecord.session_id == session_id,
             HarnessRunRecord.source_turn_id == source_turn_id,
@@ -599,7 +663,11 @@ class TaskFrameStore:
         session: ChatSession,
         source_turn_id: str,
     ) -> list[HarnessTaskFrameRecord]:
-        """Cancel every nonterminal frame and running attempt created by one turn."""
+        """取消某一轮次创建的所有未终态帧及其运行中的 run。
+
+        同时把每个帧的 agent loop 收敛为 cancelled，若活动帧被取消则清理会话的
+        活动指针，最后重算会话投影。
+        """
 
         self.finish_source_turn_running_runs(
             session.id,
@@ -647,6 +715,7 @@ class TaskFrameStore:
         self,
         row: HarnessTaskFrameRecord,
     ) -> dict[str, Any]:
+        """返回 TaskFrame 所属 loop 的检查点副本，未绑定 loop 时返回空 dict。"""
         if not row.agent_loop_id:
             return {}
         loop = self.db.get(HarnessAgentLoopRecord, row.agent_loop_id)
@@ -657,6 +726,10 @@ class TaskFrameStore:
         row: HarnessTaskFrameRecord,
         records: list[HarnessTaskFrameRecord],
     ) -> bool:
+        """判断该 TaskFrame 的全部前置依赖是否已完成。
+
+        传入记录中缺失的依赖会回查数据库；没有依赖视为满足。
+        """
         dependency_ids = {
             str(task_id)
             for task_id in row.depends_on_json or []
@@ -685,7 +758,10 @@ class TaskFrameStore:
         self,
         row: HarnessTaskFrameRecord,
     ) -> None:
-        """Keep a dependent frame queued until every prerequisite completes."""
+        """把依赖未满足的帧保持排队，等前置任务完成后自动续跑。
+
+        清空租约并写入 DEPENDENCY_WAITING 标记，便于 ready_dependency_frames 识别。
+        """
 
         row.status = "queued"
         row.result_json = {
@@ -709,10 +785,10 @@ class TaskFrameStore:
         *,
         exclude_task_ids: set[str] | None = None,
     ) -> list[HarnessTaskFrameRecord]:
-        """Return durable follow-up frames whose prerequisites are complete.
+        """返回依赖已全部完成、可直接恢复执行的后续帧。
 
-        Old ``blocked/DEPENDENCY_BLOCKED`` rows are repaired here so sessions
-        created before dependency waiting became resumable are not stranded.
+        旧版 blocked/DEPENDENCY_BLOCKED 行在此修复为 queued，避免老会话卡死；
+        exclude_task_ids 可临时跳过指定任务。结果按创建时间、sequence 与 task_id 排序。
         """
 
         excluded = set(exclude_task_ids or set())
@@ -767,7 +843,10 @@ class TaskFrameStore:
         self,
         row: HarnessTaskFrameRecord,
     ) -> list[dict[str, Any]]:
-        """Project completed prerequisite results into the child TaskRequirement."""
+        """把已完成前置任务的结果投影成子任务需求可见的结构。
+
+        只纳入已完成的依赖，查不到的直接跳过；无依赖时返回空列表。
+        """
 
         dependency_ids = [
             str(task_id)
@@ -812,14 +891,10 @@ class TaskFrameStore:
         *,
         limit: int = 8,
     ) -> list[dict[str, Any]]:
-        """Resolve durable prior capability results referenced by this frame's slots.
+        """查找本帧槽位引用到的、同会话内已完成的能力结果。
 
-        A later TaskFrame may refer to an identifier produced by an earlier, unrelated
-        frame (for example an order, document, ticket, or job id). Those frames do not
-        have a planner dependency edge, but the model still needs the authoritative
-        result behind the identifier instead of passing the opaque id to an unrelated
-        lookup tool. Matching is exact, session-scoped, and only considers completed
-        invocations, so no conversational history or sibling task is leaked.
+        用于后续任务引用早期任务产物（订单号、文档 id 等）但没有依赖边的场景：按精确值
+        与已完成 invocation 匹配，范围限定同会话且非本任务，最多返回 limit 条。
         """
 
         reference_values = _reference_scalar_values(row.slots_json or {})
@@ -871,6 +946,10 @@ class TaskFrameStore:
         return projected
 
     def project_session(self, session: ChatSession) -> None:
+        """把非终态 sop 帧投影回 session.pending_tasks_json。
+
+        先保留不受管理的旧待办项，再追加除活动帧外的帧投影，并刷新 updated_at。
+        """
         rows = self.db.exec(
             select(HarnessTaskFrameRecord)
             .where(
@@ -903,6 +982,7 @@ class TaskFrameStore:
         self.db.add(session)
 
     def planner_state(self, session: ChatSession) -> list[dict[str, Any]]:
+        """返回规划器可见的未终态帧快照，含槽位、依赖与是否为活动帧。"""
         rows = self.db.exec(
             select(HarnessTaskFrameRecord)
             .where(
@@ -934,6 +1014,7 @@ class TaskFrameStore:
         ]
 
     def active_task_frame_id(self, session: ChatSession) -> str:
+        """读取会话当前活动 TaskFrame：优先 harness_v2 上下文，回落到等待输入信息。"""
         state = (
             session.context_state_json
             if isinstance(session.context_state_json, dict)
@@ -956,6 +1037,10 @@ class TaskFrameStore:
         session: ChatSession,
         row: HarnessTaskFrameRecord | None,
     ) -> None:
+        """设置或清除会话的 harness_v2 活动帧上下文，并刷新 updated_at。
+
+        传 None 时移除该上下文键。
+        """
         state = dict(session.context_state_json or {})
         if row is None:
             state.pop(HARNESS_CONTEXT_KEY, None)
@@ -977,6 +1062,10 @@ class TaskFrameStore:
         reason: str,
         task_id: str | None = None,
     ) -> HarnessTaskFrameRecord | None:
+        """把活动帧（或指定 task_id 的帧）标记完成并清理活动指针。
+
+        帧不存在或已终态时不改动，直接返回该行；否则写入完成摘要并结束帧。
+        """
         resolved_task_id = str(
             task_id or self.active_task_frame_id(session) or ""
         ).strip()
@@ -1011,6 +1100,10 @@ class TaskFrameStore:
         return row
 
     def _apply_updates(self, session: ChatSession, plan: TurnPlan) -> None:
+        """应用 TurnPlan 的任务更新：移除、重置排队、改意图或合并槽位。
+
+        找不到的 task_id 静默跳过；running 与终态帧不会被重置为 queued。
+        """
         for task_update in plan.task_updates:
             row = self.db.exec(
                 select(HarnessTaskFrameRecord).where(
@@ -1041,6 +1134,10 @@ class TaskFrameStore:
             self.db.add(row)
 
     def _abandon_stale_runs(self, row: HarnessTaskFrameRecord) -> None:
+        """把帧下仍在 running 的 run 标记为 abandoned，并清空其租约。
+
+        用于租约过期后重新排队前的清理，错误码记为 LEASE_EXPIRED。
+        """
         runs = self.db.exec(
             select(HarnessRunRecord).where(
                 HarnessRunRecord.task_frame_record_id == row.id,
@@ -1061,6 +1158,10 @@ class TaskFrameStore:
 
 
 def planned_frame_from_record(row: HarnessTaskFrameRecord) -> PlannedTaskFrame:
+    """把持久化的 TaskFrame 记录还原成 PlannedTaskFrame。
+
+    decision 缺失时按 kind 推导，非法 status 回落到 queued，槽位与依赖做浅拷贝。
+    """
     decision = row.decision or (
         "answer_only"
         if row.kind == "conversation"
@@ -1097,6 +1198,10 @@ def planned_frame_from_record(row: HarnessTaskFrameRecord) -> PlannedTaskFrame:
 
 
 def _legacy_projection(row: HarnessTaskFrameRecord) -> dict[str, Any]:
+    """生成旧版 pending_tasks_json 的条目结构，保持前端兼容。
+
+    未启动状态统一映射为 pending，并同时给出 skill_id/step_id 与其 target_ 别名。
+    """
     return {
         "task_id": row.task_id,
         "status": (
@@ -1122,7 +1227,7 @@ def _legacy_projection(row: HarnessTaskFrameRecord) -> dict[str, Any]:
 
 
 def _reference_scalar_values(value: Any) -> set[str]:
-    """Return reference-like slot values without matching ordinary short entities."""
+    """提取长度不小于 6 的槽位标量值，避免短实体造成误匹配。"""
 
     return {
         item
@@ -1132,6 +1237,7 @@ def _reference_scalar_values(value: Any) -> set[str]:
 
 
 def _all_scalar_values(value: Any) -> set[str]:
+    """递归收集嵌套 dict/list 中的非布尔标量，返回去空白后的字符串集合。"""
     if isinstance(value, dict):
         collected: set[str] = set()
         for item in value.values():

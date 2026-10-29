@@ -10,6 +10,7 @@ from app.api import app_updates
 
 
 def _feed(*entries: tuple[str, str]) -> bytes:
+    """拼装 Atom 发布源 XML，用标签与发布时间构造若干条目。"""
     body = "".join(
         (
             "<entry>"
@@ -24,6 +25,7 @@ def _feed(*entries: tuple[str, str]) -> bytes:
 
 
 def _response(content: bytes) -> httpx.Response:
+    """构造带发布源内容的 httpx 200 响应，附带合法请求对象。"""
     return httpx.Response(
         200,
         content=content,
@@ -33,10 +35,12 @@ def _response(content: bytes) -> httpx.Response:
 
 @pytest.fixture(autouse=True)
 def clear_update_cache(monkeypatch) -> None:
+    """每个用例前清空模块级缓存，避免版本检查结果相互污染。"""
     monkeypatch.setattr(app_updates, "_cached_result", None)
 
 
 def test_version_comparison_handles_stable_prerelease_and_build_metadata() -> None:
+    """验证版本比较正确处理稳定版、预发布、构建元数据与非法版本。"""
     assert app_updates._is_newer("v0.2.0-beta.10", "0.2.0-beta.3") is True
     assert app_updates._is_newer("0.2.0", "0.2.0-beta.10") is True
     assert app_updates._is_newer("0.2.0-beta.3", "0.2.0") is False
@@ -46,6 +50,7 @@ def test_version_comparison_handles_stable_prerelease_and_build_metadata() -> No
 
 
 def test_stable_build_ignores_prereleases_when_selecting_latest() -> None:
+    """验证稳定版构建挑选最新版时忽略预发布标签。"""
     release = app_updates._parse_release_feed(
         _feed(
             ("v0.3.0-beta.2", "2026-08-05T12:00:00Z"),
@@ -59,6 +64,7 @@ def test_stable_build_ignores_prereleases_when_selecting_latest() -> None:
 
 
 def test_supported_stable_line_ignores_legacy_prerelease_tags() -> None:
+    """验证旧式预发布标签不会被当成可升级的稳定版本。"""
     release = app_updates._parse_release_feed(
         _feed(
             ("v0.12-beta.2", "2026-07-31T06:13:44Z"),
@@ -73,6 +79,7 @@ def test_supported_stable_line_ignores_legacy_prerelease_tags() -> None:
 
 
 def test_prerelease_build_can_advance_to_newer_prerelease_or_stable() -> None:
+    """验证预发布构建可以升级到更新的预发布版本。"""
     release = app_updates._parse_release_feed(
         _feed(
             ("v0.3.0-beta.2", "2026-08-05T12:00:00Z"),
@@ -86,6 +93,7 @@ def test_prerelease_build_can_advance_to_newer_prerelease_or_stable() -> None:
 
 
 def test_fetch_version_uses_validated_github_release_url(monkeypatch) -> None:
+    """验证拉取版本时使用校验过的 GitHub 发布链接并标记有可用更新。"""
     monkeypatch.setattr(app_updates, "app_version", lambda: "0.2.0")
     monkeypatch.setattr(app_updates, "update_check_enabled", lambda: True)
     monkeypatch.setattr(
@@ -106,6 +114,7 @@ def test_fetch_version_uses_validated_github_release_url(monkeypatch) -> None:
 
 
 def test_source_deployment_skips_network_check_by_default(monkeypatch) -> None:
+    """验证未启用更新检查时不发起网络请求且结果为不可用。"""
     monkeypatch.setattr(app_updates, "app_version", lambda: "0.2.0")
     monkeypatch.setattr(app_updates, "update_check_enabled", lambda: False)
     monkeypatch.setattr(
@@ -122,9 +131,11 @@ def test_source_deployment_skips_network_check_by_default(monkeypatch) -> None:
 
 
 def test_fetch_version_fails_silently_and_failure_is_cached(monkeypatch) -> None:
+    """验证网络失败被静默处理，且失败结果被缓存只请求一次。"""
     calls = 0
 
     def fail(*args, **kwargs):
+        """模拟网络错误并统计请求次数。"""
         nonlocal calls
         calls += 1
         raise httpx.ConnectError("offline")
@@ -143,6 +154,7 @@ def test_fetch_version_fails_silently_and_failure_is_cached(monkeypatch) -> None
 
 
 def test_release_tag_rejects_untrusted_alternate_link() -> None:
+    """验证条目链接指向非 GitHub 域名时回退到官方发布页。"""
     content = b"""<feed xmlns="http://www.w3.org/2005/Atom">
       <entry>
         <id>tag:github.com,2008:Repository/1/v0.2.1</id>
@@ -159,6 +171,7 @@ def test_release_tag_rejects_untrusted_alternate_link() -> None:
 
 
 def test_app_version_priority_and_macos_resources(monkeypatch, tmp_path: Path) -> None:
+    """验证 macOS 资源版本文件与环境变量覆盖的优先级。"""
     app_root = tmp_path / "StaffDeck.app"
     executable = app_root / "Contents" / "MacOS" / "staffdeck"
     resource = app_root / "Contents" / "Resources" / "staffdeck-version.txt"
@@ -182,6 +195,7 @@ def test_app_version_priority_and_macos_resources(monkeypatch, tmp_path: Path) -
     [("true", False, True), ("false", True, False), ("", True, True), ("", False, False)],
 )
 def test_update_check_enablement(monkeypatch, configured: str, frozen: bool, expected: bool) -> None:
+    """验证更新检查开关由环境变量与冻结状态共同决定。"""
     if configured:
         monkeypatch.setenv("STAFFDECK_UPDATE_CHECK", configured)
     else:

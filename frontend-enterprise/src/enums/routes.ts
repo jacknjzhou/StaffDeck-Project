@@ -1,3 +1,8 @@
+/**
+ * 企业端前端路由枚举：集中定义各页面路径常量，供路由注册与跳转复用。
+ *
+ * - 边界条件：路径均为绝对路径，需与路由表保持一致，避免出现未注册地址。
+ */
 export enum EnterpriseRoute {
   Workspace = '/workspace',
   Chat = '/workspace/chat',

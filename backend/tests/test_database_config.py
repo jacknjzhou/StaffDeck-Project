@@ -17,6 +17,7 @@ from app.db.database import (
 def test_sqlite_startup_migration_adds_display_name_login_index(
     monkeypatch, tmp_path
 ) -> None:
+    """验证启动迁移为老库 users 补建租户+展示名索引，重复执行不重复建。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'legacy-users.db'}")
     with engine.begin() as conn:
         conn.execute(
@@ -56,6 +57,7 @@ def test_sqlite_startup_migration_adds_display_name_login_index(
 
 
 def test_knowledge_base_migration_accepts_existing_noncanonical_version_id(tmp_path) -> None:
+    """验证知识库迁移保留既有非规范版本 id，并把子表回填到该版本。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'knowledge-version.db'}")
     child_tables = (
         "knowledge_documents",
@@ -167,6 +169,7 @@ def test_knowledge_base_migration_accepts_existing_noncanonical_version_id(tmp_p
 
 
 def test_relative_sqlite_url_resolves_under_backend_dir() -> None:
+    """验证相对 SQLite 路径按 backend 目录解析为绝对路径。"""
     backend_dir = Path(__file__).resolve().parents[1]
 
     assert _normalize_database_url("sqlite:///./skill_agent_loop.db") == (
@@ -175,11 +178,13 @@ def test_relative_sqlite_url_resolves_under_backend_dir() -> None:
 
 
 def test_absolute_and_memory_sqlite_urls_are_preserved() -> None:
+    """验证绝对路径与内存库 URL 原样返回，不做改写。"""
     assert _normalize_database_url("sqlite:////tmp/example.db") == "sqlite:////tmp/example.db"
     assert _normalize_database_url("sqlite:///:memory:") == "sqlite:///:memory:"
 
 
 def test_frozen_relative_sqlite_resolves_under_user_data_dir(monkeypatch) -> None:
+    """验证打包运行时相对路径改落到用户数据目录。"""
     monkeypatch.setattr(paths, "is_frozen", lambda: True)
     # 与实现一致：_normalize_database_url 返回 .resolve() 后的路径，期望值同样 resolve
     expected = (paths.user_data_dir() / "skill_agent_loop.db").resolve()
@@ -187,6 +192,7 @@ def test_frozen_relative_sqlite_resolves_under_user_data_dir(monkeypatch) -> Non
 
 
 def test_frozen_sqlite_honors_data_dir_override(monkeypatch, tmp_path) -> None:
+    """验证 ULTRARAG_DATA_DIR 覆盖打包态的数据目录位置。"""
     # 直接断言 _normalize_database_url 返回值（不 importlib.reload 全局 engine）。
     # 期望值加 .resolve()：实现里有 .resolve()，Mac 上 /var→/private/var，
     # 且不依赖 pytest 版本对 tmp_path 是否预 resolve。
@@ -198,6 +204,7 @@ def test_frozen_sqlite_honors_data_dir_override(monkeypatch, tmp_path) -> None:
 
 
 def test_default_model_output_limit_migration_is_scoped_and_runs_once(tmp_path) -> None:
+    """验证默认模型输出上限只改默认行、记录迁移标记且不会二次执行。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'models.db'}")
     with engine.begin() as conn:
         conn.execute(
@@ -258,6 +265,7 @@ def test_default_model_output_limit_migration_is_scoped_and_runs_once(tmp_path) 
 
 
 def test_model_protocol_migration_preserves_legacy_chat_and_normalizes_defaults(tmp_path) -> None:
+    """验证协议迁移保留旧 chat 协议、归一化默认行并只执行一次。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'legacy-models.db'}")
     with engine.begin() as conn:
         conn.execute(
@@ -346,6 +354,7 @@ def test_model_protocol_migration_preserves_legacy_chat_and_normalizes_defaults(
 
 
 def test_model_protocol_migration_handles_table_without_extra_body(tmp_path) -> None:
+    """验证缺少 extra_body_json 列的最老表也能补齐为默认配置。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'oldest-models.db'}")
     with engine.begin() as conn:
         conn.execute(
@@ -380,6 +389,7 @@ def test_model_protocol_migration_handles_table_without_extra_body(tmp_path) -> 
 
 
 def test_model_protocol_migration_rolls_back_all_changes_on_failure(tmp_path) -> None:
+    """验证迁移中途失败时新增列与迁移标记一并回滚。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'rollback-models.db'}")
     with engine.begin() as conn:
         conn.execute(
@@ -426,6 +436,7 @@ def test_model_protocol_migration_rolls_back_all_changes_on_failure(tmp_path) ->
 
 
 def test_model_protocol_migration_repairs_marker_with_incomplete_schema(tmp_path) -> None:
+    """验证标记已存在但表结构残缺时补建列与唯一索引，且不覆盖人工校验结果。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'partial-models.db'}")
     with engine.begin() as conn:
         conn.execute(

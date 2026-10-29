@@ -49,6 +49,12 @@ type ScheduledDraftCardProps = {
   onDismiss: () => void;
 };
 
+/**
+ * 定时任务草案卡片：展示数字员工生成的排期草案，支持就地编辑、确认创建与忽略。
+ *
+ * - createdTask 存在时转为只读的「已创建」态，展示后端返回的最终配置。
+ * - 草案内容变化或切换到其它任务时，重置编辑副本并退出编辑态。
+ */
 export default function ScheduledDraftCard({
   draft,
   createdTask,
@@ -88,10 +94,12 @@ export default function ScheduledDraftCard({
     createdTask?.id,
   ]);
 
+  /** 合并局部字段到编辑副本，不直接改动父级传入的草案。 */
   const updateDraft = (patch: Partial<ScheduledTaskDraftRead>) => {
     setEditableDraft((current) => ({ ...current, ...patch }));
   };
   const scheduleValue = scheduleEditValue(editableDraft);
+  /** 校验名称、执行内容与执行计划均非空；不通过时弹出提示并返回 false。 */
   const validateDraft = (nextDraft: ScheduledTaskDraftRead) => {
     if (!nextDraft.title.trim()) {
       notify.warning('请输入定时任务名称');
@@ -107,6 +115,7 @@ export default function ScheduledDraftCard({
     }
     return true;
   };
+  /** 切换计划类型，并按新类型把已有排期值归一化为对应结构。 */
   const updateScheduleType = (value: ScheduledTaskDraftRead['schedule_type']) => {
     setEditableDraft((current) => {
       const scheduleType = normalizeDraftScheduleType(value);
@@ -114,13 +123,16 @@ export default function ScheduledDraftCard({
       return { ...current, schedule_type: scheduleType, schedule };
     });
   };
+  /** 把输入框中的排期文本写回编辑副本的 schedule 字段。 */
   const updateScheduleValue = (value: string) => {
     setEditableDraft((current) => ({ ...current, schedule: scheduleFromEditValue(current, value) }));
   };
+  /** 结束编辑：校验通过后退出编辑态，否则保留当前输入。 */
   const completeEdit = () => {
     if (!validateDraft(editableDraft)) return;
     setEditing(false);
   };
+  /** 确认创建定时任务：已创建或校验不通过时直接返回。 */
   const confirmDraft = () => {
     if (created) return;
     if (!validateDraft(editableDraft)) return;

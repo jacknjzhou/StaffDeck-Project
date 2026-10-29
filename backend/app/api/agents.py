@@ -102,6 +102,7 @@ def get_agent_scope(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentScopeRead:
+    """返回租户的智能体作用域概览，汇总当前用户可见的员工列表。"""
     ensure_tenant(db, tenant_id)
     _ensure_request_tenant(tenant_id, current_user)
     return AgentScopeRead(tenant_id=tenant_id, agents=list_agents(tenant_id, db, current_user))
@@ -113,6 +114,10 @@ def list_agents(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[AgentProfileRead]:
+    """列出当前用户在租户内可见的员工，并附上资源绑定与在用标记。
+
+    非管理员额外能看到整体智能体，它作为开放广场的只读复制来源。
+    """
     ensure_tenant(db, tenant_id)
     user = current_user
     _ensure_request_tenant(tenant_id, user)
@@ -138,6 +143,10 @@ def create_agent(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentProfileRead:
+    """新建员工档案，可按空白、复制指定员工或继承整体智能体三种方式初始化。
+
+    仅管理员能创建整体智能体；名称为空抛 400，租户内重名抛 409。
+    """
     ensure_tenant(db, request.tenant_id)
     user = current_user
     _ensure_request_tenant(request.tenant_id, user)
@@ -194,6 +203,7 @@ def get_agent(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentProfileRead:
+    """读取单个员工档案及其资源绑定，无访问权限时由访问校验抛 403。"""
     row = _get_agent(db, tenant_id, agent_id)
     _ensure_can_access_agent(row, current_user)
     return agent_read(row, _bindings_by_agent(db, tenant_id).get(row.id, []))
@@ -209,6 +219,7 @@ def list_agent_api_credentials(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[AgentAPICredentialRead]:
+    """列出员工名下的 API 密钥，只返回掩码前缀等非敏感字段。"""
     agent = _get_agent(db, tenant_id, agent_id)
     _ensure_can_manage_agent(agent, current_user)
     rows = db.exec(
@@ -232,6 +243,10 @@ def create_agent_api_credential(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentAPICredentialCreated:
+    """为员工签发新的 API 密钥，并仅在本次响应中返回一次明文 token。
+
+    整体智能体不能持有员工密钥；scope 由请求的 access 换算得到。
+    """
     agent = _get_agent(db, request.tenant_id, agent_id)
     _ensure_can_manage_agent(agent, current_user)
     if agent.is_overall:
@@ -268,6 +283,10 @@ def rotate_agent_api_credential(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentAPICredentialCreated:
+    """轮换员工密钥：覆盖摘要与状态并清除吊销时间，旧明文随即失效。
+
+    新明文只在本次响应返回，之后只能看到前缀。
+    """
     agent = _get_agent(db, tenant_id, agent_id)
     _ensure_can_manage_agent(agent, current_user)
     row = _get_agent_api_credential(db, tenant_id, agent_id, credential_id)
@@ -297,6 +316,7 @@ def revoke_agent_api_credential(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentAPICredentialRead:
+    """吊销员工密钥并记录吊销时间，保留记录以便审计。"""
     agent = _get_agent(db, tenant_id, agent_id)
     _ensure_can_manage_agent(agent, current_user)
     row = _get_agent_api_credential(db, tenant_id, agent_id, credential_id)
@@ -317,6 +337,10 @@ def get_agent_work_record(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentWorkRecordRead:
+    """汇总员工工作记录：对话回复统计、资源挂载与定时任务时间线。
+
+    回复统计只覆盖当前用户与该员工的会话；timezone 非法抛 400，时间按本地日期归组。
+    """
     agent = _get_agent(db, tenant_id, agent_id)
     _ensure_can_access_agent(agent, current_user)
     try:
@@ -376,6 +400,10 @@ def update_agent(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentProfileRead:
+    """局部更新员工档案，只写入请求中显式提供的字段。
+
+    名称需非空且租户内唯一；metadata 合并时保留原有创建者与所有者信息。
+    """
     row = _get_agent(db, request.tenant_id, agent_id)
     user = current_user
     _ensure_can_manage_agent(row, user)
@@ -419,7 +447,10 @@ def unpublish_agent_from_gallery(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> AgentProfileRead:
-    """Remove an employee from the open gallery without deleting the employee itself."""
+    """将员工从开放广场下架，但不删除员工本身。
+
+    仅管理员可操作；整体智能体不可下架，未上架时原样返回当前档案。
+    """
     _ensure_admin_user(tenant_id, current_user)
     row = _get_agent(db, tenant_id, agent_id)
     if row.is_overall:
@@ -450,6 +481,11 @@ def delete_agent(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """删除员工并级联清理其绑定、渠道挂载、会话、团队成员与待办数据。
+
+    整体智能体不可删除；默认渠道挂载被删时提升首个剩余挂载为默认，
+    定时任务转为暂停、待处理人工转接取消，最后移除会话工作区。
+    """
     row = _get_agent(db, tenant_id, agent_id)
     _ensure_can_manage_agent(row, current_user)
     if row.is_overall:
@@ -537,6 +573,7 @@ def get_agent_resources(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[AgentResourceBindingRead]:
+    """列出员工当前绑定的资源，按资源类型与创建时间排序。"""
     _ensure_can_access_agent(_get_agent(db, tenant_id, agent_id), current_user)
     rows = db.exec(
         select(AgentResourceBinding)
@@ -555,6 +592,10 @@ def update_agent_resources(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[AgentResourceBindingRead]:
+    """按请求列表整体替换员工资源绑定：新增缺失、更新已有、删除未列出项。
+
+    整体智能体使用全局资源池，不可单独配置；资源不存在时抛 404。
+    """
     agent = _get_agent(db, request.tenant_id, agent_id)
     _ensure_can_manage_agent(agent, current_user)
     if agent.is_overall:
@@ -600,6 +641,10 @@ def import_agent_resources(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """把源员工的指定资源导入目标员工，遇到数据库锁冲突时有限次重试。
+
+    非锁错误或重试耗尽直接上抛；仍在忙时返回 503。
+    """
     for attempt in range(IMPORT_LOCK_RETRY_ATTEMPTS):
         try:
             return _import_agent_resources_once(agent_id, request, db, current_user)
@@ -617,6 +662,10 @@ def _import_agent_resources_once(
     db: Session,
     current_user: User | object,
 ) -> dict[str, object]:
+    """单次执行资源导入：校验权限与来源可见性后逐条复制或提升分支。
+
+    每条资源返回成功明细或 missing 原因（不存在、源不可见、已禁用），末尾统一提交。
+    """
     target_agent = _get_agent(db, request.tenant_id, agent_id)
     source_agent = _get_agent(db, request.tenant_id, request.source_agent_id)
     user = current_user
@@ -690,6 +739,7 @@ def get_agent_skills(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[dict[str, object]]:
+    """返回员工可见的技能分支视图，包含已停用分支以便前端展示状态。"""
     _ensure_can_access_agent(_get_agent(db, tenant_id, agent_id), current_user)
     return [
         _skill_branch_read(skill)
@@ -705,6 +755,10 @@ def sync_agent_skill_from_overall(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """把开放广场的技能主干同步到员工分支，产生新的 head 版本。
+
+    整体智能体本身就是主干，不允许该操作；未发布的技能不可学习。
+    """
     agent = _get_agent(db, tenant_id, agent_id)
     _ensure_can_manage_agent(agent, current_user)
     if agent.is_overall:
@@ -727,6 +781,10 @@ def promote_agent_skill_to_overall(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """把员工技能分支提升为开放广场主干版本，仅管理员可执行。
+
+    整体智能体没有可提升的分支；分支不存在时抛 404。
+    """
     _ensure_admin_user(tenant_id, current_user)
     agent = _get_agent(db, tenant_id, agent_id)
     if agent.is_overall:
@@ -755,6 +813,10 @@ def rollback_agent_skill(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """把员工技能分支回滚到指定历史版本，并返回新的 head 版本。
+
+    整体智能体需改用全局技能回滚接口。
+    """
     agent = _get_agent(db, request.tenant_id, agent_id)
     _ensure_can_manage_agent(agent, current_user)
     if agent.is_overall:
@@ -774,6 +836,7 @@ def list_agent_skill_versions(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[dict[str, object]]:
+    """列出员工技能分支的历史版本，含内容、同步状态与变更摘要。"""
     _ensure_can_access_agent(_get_agent(db, tenant_id, agent_id), current_user)
     return [
         {
@@ -801,6 +864,10 @@ def update_agent_models(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
+    """兼容旧客户端的模型重置接口：清空员工模型绑定，统一继承租户默认模型。
+
+    员工级模型选择已下线，保留该入口只为避免旧客户端重建遗留绑定。
+    """
     _ensure_can_manage_agent(_get_agent(db, request.tenant_id, agent_id), current_user)
     # Employee-specific model selection has been retired. Keep this endpoint as a backwards-
     # compatible reset operation so older clients cannot recreate legacy bindings.
@@ -816,6 +883,10 @@ def get_agent_models(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> list[dict[str, object]]:
+    """返回员工实际生效的模型配置，当前实现只回显租户默认模型。
+
+    没有默认模型时返回空列表。
+    """
     agent = _get_agent(db, tenant_id, agent_id)
     _ensure_can_access_agent(agent, current_user)
     default = db.exec(
@@ -836,6 +907,10 @@ def list_chat_agents(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[AgentProfileRead]:
+    """列出当前用户可在聊天中选择的员工，排除整体智能体与非活跃项。
+
+    非管理员只能看到自己创建的、或已用过且已上架开放广场的员工。
+    """
     if tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
     ensure_tenant(db, tenant_id)
@@ -864,6 +939,10 @@ def use_chat_agent(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> AgentProfileRead:
+    """记录当前用户使用该员工，用于解锁聊天列表中的上架员工。
+
+    租户不匹配、员工非活跃或不可见时抛 403。
+    """
     if tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
     ensure_tenant(db, tenant_id)
@@ -884,6 +963,10 @@ def _agent_resource_timeline_events(
     tenant_id: str,
     agent_id: str,
 ) -> list[AgentWorkRecordEventRead]:
+    """根据员工的有效资源绑定生成“已挂载”时间线事件。
+
+    只保留当前可用的资源（已发布技能、启用工具等），绑定或分支失效则跳过。
+    """
     bindings = db.exec(
         select(AgentResourceBinding).where(
             AgentResourceBinding.tenant_id == tenant_id,
@@ -1000,6 +1083,10 @@ def _agent_scheduled_task_timeline_events(
     agent_id: str,
     current_user: User,
 ) -> list[AgentWorkRecordEventRead]:
+    """生成员工定时任务的最近运行与下次运行时间线事件。
+
+    非管理员只能看到自己创建的任务；已归档任务不参与统计。
+    """
     conditions = [
         ScheduledTask.tenant_id == tenant_id,
         ScheduledTask.agent_id == agent_id,
@@ -1026,12 +1113,14 @@ def _agent_scheduled_task_timeline_events(
 
 
 def _as_utc(value: datetime) -> datetime:
+    """把无时区的时间视为 UTC，有时区的时间统一换算到 UTC。"""
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
 
 
 def _iso_utc(value: datetime) -> str:
+    """格式化为以 Z 结尾的 ISO 8601 字符串，便于前端直接解析。"""
     return _as_utc(value).isoformat().replace("+00:00", "Z")
 
 
@@ -1040,6 +1129,10 @@ def agent_read(
     bindings: list[AgentResourceBinding],
     used_by_current_user: bool | None = None,
 ) -> AgentProfileRead:
+    """把员工数据行转换为读模型，附带资源绑定与当前用户的在用标记。
+
+    harness_max_actions 会被裁剪到 1-100；传入在用标记时覆盖 metadata 中的对应字段。
+    """
     metadata = dict(row.metadata_json or {})
     if used_by_current_user is not None:
         metadata["used_by_current_user"] = used_by_current_user
@@ -1061,10 +1154,12 @@ def agent_read(
 
 
 def _is_database_locked_error(exc: OperationalError) -> bool:
+    """判断 OperationalError 是否为 SQLite 的 database is locked 冲突。"""
     return "database is locked" in str(exc).lower()
 
 
 def _ensure_request_tenant(tenant_id: str, user: User) -> None:
+    """校验请求租户与当前用户所属租户一致，不一致时抛 403。"""
     if user.tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
 
@@ -1074,6 +1169,10 @@ def _ensure_staffdeck_agent_api_client(
     tenant_id: str,
     current_user: User,
 ) -> APIClient:
+    """获取或创建承载员工 API 密钥的内部 APIClient，并补齐所需 scope。
+
+    已有客户端若被停用或缺少 scope 会就地修复，新建时记录创建人。
+    """
     row = db.exec(
         select(APIClient).where(
             APIClient.tenant_id == tenant_id,
@@ -1108,6 +1207,7 @@ def _get_agent_api_credential(
     agent_id: str,
     credential_id: str,
 ) -> APICredential:
+    """按租户与员工归属读取 API 密钥，越权或不存在统一按 404 处理。"""
     row = db.get(APICredential, credential_id)
     if not row or row.tenant_id != tenant_id or row.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Employee API credential not found")
@@ -1115,6 +1215,7 @@ def _get_agent_api_credential(
 
 
 def _agent_api_credential_read(row: APICredential) -> AgentAPICredentialRead:
+    """把 API 密钥行转换为读模型，密钥只暴露前缀加省略号。"""
     return AgentAPICredentialRead(
         id=row.id,
         agent_id=str(row.agent_id or ""),
@@ -1131,6 +1232,10 @@ def _agent_api_credential_read(row: APICredential) -> AgentAPICredentialRead:
 
 
 def _agent_visible_to_user(row: AgentProfile, user: User) -> bool:
+    """判断员工对用户是否可见：管理员可见全部，普通用户可见整体、自建与已上架员工。
+
+    标记为 hidden_from_staffdeck 的员工对所有人隐藏。
+    """
     if _agent_hidden_from_staffdeck(row):
         return False
     if _is_admin_user(user):
@@ -1142,14 +1247,17 @@ def _agent_visible_to_user(row: AgentProfile, user: User) -> bool:
 
 
 def _agent_hidden_from_staffdeck(row: AgentProfile) -> bool:
+    """判断员工是否被标记为对 StaffDeck 控制台隐藏。"""
     return (row.metadata_json or {}).get("hidden_from_staffdeck") is True
 
 
 def _agent_published_to_gallery(row: AgentProfile) -> bool:
+    """判断员工是否已发布到开放广场。"""
     return (row.metadata_json or {}).get("published_to_gallery") is True
 
 
 def _used_agent_ids_for_user(db: Session, tenant_id: str, user: User) -> set[str]:
+    """汇总用户使用过的员工 ID，来源包括使用记录与会话归属。"""
     usage_rows = db.exec(
         select(AgentUsage.agent_id).where(
             AgentUsage.tenant_id == tenant_id,
@@ -1168,6 +1276,10 @@ def _used_agent_ids_for_user(db: Session, tenant_id: str, user: User) -> set[str
 
 
 def _mark_agent_used(db: Session, tenant_id: str, user: User, agent_id: str) -> AgentUsage:
+    """记录用户使用某员工的行为，已存在则只刷新时间。
+
+    并发插入触发唯一约束时回滚并复用已有记录，两者都没有才上抛。
+    """
     row = db.exec(
         select(AgentUsage).where(
             AgentUsage.tenant_id == tenant_id,
@@ -1198,6 +1310,10 @@ def _mark_agent_used(db: Session, tenant_id: str, user: User, agent_id: str) -> 
 
 
 def _chat_agent_selectable_to_user(row: AgentProfile, user: User, used_agent_ids: set[str]) -> bool:
+    """判断员工能否出现在当前用户的聊天选择列表。
+
+    整体智能体不入选；自建员工直接可选，上架员工需已用过，其余仅管理员可选。
+    """
     if row.is_overall:
         return False
     if _agent_owned_by_user(row, user):
@@ -1208,12 +1324,14 @@ def _chat_agent_selectable_to_user(row: AgentProfile, user: User, used_agent_ids
 
 
 def _ensure_can_access_agent(row: AgentProfile, user: User) -> None:
+    """校验当前用户可访问该员工，租户不一致或不可见时抛 403。"""
     _ensure_request_tenant(row.tenant_id, user)
     if not _agent_visible_to_user(row, user):
         raise HTTPException(status_code=403, detail="Cannot access this agent")
 
 
 def _ensure_can_copy_from_agent(row: AgentProfile, user: User) -> None:
+    """校验可从该员工复制资源：整体智能体或对用户可见的员工才放行。"""
     _ensure_request_tenant(row.tenant_id, user)
     if row.is_overall or _agent_visible_to_user(row, user):
         return
@@ -1221,6 +1339,7 @@ def _ensure_can_copy_from_agent(row: AgentProfile, user: User) -> None:
 
 
 def _ensure_can_manage_agent(row: AgentProfile, user: User) -> None:
+    """校验管理权限：管理员放行，整体智能体仅管理员可管，普通员工需为创建者。"""
     _ensure_request_tenant(row.tenant_id, user)
     if _is_admin_user(user):
         return
@@ -1234,6 +1353,7 @@ def _ensure_can_manage_agent(row: AgentProfile, user: User) -> None:
 
 
 def _ensure_can_import_to_agent(row: AgentProfile, user: User) -> None:
+    """校验可向目标员工导入资源：整体智能体要求管理员，其余复用管理权限校验。"""
     if row.is_overall:
         _ensure_admin_user(row.tenant_id, user)
         return
@@ -1241,6 +1361,7 @@ def _ensure_can_import_to_agent(row: AgentProfile, user: User) -> None:
 
 
 def _ensure_admin_user(tenant_id: str, user: User) -> None:
+    """校验用户是租户管理员，否则抛 403。"""
     _ensure_request_tenant(tenant_id, user)
     if not _is_admin_user(user):
         raise HTTPException(
@@ -1249,6 +1370,7 @@ def _ensure_admin_user(tenant_id: str, user: User) -> None:
 
 
 def _metadata_with_creator(metadata: dict[str, object], user: User) -> dict[str, object]:
+    """写入创建者与所有者元信息，供后续权限判断与展示使用。"""
     normalized = dict(metadata or {})
     display_name = user.display_name or user.username
     normalized["owner_user_id"] = user.id
@@ -1267,6 +1389,10 @@ def _metadata_preserving_creator(
     next_metadata: dict[str, object],
     user: User,
 ) -> dict[str, object]:
+    """合并新的 metadata，但保留已有的创建者与所有者字段，避免更新时丢失归属。
+
+    只有原值为非空字符串时才保留，空值允许被新 metadata 覆盖。
+    """
     normalized = dict(next_metadata or {})
     for key in (
         "owner_user_id",
@@ -1285,10 +1411,12 @@ def _metadata_preserving_creator(
 
 
 def _chat_agent_visible_to_user(row: AgentProfile, user: User) -> bool:
+    """判断员工在聊天场景下对用户是否可见，规则与员工列表保持一致。"""
     return _agent_visible_to_user(row, user)
 
 
 def binding_read(row: AgentResourceBinding) -> AgentResourceBindingRead:
+    """把资源绑定行转换为读模型，metadata 缺省为空字典。"""
     return AgentResourceBindingRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -1305,6 +1433,10 @@ def binding_read(row: AgentResourceBinding) -> AgentResourceBindingRead:
 def _copy_agent_scope_from_source(
     db: Session, tenant_id: str, source: AgentProfile, target: AgentProfile
 ) -> None:
+    """把源员工的资源作用域复制到目标员工，并重置其模型绑定以继承租户默认模型。
+
+    整体智能体走全局作用域复制，普通员工逐条复制资源绑定。
+    """
     if source.is_overall:
         copy_overall_scope_to_agent(db, tenant_id, target)
     else:
@@ -1326,6 +1458,10 @@ def _copy_resource_binding(
     target_agent_id: str,
     binding: AgentResourceBinding,
 ) -> None:
+    """复制单条资源绑定到目标员工，跳过非活跃绑定。
+
+    私有通用技能会另存副本；技能与知识库同时复制对应分支。
+    """
     if binding.status != "active":
         return
     resource_id = binding.resource_id
@@ -1365,6 +1501,7 @@ def _copy_resource_binding(
 
 
 def _dedupe_ids(resource_ids: list[str]) -> list[str]:
+    """对资源 ID 做去空白与去重，保持首次出现的顺序。"""
     seen: set[str] = set()
     deduped: list[str] = []
     for raw_id in resource_ids:
@@ -1383,6 +1520,7 @@ def _source_resource_binding(
     resource_type: str,
     resource_id: str,
 ) -> AgentResourceBinding | None:
+    """查找源员工对指定资源的绑定；整体智能体没有私有绑定，返回 None。"""
     if source_agent.is_overall:
         return None
     return db.exec(
@@ -1406,6 +1544,10 @@ def _blocked_learning_reason(
     resolved: AgentResource,
     source_binding: AgentResourceBinding | None,
 ) -> str | None:
+    """判断资源能否从源员工学习，返回阻止原因代码，可学习时返回 None。
+
+    原因包括开放广场侧已禁用，以及源员工的绑定或技能/知识库分支非活跃。
+    """
     if source_agent.is_overall:
         return (
             None
@@ -1443,6 +1585,7 @@ def _open_gallery_resource_enabled(
     resource_type: str,
     resolved: AgentResource,
 ) -> bool:
+    """判断资源是否属于开放广场且处于可学习状态（已发布或已启用）。"""
     if not is_open_gallery_resource(db, tenant_id, resource_type, resolved):
         return False
     if resource_type == "skill" and isinstance(resolved, Skill):
@@ -1463,6 +1606,10 @@ def _import_resource_to_overall(
     resource_type: str,
     resolved: AgentResource,
 ) -> None:
+    """把源员工的技能或知识库分支提升到整体智能体。
+
+    源本身就是整体智能体时直接返回；其他资源类型无需提升。
+    """
     if source_agent.is_overall:
         return
     if resource_type == "skill" and isinstance(resolved, Skill):
@@ -1489,6 +1636,10 @@ def _upsert_imported_resource_binding(
     resolved: AgentResource,
     source_binding: AgentResourceBinding | None,
 ) -> AgentResource:
+    """在目标员工上新增或更新资源绑定，并同步对应技能/知识库分支。
+
+    私有通用技能先复制为员工私有副本，再以副本 ID 建立绑定；返回最终资源。
+    """
     if (
         resource_type == "general_skill"
         and isinstance(resolved, GeneralSkill)
@@ -1537,6 +1688,10 @@ def _copy_private_general_skill(
     source: GeneralSkill,
     target_agent_id: str,
 ) -> GeneralSkill:
+    """为员工复制一份私有通用技能，已复制过则直接复用旧副本。
+
+    副本 slug 自动去重，metadata 记录来源技能 ID 与 slug。
+    """
     existing_bindings = db.exec(
         select(AgentResourceBinding).where(
             AgentResourceBinding.tenant_id == tenant_id,
@@ -1578,6 +1733,7 @@ def _copy_private_general_skill(
 
 
 def _unique_general_skill_slug(db: Session, tenant_id: str, base_slug: str) -> str:
+    """在租户内生成唯一 slug，冲突时依次追加 -2、-3 等后缀。"""
     candidate = base_slug
     suffix = 2
     while db.exec(
@@ -1594,6 +1750,10 @@ def _unique_general_skill_slug(db: Session, tenant_id: str, base_slug: str) -> s
 def _copy_or_update_skill_branch(
     db: Session, tenant_id: str, source_agent_id: str, target_agent_id: str, skill: Skill
 ) -> None:
+    """把源员工的技能分支状态复制或更新到目标员工分支。
+
+    源员工没有分支时退化为从整体智能体同步，复制后确保 head 版本记录存在。
+    """
     with db.no_autoflush:
         source_branch = db.exec(
             select(AgentSkillBranch).where(
@@ -1636,6 +1796,7 @@ def _copy_or_update_skill_branch(
 def _ensure_copied_skill_branch_version(
     db: Session, branch: AgentSkillBranch, change_summary: str
 ) -> None:
+    """确保分支的 head 版本存在对应版本记录，已存在则刷新内容，否则新建。"""
     existing = db.exec(
         select(AgentSkillBranchVersion).where(
             AgentSkillBranchVersion.tenant_id == branch.tenant_id,
@@ -1674,6 +1835,10 @@ def _copy_or_update_knowledge_branch(
     target_agent_id: str,
     kb: KnowledgeBase,
 ) -> None:
+    """把源员工的知识库分支版本状态复制或更新到目标员工。
+
+    源分支不存在时取知识库当前版本，并把分支标记为 active 与已同步。
+    """
     with db.no_autoflush:
         source_branch = db.exec(
             select(AgentKnowledgeBranch).where(
@@ -1718,6 +1883,7 @@ def _copy_or_update_knowledge_branch(
 
 
 def _resource_display_id(resource_type: str, resolved: AgentResource) -> str:
+    """返回资源在界面展示的标识：技能用 skill_id、通用技能用 slug、工具用 name。"""
     if resource_type == "skill" and isinstance(resolved, Skill):
         return resolved.skill_id
     if resource_type == "general_skill" and isinstance(resolved, GeneralSkill):
@@ -1730,12 +1896,14 @@ def _resource_display_id(resource_type: str, resolved: AgentResource) -> str:
 def _copy_agent_models_from_source(
     db: Session, tenant_id: str, source: AgentProfile, target: AgentProfile
 ) -> None:
+    """员工模型绑定不再复制，直接清除目标员工的绑定以继承租户默认模型。"""
     # Model bindings are intentionally not copied. Every employee inherits the tenant default.
     _ = source
     _delete_agent_model_bindings(db, tenant_id, target.id)
 
 
 def _delete_agent_model_bindings(db: Session, tenant_id: str, agent_id: str) -> None:
+    """删除员工遗留的模型绑定，删除由调用方统一提交。"""
     bindings = db.exec(
         select(AgentModelBinding).where(
             AgentModelBinding.tenant_id == tenant_id,
@@ -1749,6 +1917,10 @@ def _delete_agent_model_bindings(db: Session, tenant_id: str, agent_id: str) -> 
 def _copy_skill_branch(
     db: Session, tenant_id: str, source_agent_id: str, target_agent_id: str, skill: Skill
 ) -> None:
+    """为复制出的员工资源新建技能分支及其 head 版本记录。
+
+    源员工没有分支时退化为从整体智能体创建分支。
+    """
     source_branch = db.exec(
         select(AgentSkillBranch).where(
             AgentSkillBranch.tenant_id == tenant_id,
@@ -1792,6 +1964,7 @@ def _copy_skill_branch(
 def _copy_knowledge_branch(
     db: Session, tenant_id: str, source_agent_id: str, target_agent_id: str, kb: KnowledgeBase
 ) -> None:
+    """复制源员工的知识库分支到目标员工；源分支不存在时不做任何事。"""
     source_branch = db.exec(
         select(AgentKnowledgeBranch).where(
             AgentKnowledgeBranch.tenant_id == tenant_id,
@@ -1818,6 +1991,7 @@ def _copy_knowledge_branch(
 def _resolve_resource(
     db: Session, tenant_id: str, resource_type: str, identifier: str
 ) -> AgentResource | None:
+    """按资源类型把 ID、skill_id、slug 或名称解析为具体资源，未命中返回 None。"""
     if resource_type == "skill":
         return (
             db.get(Skill, identifier)
@@ -1854,6 +2028,7 @@ def _resolve_resource(
 
 
 def _get_agent(db: Session, tenant_id: str, agent_id: str) -> AgentProfile:
+    """确保租户存在后按 ID 读取员工，跨租户或不存在统一抛 404。"""
     ensure_tenant(db, tenant_id)
     row = db.get(AgentProfile, agent_id)
     if not row or row.tenant_id != tenant_id:
@@ -1862,6 +2037,10 @@ def _get_agent(db: Session, tenant_id: str, agent_id: str) -> AgentProfile:
 
 
 def _bindings_by_agent(db: Session, tenant_id: str) -> dict[str, list[AgentResourceBinding]]:
+    """按员工分组加载可见的资源绑定，供列表接口一次渲染。
+
+    已删除或对员工摘要不可见的绑定会被过滤。
+    """
     rows = db.exec(
         select(AgentResourceBinding)
         .where(AgentResourceBinding.tenant_id == tenant_id)
@@ -1893,6 +2072,11 @@ def _resource_binding_visible_in_agent_summary(
     agent: AgentProfile | None,
     binding: AgentResourceBinding,
 ) -> bool:
+    """判断资源绑定是否应出现在员工摘要中。
+
+    综合绑定状态、资源状态、分支状态与开放广场可见性过滤失效项，
+    同时隐藏空的默认知识库。
+    """
     if not agent or binding.status == "deleted":
         return False
 
@@ -1963,6 +2147,7 @@ def _resource_binding_visible_in_agent_summary(
 
 
 def _is_empty_default_knowledge_base(db: Session, tenant_id: str, kb: KnowledgeBase) -> bool:
+    """判断知识库是否为没有文档、桶或分块的空默认知识库，用于摘要中隐藏。"""
     metadata = kb.metadata_json or {}
     has_runtime_rows = any(
         db.exec(
@@ -1981,6 +2166,7 @@ def _is_empty_default_knowledge_base(db: Session, tenant_id: str, kb: KnowledgeB
 
 
 def _ensure_resource_exists(db: Session, tenant_id: str, item: AgentResourceBindingInput) -> None:
+    """校验资源在租户内存在，缺失时抛 404 并带上资源类型与 ID。"""
     model = {
         "skill": Skill,
         "general_skill": GeneralSkill,
@@ -1995,6 +2181,7 @@ def _ensure_resource_exists(db: Session, tenant_id: str, item: AgentResourceBind
 
 
 def _get_global_skill(db: Session, tenant_id: str, skill_id: str) -> Skill:
+    """按 skill_id 在租户内查找全局技能，不存在时抛 404。"""
     row = db.exec(
         select(Skill).where(Skill.tenant_id == tenant_id, Skill.skill_id == skill_id)
     ).first()
@@ -2004,6 +2191,10 @@ def _get_global_skill(db: Session, tenant_id: str, skill_id: str) -> Skill:
 
 
 def _skill_branch_read(skill: Skill) -> dict[str, object]:
+    """把技能及其分支元信息组装为接口返回的字典结构。
+
+    分支信息优先取自 agent_branch_meta，缺失时回退到 content_json 内的同名节点。
+    """
     metadata = getattr(skill, "agent_branch_meta", {}) or {}
     content = skill.content_json or {}
     if not metadata and isinstance(content.get("metadata"), dict):

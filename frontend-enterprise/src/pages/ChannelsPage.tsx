@@ -107,7 +107,7 @@ const CHANNEL_COMMANDS: Array<{ command: string; description: string }> = [
 
 const BINDING_NAME_MAX_LENGTH = 50;
 
-// 接入默认名:渠道名 + YYYYMMDDHHMM,如「飞书202608250910」
+/** 生成接入默认名：渠道名 + YYYYMMDDHHMM，如「飞书202608250910」。 */
 function defaultBindingName(channelLabel: string): string {
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -115,6 +115,7 @@ function defaultBindingName(channelLabel: string): string {
   return `${channelLabel}${stamp}`;
 }
 
+/** 计算单条渠道消息的展示名与正文；群聊时从内容前缀解析真实发送者。 */
 function messageDisplay(
   msg: ChannelConversationMessageRead,
   conversation: ChannelConversationRead,
@@ -133,6 +134,7 @@ function messageDisplay(
   return { label: msg.role, content: msg.content };
 }
 
+/** 渠道会话附件展示：图片按需拉取 Blob 预览，其它类型点击后下载。 */
 function ChannelAttachmentView({
   attachment,
   bindingId,
@@ -194,6 +196,7 @@ function ChannelAttachmentView({
   );
 }
 
+/** 判断绑定是否处于会话恢复中：未连接、未过期且带 session_expired 标记。 */
 function isSessionRecovering(binding: ChannelBindingRead): boolean {
   return (
     !binding.connected &&
@@ -202,6 +205,7 @@ function isSessionRecovering(binding: ChannelBindingRead): boolean {
   );
 }
 
+/** 生成渠道异常提示文案，用于列表顶部告警条。 */
 function attentionText(item: ChannelBindingRead): string {
   if (item.status === 'expired') {
     return item.channel === 'wechat'
@@ -212,12 +216,14 @@ function attentionText(item: ChannelBindingRead): string {
   return '当前未连接，请检查凭证或网络';
 }
 
+/** 把后端时间格式化为当前时区下的日期文本，非法时间返回 "-"。 */
 function formatDay(value: string): string {
   const date = parseBackendDateTime(value);
   if (Number.isNaN(date.getTime())) return '-';
   return date.toLocaleDateString(getDateLocale(), { timeZone: getClientTimeZone() });
 }
 
+/** 按日期把列表分组为「天 -> 条目」结构，取时间方式由调用方提供。 */
 function groupByDay<T>(
   items: T[],
   getTime: (item: T) => string,
@@ -235,6 +241,7 @@ function groupByDay<T>(
   return groups;
 }
 
+/** 渠道接入页：管理接入配置、可调度员工、身份绑定、对话记录与投递日志。 */
 export default function ChannelsPage({
   currentUser,
   onLogout,
@@ -338,10 +345,12 @@ export default function ChannelsPage({
     selectedIdRef.current = selectedId;
   }, [selectedId]);
 
+  /** 判断异步请求发起时的选中快照是否已失效，避免旧响应覆盖当前详情。 */
   function ifStale(snapshot: string): boolean {
     return snapshot !== selectedIdRef.current;
   }
 
+  /** 拉取租户成员及其渠道身份；失败时清空成员列表，不打断主流程。 */
   async function loadTenantUsers() {
     try {
       const rows = await api.get<Array<{ id: string; username: string; display_name?: string; source?: string; channel_identities?: Array<{ channel: string; display_name?: string; external_user_id?: string; external_account_scope?: string }> }>>(
@@ -390,6 +399,7 @@ export default function ChannelsPage({
     }
   }, [selectedId]);
 
+  /** 加载渠道接入列表，失败时弹出错误提示。 */
   async function load() {
     setLoading(true);
     try {
@@ -404,6 +414,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 加载当前用户在各渠道的身份绑定；失败时置空。 */
   async function loadIdentityBindings() {
     try {
       const rows = await api.get<ChannelIdentityBindingRead[]>(
@@ -415,6 +426,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 加载渠道元数据（名称、接入方式等），无论成功与否都标记已加载。 */
   async function loadChannelMetas() {
     try {
       const rows = await api.get<ChannelMetaRead[]>(
@@ -428,6 +440,11 @@ export default function ChannelsPage({
     }
   }
 
+  /**
+   * 解除当前用户选中的渠道身份绑定。
+   *
+   * 成功后关闭确认框并刷新绑定列表；未选中目标时直接返回。
+   */
   async function confirmUnbindIdentity() {
     if (!unbindIdentityTarget) return;
     setUnbindingIdentity(true);
@@ -445,6 +462,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 生成身份绑定的 scope 展示文案，飞书技术键会解析为 appId。 */
   function scopeLabel(identity: ChannelIdentityBindingRead): string {
     const scope = identity.external_account_scope || '';
     if (!scope) return channelName(identity.channel);
@@ -456,6 +474,11 @@ export default function ChannelsPage({
     return `Bot: ${scope}`;
   }
 
+  /**
+   * 分页加载指定接入的投递日志（每页 7 天）。
+   *
+   * offset 为 0 时覆盖列表并展开最新一天；响应返回时若选中项已切换则丢弃。
+   */
   async function loadDeliveries(bindingId: string, offset = 0) {
     const snapshot = selectedId;
     setDeliveriesLoading(true);
@@ -477,6 +500,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 展开或收起某个日期的投递日志。 */
   function toggleDeliveryDay(date: string) {
     setExpandedDays((current) => {
       const next = new Set(current);
@@ -489,6 +513,11 @@ export default function ChannelsPage({
     });
   }
 
+  /**
+   * 分页加载指定接入的对话记录（每页 20 条）。
+   *
+   * offset 为 0 时覆盖列表；响应返回时若选中项已切换则丢弃。
+   */
   async function loadConversations(bindingId: string, offset = 0) {
     const snapshot = selectedId;
     setConversationsLoading(true);
@@ -507,6 +536,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 打开指定会话并加载其消息列表，加载前清空旧消息。 */
   async function openConversation(item: ChannelConversationRead) {
     if (!binding) return;
     const snapshot = selectedId;
@@ -527,6 +557,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 加载团队列表，供绑定对象选择与团队名称映射使用。 */
   async function loadTeams() {
     setTeamsLoading(true);
     try {
@@ -540,16 +571,19 @@ export default function ChannelsPage({
     }
   }
 
+  /** 取接入所属团队名称，缺失时回退到本地团队列表或「团队」。 */
   function teamNameFor(item: ChannelBindingRead): string {
     if (!item.team_id) return '';
     return item.team_name || teams.find((team) => team.id === item.team_id)?.name || '团队';
   }
 
+  /** 取团队项目领导姓名，未设置时返回「未设置」。 */
   function teamLeaderName(teamId: string): string {
     const team = teams.find((item) => item.id === teamId);
     return team?.members.find((member) => member.role === 'leader')?.agent_name || '未设置';
   }
 
+  /** 加载可挂载的候选员工，排除整体智能体与当前用户无权管理者。 */
   async function loadAgentCandidates() {
     setCandidatesLoading(true);
     try {
@@ -567,6 +601,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 打开接入创建弹窗并重置到第一步，同时预载员工与团队列表。 */
   function openCreate() {
     setCreateStep('channel');
     setCreateChannel(channelMetas[0]?.channel || 'wechat');
@@ -579,6 +614,11 @@ export default function ChannelsPage({
     void loadTeams();
   }
 
+  /**
+   * 按当前向导选择创建渠道接入，员工与团队二选一。
+   *
+   * 成功后关闭弹窗、刷新列表并选中新建项。
+   */
   async function createBinding() {
     const agentId = createTarget === 'agent' ? createAgentId : '';
     const teamId = createTarget === 'team' ? createTeamId : '';
@@ -606,12 +646,14 @@ export default function ChannelsPage({
     }
   }
 
+  /** 打开重命名弹窗，默认填入当前名称或渠道名。 */
   function openRename(item: ChannelBindingRead) {
     setRenameTargetId(item.id);
     setRenameValue(item.name?.trim() || channelName(item.channel));
     setRenameOpen(true);
   }
 
+  /** 提交接入重命名；名称为空时提示并中断。 */
   async function confirmRename() {
     const target = bindings.find((item) => item.id === renameTargetId);
     if (!target || renaming) return;
@@ -638,6 +680,11 @@ export default function ChannelsPage({
     }
   }
 
+  /**
+   * 生成身份绑定码：传成员 ID 时生成该成员的绑定码，否则生成当前用户的。
+   *
+   * 成功后打开绑定码弹窗，并记录倒计时所需的过期时间。
+   */
   async function openBindCode(targetUserId?: string) {
     if (bindCodeLoading) return;
     setBindCodeLoading(true);
@@ -664,6 +711,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 复制「/绑定 <code>」指令到剪贴板，失败时提示。 */
   async function copyBindCommand() {
     if (!bindCode) return;
     try {
@@ -674,6 +722,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 断开当前渠道接入，成功后清空选中项并刷新列表。 */
   async function confirmUnbind() {
     if (!binding) return;
     setUnbinding(true);
@@ -691,6 +740,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 启用或停用当前接入，并用接口返回结果就地更新列表。 */
   async function toggleStatus() {
     if (!binding) return;
     setTogglingStatus(true);
@@ -707,6 +757,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 进入可调度员工编辑态，预填已挂载员工与默认员工。 */
   function openAgentEdit() {
     const mounted = binding?.agents || [];
     setSelectedAgentIds(new Set(mounted.map((item) => item.agent_id)));
@@ -717,6 +768,7 @@ export default function ChannelsPage({
     void loadAgentCandidates();
   }
 
+  /** 勾选或取消候选员工，并在默认员工被移除时改选剩余首个。 */
   function toggleAgentSelect(agentIdToToggle: string, checked: boolean) {
     const next = new Set(selectedAgentIds);
     if (checked) {
@@ -730,6 +782,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 保存可调度员工及其默认项；未选员工时直接返回。 */
   async function saveAgents() {
     if (!binding || selectedAgentIds.size === 0 || savingAgents) return;
     setSavingAgents(true);
@@ -756,6 +809,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 更新智能分发开关，并用接口返回结果就地更新列表。 */
   async function toggleAutoRoute(next: boolean) {
     if (!binding || autoRouteSaving) return;
     setAutoRouteSaving(true);
@@ -775,6 +829,7 @@ export default function ChannelsPage({
     }
   }
 
+  /** 保存默认人工处理人，值形如「用户ID::渠道」，空值表示未配置。 */
   async function saveHandoffAssignee(value: string) {
     if (!binding || handoffAssigneeSaving) return;
     const { userId, channel } = parseHandoffAssigneeValue(value === '__none__' ? '' : value);
@@ -799,18 +854,22 @@ export default function ChannelsPage({
     }
   }
 
+  /** 按渠道编码查找渠道元数据。 */
   function metaFor(channel: string): ChannelMetaRead | undefined {
     return channelMetas.find((item) => item.channel === channel);
   }
 
+  /** 取渠道展示名，优先使用后端返回的元数据名称。 */
   function channelName(channel: string): string {
     return getChannelPresentation(channel, metaFor(channel)?.name).name;
   }
 
+  /** 取接入展示名，未命名时回退到渠道名。 */
   function bindingDisplayName(item: ChannelBindingRead): string {
     return item.name?.trim() || channelName(item.channel);
   }
 
+  /** 取接入的渠道类型标签，名称与渠道名相同时不重复展示。 */
   function channelTypeTag(item: ChannelBindingRead): string | null {
     const name = item.name?.trim();
     // 未命名或改回渠道类型名时不重复展示
@@ -818,10 +877,12 @@ export default function ChannelsPage({
     return channelName(item.channel);
   }
 
+  /** 取渠道接入方式，微信默认扫码，其余默认凭证。 */
   function setupKindFor(channel: string): string {
     return metaFor(channel)?.setup || (channel === 'wechat' ? 'qrcode' : 'credentials');
   }
 
+  /** 把接入状态映射为徽标样式与文案，非扫码渠道的 pending 显示「待配置」。 */
   function bindingStatusFor(item: ChannelBindingRead): { tone: BadgeTone; text: string } {
     if (item.status === 'pending' && setupKindFor(item.channel) !== 'qrcode') {
       return { tone: 'blue', text: '待配置' };

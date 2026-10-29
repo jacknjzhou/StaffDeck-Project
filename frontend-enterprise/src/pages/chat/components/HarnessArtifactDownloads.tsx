@@ -28,6 +28,11 @@ type HarnessArtifactDownloadsProps = {
   sessionId: string;
 };
 
+/**
+ * 对话生成文件下载区：列出本轮产物，图片项附带缩略图预览。
+ *
+ * 无产物时返回 null；租户或会话缺失时禁用下载，避免请求非法地址。
+ */
 export default function HarnessArtifactDownloads({
   artifacts,
   tenantId,
@@ -37,6 +42,11 @@ export default function HarnessArtifactDownloads({
 
   if (artifacts.length === 0) return null;
 
+  /**
+   * 下载单个产物：拉取二进制内容后触发浏览器保存。
+   *
+   * 下载期间按“任务帧 + 路径”标识当前项，结束后无论成败都会清除该状态。
+   */
   async function downloadArtifact(artifact: HarnessWorkspaceArtifact) {
     const identity = `${artifact.task_frame_id}\u001f${artifact.path}`;
     const filename = artifactFilename(artifact.display_name || artifact.path);
@@ -124,6 +134,11 @@ type ArtifactImagePreviewProps = {
   onDownload: () => void;
 };
 
+/**
+ * 图片产物预览卡片：按需拉取 Blob 并生成临时 object URL。
+ *
+ * 依赖变化或组件卸载时回收 object URL；加载失败时展示可下载的兜底文案。
+ */
 function ArtifactImagePreview({
   artifact,
   identity,
@@ -202,6 +217,7 @@ function ArtifactImagePreview({
   );
 }
 
+/** 拼接产物下载接口地址，对会话 ID、任务帧 ID 与路径参数做编码。 */
 function artifactApiPath(
   artifact: HarnessWorkspaceArtifact,
   tenantId: string,
@@ -215,11 +231,13 @@ function artifactApiPath(
     + `${encodeURIComponent(artifact.task_frame_id)}?${query.toString()}`;
 }
 
+/** 从产物路径取出文件名，过滤控制字符并截断到 180 字符，缺省为 artifact。 */
 function artifactFilename(path: string): string {
   const filename = path.replace(/\\/g, '/').split('/').pop()?.trim() || '';
   return filename.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 180) || 'artifact';
 }
 
+/** 判断产物是否为图片：优先看 content-type，其次按文件名后缀匹配。 */
 function isImageArtifact(artifact: HarnessWorkspaceArtifact): boolean {
   const contentType = artifact.content_type?.toLowerCase().split(';')[0].trim();
   if (contentType?.startsWith('image/')) return true;
@@ -228,6 +246,7 @@ function isImageArtifact(artifact: HarnessWorkspaceArtifact): boolean {
   );
 }
 
+/** 组合产物的描述与体积文案，缺少描述时回退为“生成文件”。 */
 function artifactMeta(artifact: HarnessWorkspaceArtifact): string {
   const size = formatArtifactSize(artifact.size);
   const description = artifact.description?.trim();
@@ -236,6 +255,7 @@ function artifactMeta(artifact: HarnessWorkspaceArtifact): string {
   return size ? `生成文件 · ${size}` : '生成文件';
 }
 
+/** 将字节数格式化为 B/KB/MB 文案，非法或负数返回空字符串。 */
 function formatArtifactSize(size: number | null | undefined): string {
   if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) return '';
   if (size < 1024) return `${size} B`;

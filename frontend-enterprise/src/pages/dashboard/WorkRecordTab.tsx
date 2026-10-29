@@ -78,6 +78,12 @@ const capabilityBarClass = 'block h-[4px] w-full overflow-hidden rounded-[90px] 
 const capabilityBarFillClass = 'block h-full w-[20px] rounded-[90px] bg-[#282931] group-data-[tone=dark]:bg-[#e9e9e9]';
 const capabilityDescClass = 'line-clamp-5 min-w-0 overflow-hidden text-[10px] leading-[16px] font-normal text-[#757f9c] [overflow-wrap:anywhere] group-data-[tone=dark]:line-clamp-2 group-data-[tone=dark]:text-[#f6f6f6]';
 
+/**
+ * 数字员工工作记录 Tab：展示对话/反馈指标、活动时间轴与成长记录，并汇总能力卡片。
+ *
+ * - 指标卡点击后跳转到当前员工的对话日志页。
+ * - 能力卡片按知识库、技能、SOP、工具、定时任务、对话日志的顺序跳转对应路由。
+ */
 export default function WorkRecordTab({
   selectedAgent,
   activeKnowledge,
@@ -93,6 +99,7 @@ export default function WorkRecordTab({
   negativeRate,
 }: WorkRecordTabProps) {
   const navigate = useNavigate();
+  /** 跳转到当前数字员工的对话日志页。 */
   const goToLogs = () => navigate(`/enterprise/feedback?agent_id=${encodeURIComponent(selectedAgent.id)}`);
 
   const capabilityCards = [
@@ -248,6 +255,7 @@ const metricValueToneClass: Record<MetricTone, string> = {
   negative: 'text-[#d20b0b] in-data-[theme=dark]:text-[#f26565]',
 };
 
+/** 可点击的指标卡：展示数值与标签，点击后触发回调。 */
 function ClickableMetric({
   label,
   value,
@@ -344,6 +352,12 @@ type ActivityTimelineProps = {
   events: AgentWorkRecordEventRead[];
 };
 
+/**
+ * 活动时间轴：按日/周/月三种视图展示数字员工的活动事件。
+ *
+ * - 日视图把事件按轨道合并为时间条，悬浮可查看明细。
+ * - 周/月视图改用日历卡片展示，并从事件中聚合出每日活动列表。
+ */
 function ActivityTimeline({ events }: ActivityTimelineProps) {
   const [mode, setMode] = useState<TimelineMode>('day');
   const [anchor, setAnchor] = useState<number>(() => startOfDay(new Date()).getTime());
@@ -379,7 +393,9 @@ function ActivityTimeline({ events }: ActivityTimelineProps) {
     [eventsByTrack, range],
   );
 
+  /** 把时间轴锚点按当前视图模式前后移动一个周期。 */
   const shift = (direction: number) => setAnchor((prev) => shiftAnchor(mode, prev, direction));
+  /** 切换视图模式，并把锚点归一化到新模式下的周期起点。 */
   const changeMode = (next: TimelineMode) => {
     setMode(next);
     setAnchor(normalizeAnchor(next, anchor));
@@ -519,6 +535,7 @@ function ActivityTimeline({ events }: ActivityTimelineProps) {
   );
 }
 
+/** 时间轴空状态占位，展示当前周期无活动记录时的提示文案。 */
 function TimelineEmptyState({ text }: { text: string }) {
   return (
     <div className="flex min-h-[178px] w-full flex-col items-center justify-center gap-[10px] rounded-[20px] border border-dashed border-[#e3e7f1] in-data-[theme=dark]:border-[#343741]">
@@ -530,6 +547,7 @@ function TimelineEmptyState({ text }: { text: string }) {
   );
 }
 
+/** 周视图日历：按天分列展示本周活动，单日超过 4 条时折叠为「还有 N 项」。 */
 function WeekCalendar({
   anchor,
   itemsByDay,
@@ -630,6 +648,7 @@ function WeekCalendar({
   );
 }
 
+/** 月视图日历：渲染整月网格（含前后补位日期），单元格内可展开当日活动。 */
 function MonthCalendar({
   anchor,
   itemsByDay,
@@ -730,6 +749,7 @@ function MonthCalendar({
   );
 }
 
+/** 时间轴左右切换箭头图标。 */
 function TimelineChevron({ direction }: { direction: 'left' | 'right' }) {
   return (
     <svg viewBox="0 0 14 14" fill="none" className="size-[14px]" aria-hidden>
@@ -744,16 +764,19 @@ function TimelineChevron({ direction }: { direction: 'left' | 'right' }) {
   );
 }
 
+/** 返回给定日期当天 00:00:00 的新 Date 对象。 */
 function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
+/** 返回给定日期所在周的周日 00:00:00（按周日到周六划分）。 */
 function startOfWeek(date: Date): Date {
   const start = startOfDay(date);
   start.setDate(start.getDate() - start.getDay());
   return start;
 }
 
+/** 按视图模式计算锚点所在周期的起止时间戳（毫秒，左闭右开区间）。 */
 function timelineRange(mode: TimelineMode, anchor: number): { start: number; end: number } {
   const base = new Date(anchor);
   if (mode === 'day') {
@@ -769,10 +792,12 @@ function timelineRange(mode: TimelineMode, anchor: number): { start: number; end
   return { start: start.getTime(), end: end.getTime() };
 }
 
+/** 把任意时间戳归一化为该视图周期的起始时间戳。 */
 function normalizeAnchor(mode: TimelineMode, anchor: number): number {
   return timelineRange(mode, anchor).start;
 }
 
+/** 按视图模式将锚点前移/后移一个周期，返回归一化后的时间戳。 */
 function shiftAnchor(mode: TimelineMode, anchor: number, direction: number): number {
   const base = new Date(anchor);
   if (mode === 'day') base.setDate(base.getDate() + direction);
@@ -781,6 +806,7 @@ function shiftAnchor(mode: TimelineMode, anchor: number, direction: number): num
   return normalizeAnchor(mode, base.getTime());
 }
 
+/** 生成时间条上的悬浮文案，例如「对话3条」或「新增工具 名称 等N项」。 */
 function trackBarLabel(
   track: TimelineTrackConfig,
   bar: { count: number; names: string[] },
@@ -800,6 +826,12 @@ type DaySegment = { left: number; width: number; count: number; names: string[];
 const DAY_HOURS = 24;
 const HOUR_MS = 60 * 60 * 1000;
 
+/**
+ * 把一天内的事件按 2 小时网格聚合成时间轴条块。
+ *
+ * - 起点向下、终点向上对齐 2 小时刻度（如 6:26 → 6-8 点）。
+ * - 相邻或重叠的条块会合并，返回百分比定位、数量与事件明细。
+ */
 function daySegments(events: TrackEvent[], range: { start: number; end: number }): DaySegment[] {
   const inRange = events
     .filter((event) => event.time >= range.start && event.time < range.end)
@@ -829,6 +861,7 @@ function daySegments(events: TrackEvent[], range: { start: number; end: number }
   }));
 }
 
+/** 生成时间轴底部刻度文案：日视图为 2 小时刻度，周/月视图为日期。 */
 function timelineTicks(mode: TimelineMode, range: { start: number; end: number }): string[] {
   if (mode === 'day') {
     return Array.from({ length: 13 }, (_, index) => formatHour(index * 2));
@@ -849,18 +882,21 @@ function timelineTicks(mode: TimelineMode, range: { start: number; end: number }
   return ticks;
 }
 
+/** 把 0-24 的整点小时格式化为 12AM、3PM 这类短文本。 */
 function formatHour(hour: number): string {
   if (hour === 0 || hour === 24) return '12AM';
   if (hour === 12) return '12PM';
   return hour < 12 ? `${hour}AM` : `${hour - 12}PM`;
 }
 
+/** 把日期格式化为 YYYY/MM/DD。 */
 function formatTimelineDate(date: Date): string {
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
   const day = `${date.getDate()}`.padStart(2, '0');
   return `${date.getFullYear()}/${month}/${day}`;
 }
 
+/** 生成日期按钮文案：日视图为具体日期，周视图为日期区间，月视图为年月。 */
 function formatTimelineRange(mode: TimelineMode, range: { start: number; end: number }): string {
   const start = new Date(range.start);
   if (mode === 'day') return formatTimelineDate(start);
@@ -870,6 +906,12 @@ function formatTimelineRange(mode: TimelineMode, range: { start: number; end: nu
   return `${start.getFullYear()}/${`${start.getMonth() + 1}`.padStart(2, '0')}`;
 }
 
+/**
+ * 时间轴日期选择浮层：日历选日 + 今天/本周/本月等快捷入口。
+ *
+ * - 打开浮层时把选择器视图同步回当前锚点所在周期。
+ * - 选中日期后先归一化再回调 onPick，并自动关闭浮层。
+ */
 function TimelineDatePicker({
   mode,
   anchor,
@@ -884,10 +926,12 @@ function TimelineDatePicker({
   const [open, setOpen] = useState(false);
   const [viewDate, setViewDate] = useState(() => new Date(anchor));
 
+  /** 打开浮层时先把视图同步到当前锚点，再更新展开状态。 */
   const handleOpenChange = (next: boolean) => {
     if (next) setViewDate(new Date(anchor));
     setOpen(next);
   };
+  /** 归一化选中日期后回调 onPick，并关闭浮层。 */
   const commit = (date: Date) => {
     onPick(normalizeAnchor(mode, date.getTime()));
     setOpen(false);
@@ -895,6 +939,7 @@ function TimelineDatePicker({
 
   const selected = new Date(anchor);
   const selectedWeekStart = startOfWeek(selected).getTime();
+  /** 按月份或年份翻动选择器视图，视图日期固定到当月 1 号。 */
   const shiftView = (deltaMonth: number, deltaYear: number) =>
     setViewDate((prev) => new Date(prev.getFullYear() + deltaYear, prev.getMonth() + deltaMonth, 1));
 
@@ -1030,21 +1075,24 @@ function TimelineDatePicker({
   );
 }
 
+/** 判断两个 Date 是否为同一天（忽略时分秒）。 */
 function isSameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+/** 生成时间轴左上角的当前周期文案（月视图为年/月，其余为具体日期）。 */
 function formatAnchorLabel(mode: TimelineMode, range: { start: number; end: number }): string {
   const start = new Date(range.start);
   if (mode === 'month') return `${start.getFullYear()}/${`${start.getMonth() + 1}`.padStart(2, '0')}`;
   return formatTimelineDate(start);
 }
 
+/** 把时间格式化为 HH:mm 字符串。 */
 function formatHm(date: Date): string {
   return `${`${date.getHours()}`.padStart(2, '0')}:${`${date.getMinutes()}`.padStart(2, '0')}`;
 }
 
-// Sun→Sat weeks covering the full month of the anchor (leading/trailing days included).
+/** 生成覆盖锚点所在整月的周数组（周日至周六，含前后补位日期，最多 6 行）。 */
 function monthCalendarWeeks(anchor: number): Date[][] {
   const base = new Date(anchor);
   const monthStart = new Date(base.getFullYear(), base.getMonth(), 1);
@@ -1064,6 +1112,12 @@ function monthCalendarWeeks(anchor: number): Date[][] {
   return weeks;
 }
 
+/**
+ * 按天聚合活动事件，供周/月日历渲染。
+ *
+ * - 对话事件按天合并为「对话N条」，并排在其他活动之前。
+ * - 其余事件按类型加中文前缀；时间戳非法的事件会被忽略。
+ */
 function buildDayActivities(events: AgentWorkRecordEventRead[]): Record<string, DayActivity[]> {
   const map: Record<string, DayActivity[]> = {};
   const push = (event: AgentWorkRecordEventRead, label: string) => {
@@ -1100,6 +1154,7 @@ function buildDayActivities(events: AgentWorkRecordEventRead[]): Record<string, 
   return map;
 }
 
+/** 把日期格式化为 YYYY-MM-DD 的本地日期键，用于日历按天索引。 */
 export function dateKey(date: Date): string {
   const year = date.getFullYear();
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
@@ -1107,6 +1162,12 @@ export function dateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * 汇总 SOP、通用技能与工具的成长事件，按时间升序返回。
+ *
+ * - SOP 分支版本变化记为「SOP 进化」，技能更新时间明显变化记为升级。
+ * - 缺少可用时间戳的事件会被过滤掉。
+ */
 function growthTimeline(
   sops: SkillRead[],
   generalSkills: GeneralSkillRead[],
@@ -1159,6 +1220,7 @@ function growthTimeline(
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 }
 
+/** 按优先级依次挑选元数据中第一个可用的时间戳字段，作为成长记录的稳定时间。 */
 function stableGrowthTimestamp(item: GrowthTimestampSource): string {
   const metadata = item.metadata || {};
   const candidates = [
@@ -1172,11 +1234,13 @@ function stableGrowthTimestamp(item: GrowthTimestampSource): string {
   return candidates.find((value): value is string => typeof value === 'string' && Boolean(value.trim())) || '';
 }
 
+/** 判断创建时间与更新时间相差是否超过 1 分钟，用于区分新增与升级。 */
 function isMeaningfullyUpdated(createdAt?: string, updatedAt?: string): boolean {
   if (!createdAt || !updatedAt) return false;
   return Math.abs(new Date(updatedAt).getTime() - new Date(createdAt).getTime()) > 60 * 1000;
 }
 
+/** 把时间戳格式化为 M.D，时间非法时返回「-」。 */
 function formatMonthDay(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';

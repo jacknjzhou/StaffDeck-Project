@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '../api/client';
 import { modelActionError, modelProviderErrorMessage } from './ModelsPage';
 
+/** 模型服务商诊断信息与错误码的提示文案。 */
 describe('model provider diagnostics', () => {
+  /** 验证文案包含上游状态、服务商错误码、响应体与请求 ID。 */
   it('renders upstream status, provider code, body and request id', () => {
     expect(modelProviderErrorMessage({
       code: 'MODEL_UPSTREAM_ERROR',
@@ -20,6 +22,7 @@ describe('model provider diagnostics', () => {
     );
   });
 
+  /** 验证保存失败时从响应体中解析出结构化服务商诊断信息。 */
   it('reads structured provider diagnostics from a failed save response', () => {
     const error = new ApiError(502, JSON.stringify({
       detail: {
@@ -37,6 +40,7 @@ describe('model provider diagnostics', () => {
     expect(modelActionError(error, '保存失败')).toContain('上游响应：{"error":"bad request"}');
   });
 
+  /** 验证已知的模型配置错误码被翻译为中文提示。 */
   it('localizes a stable model configuration error code', () => {
     const error = new ApiError(422, JSON.stringify({
       detail: 'MODEL_PROTOCOL_OPTIONS_INVALID',
@@ -47,6 +51,7 @@ describe('model provider diagnostics', () => {
     );
   });
 
+  /** 验证未知稳定错误码被包裹为操作失败提示，不裸露错误码本身。 */
   it('wraps an unknown stable error code instead of exposing a bare token', () => {
     const error = new ApiError(422, JSON.stringify({ detail: 'MODEL_NEW_FAILURE' }), '');
 

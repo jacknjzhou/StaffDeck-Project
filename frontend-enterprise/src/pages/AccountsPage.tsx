@@ -65,6 +65,7 @@ type AccountCreateDraft = {
 
 const ACCOUNT_PAGE_SIZE = 10;
 
+/** 账号角色徽标：管理员显示蓝色，普通成员显示灰色。 */
 export function AccountRoleBadge({ role }: { role: EmployeeAccount['role'] }) {
   return (
     <StatusBadge tone={role === 'admin' ? 'blue' : 'gray'}>
@@ -73,6 +74,11 @@ export function AccountRoleBadge({ role }: { role: EmployeeAccount['role'] }) {
   );
 }
 
+/**
+ * 账号管理页：展示当前租户的成员账号，支持搜索、分页、新建、编辑与删除。
+ *
+ * 首次挂载时拉取账号列表；管理员账号受保护，不提供删除操作。
+ */
 export default function AccountsPage({
   currentUser,
   onLogout,
@@ -97,6 +103,7 @@ export default function AccountsPage({
   const [deleteTarget, setDeleteTarget] = useState<EmployeeAccount | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  /** 拉取当前租户的账号列表，并维护 loading 状态与失败提示。 */
   async function load() {
     setLoading(true);
     try {
@@ -124,16 +131,22 @@ export default function AccountsPage({
 
   const pagination = useClientPagination(filteredRows, ACCOUNT_PAGE_SIZE, searchText);
 
+  /** 打开编辑弹窗，并用当前行数据初始化草稿（密码留空表示不修改）。 */
   function openEdit(row: EmployeeAccount) {
     setEditing(row);
     setDraft({ displayName: row.display_name || row.username, password: '', role: row.role });
   }
 
+  /** 重置新建草稿并打开新建账号弹窗。 */
   function openCreate() {
     setCreateDraft({ username: '', displayName: '', password: '', role: 'member' });
     setCreateOpen(true);
   }
 
+  /**
+   * 提交新建账号：校验用户名与密码后调用创建接口，成功后关闭弹窗并刷新列表。
+   * 用户名或密码为空时只提示错误，不发起请求。
+   */
   async function saveCreate() {
     const username = createDraft.username.trim();
     const password = createDraft.password.trim();
@@ -160,6 +173,10 @@ export default function AccountsPage({
     }
   }
 
+  /**
+   * 提交账号编辑：无编辑目标时直接返回；密码留空则不提交 password 字段。
+   * 保存成功后关闭弹窗并重新加载列表。
+   */
   async function saveEdit() {
     if (!editing) return;
     setSaving(true);
@@ -180,6 +197,7 @@ export default function AccountsPage({
     }
   }
 
+  /** 删除确认回调：按 deleteTarget 调用删除接口，成功后关闭确认框并刷新列表。 */
   async function confirmDelete() {
     const row = deleteTarget;
     if (!row) return;
@@ -196,6 +214,7 @@ export default function AccountsPage({
     }
   }
 
+  /** 渲染行操作菜单：编辑入口 + 删除入口（管理员账号不可删除）。 */
   function renderActions(row: EmployeeAccount) {
     const isProtected = row.role === 'admin';
     return (
@@ -264,6 +283,7 @@ export default function AccountsPage({
     },
   ];
 
+  /** 渲染移动端账号卡片，与桌面端表格共用同一份行数据与操作菜单。 */
   const renderMobileCard = (row: EmployeeAccount) => (
     <article className={MOBILE_CARD_CLASS} key={row.id}>
       <div className="flex min-w-0 items-start justify-between gap-[10px]">
@@ -422,6 +442,10 @@ export default function AccountsPage({
   );
 }
 
+/**
+ * 账号新建/编辑弹窗：新建时可填写用户名，编辑时用户名只读展示。
+ * 密码留空表示不修改，角色支持下拉切换且可禁用。
+ */
 function AccountDialog({
   open,
   title,
@@ -534,6 +558,7 @@ function AccountDialog({
   );
 }
 
+/** 表单字段包装：在控件上方渲染小号标签文本。 */
 function LabeledField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-[6px]">

@@ -14,11 +14,13 @@ import {
 } from '../chatPageStyles';
 import type { UseChatSession } from '../useChatSession';
 
+/** 按展示名字符数计算问候语字号：名字越长字号越小，避免卡片内换行溢出。 */
 function greetingFontSize(displayName: string): number {
   const length = Array.from(displayName).length;
   return length > 20 ? 20 : length > 12 ? 24 : length > 6 ? 30 : 36;
 }
 
+/** 会话空态入口：当前会话带 team_id 时渲染团队空态卡片，否则渲染数字员工空态卡片。 */
 export default function ChatEmptyState({ chat }: { chat: UseChatSession }) {
   if (chat.currentSession?.team_id) {
     return <TeamEmptyCard chat={chat} />;
@@ -26,6 +28,7 @@ export default function ChatEmptyState({ chat }: { chat: UseChatSession }) {
   return <EmployeeEmptyCard chat={chat} />;
 }
 
+/** 数字员工空态卡片：展示数字员工头像、问候语、角色摘要、标签与统计信息。 */
 function EmployeeEmptyCard({ chat }: { chat: UseChatSession }) {
   const { displayedAgent, displayedProfile, emptyRoleSummary, emptyProfileTags, emptyStats } = chat;
   const displayName = displayedAgent ? employeeDisplayName(displayedAgent) : '';
@@ -83,6 +86,7 @@ function EmployeeEmptyCard({ chat }: { chat: UseChatSession }) {
   );
 }
 
+/** 团队空态卡片：展示前三位成员头像、团队问候语、成员标签与团队统计信息。 */
 function TeamEmptyCard({ chat }: { chat: UseChatSession }) {
   const { displayedTeam, currentSession, agents, teamEmptyStats } = chat;
   const members = displayedTeam?.members || [];

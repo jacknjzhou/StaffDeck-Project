@@ -14,9 +14,11 @@ from app.llm.protocol_drivers import (
 
 
 def test_gemini_driver_uses_llm_center_generate_content_contract() -> None:
+    """验证按 generateContent 契约组装请求体，并解析候选文本与 token 用量。"""
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """记录请求方法、URL、请求头与 JSON 体，并返回单个候选的模拟响应。"""
         captured["method"] = request.method
         captured["url"] = str(request.url)
         captured["headers"] = dict(request.headers)
@@ -82,9 +84,11 @@ def test_gemini_driver_uses_llm_center_generate_content_contract() -> None:
 
 
 def test_gemini_driver_maps_sse_stream_and_closes_response() -> None:
+    """验证 SSE 流被解析为文本增量与 finish_reason 两类分块。"""
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """返回一条携带两段 data 事件的 SSE 响应，供流式解析校验。"""
         captured["url"] = str(request.url)
         return httpx.Response(
             200,
@@ -121,7 +125,9 @@ def test_gemini_driver_maps_sse_stream_and_closes_response() -> None:
 
 
 def test_gemini_driver_maps_http_errors_and_cancellation() -> None:
+    """验证 429 映射为可重试的 MODEL_RATE_LIMITED，已取消的令牌映射为 MODEL_CANCELLED。"""
     def error_handler(_request: httpx.Request) -> httpx.Response:
+        """模拟上游 429 RESOURCE_EXHAUSTED 错误响应。"""
         return httpx.Response(429, json={"error": {"status": "RESOURCE_EXHAUSTED"}})
 
     client = httpx.Client(transport=httpx.MockTransport(error_handler))
@@ -161,6 +167,7 @@ def test_gemini_driver_maps_http_errors_and_cancellation() -> None:
 
 
 def test_llm_client_builds_gemini_driver(monkeypatch) -> None:
+    """验证 LLMClient 依据 api_protocol 选择 Gemini 驱动并透传 base_url。"""
     http_client = httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200)))
     monkeypatch.setattr("app.llm.client.decrypt_secret", lambda _value: "secret")
     monkeypatch.setattr("app.llm.client.httpx.Client", lambda **_kwargs: http_client)

@@ -19,6 +19,8 @@ router = APIRouter(
 
 
 class PersonaRead(BaseModel):
+    """租户人设的对外响应模型，字段与 PersonaConfig 保持一致。"""
+
     tenant_id: str
     system_prompt: str
     updated_at: str
@@ -27,11 +29,14 @@ class PersonaRead(BaseModel):
 
 
 class PersonaUpdateRequest(BaseModel):
+    """更新人设的请求体，要求显式带上 tenant_id 与新的 system_prompt。"""
+
     tenant_id: str
     system_prompt: str
 
 
 def persona_read(row: PersonaConfig) -> PersonaRead:
+    """把数据库里的 PersonaConfig 行转成 PersonaRead，时间统一转 ISO 字符串。"""
     return PersonaRead(
         tenant_id=row.tenant_id,
         system_prompt=row.system_prompt,
@@ -41,6 +46,7 @@ def persona_read(row: PersonaConfig) -> PersonaRead:
 
 @router.get("", response_model=PersonaRead, dependencies=[Depends(require_current_tenant)])
 def get_persona(tenant_id: str = Query(...), db: Session = Depends(get_session)) -> PersonaRead:
+    """读取指定租户的人设；记录不存在时用 DEFAULT_PERSONA_PROMPT 初始化后落库。"""
     ensure_tenant(db, tenant_id)
     row = db.get(PersonaConfig, tenant_id)
     if not row:
@@ -57,6 +63,7 @@ def update_persona(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> PersonaRead:
+    """校验调用者是租户管理员后写入人设提示词，返回落库后的最新记录。"""
     ensure_tenant_admin(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
     row = db.get(PersonaConfig, request.tenant_id)

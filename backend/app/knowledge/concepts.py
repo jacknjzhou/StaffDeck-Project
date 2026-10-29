@@ -12,11 +12,11 @@ def ensure_okf_concepts_for_version(
     knowledge_base_id: str,
     version_id: str,
 ) -> int:
-    """Materialise OKF concepts for every ready document of one KB version.
+    """为某个知识库版本下所有就绪文档生成 OKF 概念。
 
-    Idempotent: documents that already have concepts for this version are skipped,
-    so callers can invoke this on every read without churn. Returns the number of
-    documents that produced new concepts, which makes the work observable in tests.
+    幂等：该版本已存在概念的文档会被跳过，因此可在每次读取时安全调用。
+    返回产生了新概念的文档数量，便于在测试中断言实际工作量；没有章节树
+    也没有分块的文档不计入统计。
     """
     documents = db.exec(
         select(KnowledgeDocument).where(

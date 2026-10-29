@@ -156,6 +156,9 @@ _session_title_summary_jobs_lock = threading.Lock()
 
 
 class HumanHandoffRead(BaseModel):
+    """人工转接请求的对外响应模型。
+    把 HumanHandoffRequest 的字段序列化给前端，metadata 缺失时回退为空字典。
+    """
     id: str
     tenant_id: str
     session_id: str
@@ -175,11 +178,13 @@ class HumanHandoffRead(BaseModel):
 
 
 class ChatTurnCancelRequest(BaseModel):
+    """取消一轮聊天的请求体，按 tenant_id 与 turn_id 定位要停止的生成。"""
     tenant_id: str
     turn_id: str
 
 
 class HumanHandoffReplyRequest(BaseModel):
+    """人工坐席答复转接请求的请求体，reply 为回灌到原会话的答复文本。"""
     tenant_id: str
     reply: str
 
@@ -187,6 +192,9 @@ class HumanHandoffReplyRequest(BaseModel):
 def session_read(
     row: ChatSession, *, is_scheduled: bool = False, team_name: str | None = None
 ) -> ChatSessionRead:
+    """把 ChatSession 行转换成对外的 ChatSessionRead。
+    is_scheduled 与 team_name 由调用方算好传入，时间统一转成 ISO 字符串。
+    """
     return ChatSessionRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -207,6 +215,9 @@ def session_read(
 
 
 def human_handoff_read(row: HumanHandoffRequest) -> HumanHandoffRead:
+    """把 HumanHandoffRequest 行转换成对外的 HumanHandoffRead。
+    metadata_json 缺失时回退为空字典，未答复时 answered_at 保留 None。
+    """
     return HumanHandoffRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -228,6 +239,9 @@ def human_handoff_read(row: HumanHandoffRequest) -> HumanHandoffRead:
 
 
 def _user_message_metadata(request: ChatTurnRequest) -> dict[str, object]:
+    """汇总写入用户消息 metadata 的可选字段。
+    只收录显式给出的 client_turn_id、定时任务模式、模型配置与附件，避免落空键。
+    """
     metadata: dict[str, object] = {}
     if request.client_turn_id:
         metadata["client_turn_id"] = request.client_turn_id
@@ -246,6 +260,9 @@ def _schedule_session_title_summary(
     session_id: str,
     agent_id: str | None,
 ) -> None:
+    """在后台线程异步生成会话标题，落库由 _summarize_session_title_once 完成。
+    以 tenant:user:session 为键做进程内去重，同一会话同时只跑一个标题任务。
+    """
     if not session_id:
         return
     job_key = f"{tenant_id}:{user_id}:{session_id}"
@@ -255,6 +272,7 @@ def _schedule_session_title_summary(
         _session_title_summary_jobs.add(job_key)
 
     def run() -> None:
+        """跑一次标题摘要，并在结束后释放去重键。"""
         try:
             _summarize_session_title_once(tenant_id, user_id, session_id, agent_id)
         finally:
@@ -274,6 +292,10 @@ def _summarize_session_title_once(
     session_id: str,
     agent_id: str | None,
 ) -> None:
+    """为还没有标题的会话生成一次自动标题并落库。
+    首轮最多重试 8 次等待用户消息出现；优先调用模型，失败时回退首条用户消息。
+    标题已存在、会话不存在或已写过 session_title_summarized 事件时直接返回，保持幂等。
+    """
     try:
         for attempt in range(8):
             messages: list[Message] = []
@@ -335,6 +357,10 @@ def _summarize_session_title_once(
                     def persist_title_span(
                         event_type: str, event_payload: dict[str, object]
                     ) -> None:
+                        """把标题生成过程中的 span 事件写入当前会话的事件表。
+                        补齐 turn_id 与 user_message_id，便于 trace 按轮次归组；使用独立 Session
+                        写库，避免与标题落库共用事务。
+                        """
                         traced_payload = dict(event_payload)
                         if title_turn_id:
                             traced_payload.setdefault("turn_id", title_turn_id)
@@ -402,6 +428,9 @@ def _summarize_session_title_once(
 
 
 def _session_title_summary_payload(db: Session, tenant_id: str, session_id: str) -> dict[str, str] | None:
+    """读取最近一次标题摘要事件，作为 SSE 摘要事件的下发载荷。
+    返回含 sessionId 与 title 的字典；无事件或标题为空时返回 None。
+    """
     event = db.exec(
         select(AgentEvent)
         .where(
@@ -420,6 +449,7 @@ def _session_title_summary_payload(db: Session, tenant_id: str, session_id: str)
 
 
 def _normalize_auto_title(value: str) -> str:
+    """清洗模型标题：去掉引号与标点、压平空白，并截断到 24 个字符。"""
     title = value.strip().strip("\"'“”‘’`")
     for token in ("\n", "\r", "\t", "：", ":", "。", "，", ",", "；", ";"):
         title = title.replace(token, " ")
@@ -428,6 +458,7 @@ def _normalize_auto_title(value: str) -> str:
 
 
 def _fallback_session_title(messages: list[Message]) -> str:
+    """模型不可用时退回首条用户消息，经同样清洗后作为标题。"""
     first_user = next((row.content for row in messages if row.role == "user" and row.content.strip()), "")
     if not first_user:
         return ""
@@ -435,6 +466,9 @@ def _fallback_session_title(messages: list[Message]) -> str:
 
 
 def _normalized_session_event_payload(row: AgentEvent) -> dict[str, object]:
+    """把 AgentEvent 行整理成前端统一的会话事件结构。
+    补齐 id、event、type、event_type、created_at 与 data；data 缺失时用载荷其余键兜底。
+    """
     payload = dict(row.payload_json or {})
     event_name = str(payload.get("event") or payload.get("type") or row.event_type)
     data = payload.get("data")
@@ -514,11 +548,16 @@ def _apply_handoff_reply(
 
 
 def _resume_human_handoff_async(handoff_id: str) -> None:
+    """启动后台线程恢复已答复的 handoff，不阻塞当前请求。"""
     thread = threading.Thread(target=_resume_human_handoff_worker, args=(handoff_id,), daemon=True)
     thread.start()
 
 
 def _resume_human_handoff_worker(handoff_id: str) -> None:
+    """在后台把人工答复作为新一轮输入续跑原会话。
+    先还原 handoff 快照里的渠道信息，再用 resume_started_at 保证只恢复一次；
+    失败时把状态置为 failed 并写入 human_handoff_resume_failed 事件。
+    """
     try:
         with Session(engine) as db:
             handoff = db.get(HumanHandoffRequest, handoff_id)
@@ -616,6 +655,10 @@ def _maybe_handle_scheduled_task_request(
     request: ChatTurnRequest,
     chat_session: ChatSession,
 ) -> tuple[ChatTurnResponse, ScheduledTaskDraftRead] | None:
+    """定时任务模式的快捷路径：识别出草案就直接落消息，跳过完整引擎。
+    仅在 interaction_mode 为 scheduled_task 且识别到可创建草案时生效；该轮已被取消时
+    返回 None，交回正常 Harness 路径。命中时返回（响应, 草案）。
+    """
     if request.interaction_mode != "scheduled_task" or not request.agent_id:
         return None
     if request.client_turn_id and is_chat_turn_cancelled(
@@ -779,6 +822,7 @@ def _add_stream_status_event(
     extra: dict | None = None,
     created_at=None,
 ) -> None:
+    """追加一条 stream_status 事件，供前端展示阶段进度。"""
     payload = {
         "phase": phase,
         "text": text,
@@ -798,6 +842,7 @@ def _add_stream_status_event(
 
 
 def _scheduled_task_draft_reply(draft: ScheduledTaskDraftRead) -> str:
+    """拼装定时任务草案的助手回复文案，并提示确认前不会创建任务。"""
     lines = [
         "我已按你选择的定时项目整理成自动任务草案。",
         f"任务：{draft.title}",
@@ -809,22 +854,27 @@ def _scheduled_task_draft_reply(draft: ScheduledTaskDraftRead) -> str:
 
 
 def _format_draft_schedule(draft: ScheduledTaskDraftRead) -> str:
+    """把草案里的调度配置格式化成中文计划描述。"""
     return _format_scheduled_task_schedule(draft.schedule_type, draft.schedule or {})
 
 
 def _format_once_schedule(schedule: dict) -> str:
+    """格式化一次性任务的执行时间。"""
     return f"一次性 {schedule.get('run_at') or '待确认时间'}"
 
 
 def _format_weekly_schedule(schedule: dict) -> str:
+    """格式化每周任务的星期与时间。"""
     return f"每周 {_format_weekday_labels(schedule.get('weekdays'))} {schedule.get('time') or DEFAULT_TASK_TIME}"
 
 
 def _format_monthly_schedule(schedule: dict) -> str:
+    """格式化每月任务的日期与时间。"""
     return f"每月 {schedule.get('day_of_month') or 1} 号 {schedule.get('time') or DEFAULT_TASK_TIME}"
 
 
 def _format_daily_schedule(schedule: dict) -> str:
+    """格式化每天任务的执行时间。"""
     return f"每天 {schedule.get('time') or DEFAULT_TASK_TIME}"
 
 
@@ -837,6 +887,9 @@ SCHEDULE_TEXT_FORMATTERS: dict[str, Callable[[dict], str]] = {
 
 
 def _format_scheduled_task_schedule(schedule_type: object, schedule_value: object) -> str:
+    """按 schedule_type 选择格式化函数，输出中文计划文本。
+    未知类型回退到按天格式，非字典的 schedule 值按空配置处理。
+    """
     schedule = schedule_value if isinstance(schedule_value, dict) else {}
     schedule_type_text = str(schedule_type or "daily")
     formatter = SCHEDULE_TEXT_FORMATTERS.get(schedule_type_text, _format_daily_schedule)
@@ -844,6 +897,9 @@ def _format_scheduled_task_schedule(schedule_type: object, schedule_value: objec
 
 
 def _format_weekday_labels(value: object) -> str:
+    """把星期索引列表转成「周一、周三」式的中文标签。
+    非列表或索引全部无效时回退为周一。
+    """
     if not isinstance(value, list):
         return SCHEDULE_WEEKDAY_LABELS[0]
     labels: list[str] = []
@@ -858,6 +914,7 @@ def _format_weekday_labels(value: object) -> str:
 
 
 def _scheduled_task_trace_detail(payload: dict) -> str | None:
+    """生成定时任务草案的 trace 摘要（标题 · 计划 · 待确认）。"""
     title = str(payload.get("title") or "").strip()
     schedule = _format_scheduled_task_schedule(payload.get("schedule_type"), payload.get("schedule"))
     detail = " · ".join(part for part in (title, schedule, "等待确认后启用") if part)
@@ -865,6 +922,7 @@ def _scheduled_task_trace_detail(payload: dict) -> str | None:
 
 
 def _scheduled_task_trace_lines(payload: dict, *, state: str = "completed") -> list[dict]:
+    """构造定时任务的三条 trace 行：识别需求、解析计划、生成草案。"""
     schedule = _format_scheduled_task_schedule(payload.get("schedule_type"), payload.get("schedule"))
     return [
         {
@@ -897,6 +955,9 @@ def _persist_scheduled_task_draft(
     session_id: str,
     draft: ScheduledTaskDraftRead,
 ) -> None:
+    """把草案写进最近一条助手消息的 metadata，并补一条草案事件。
+    session_id 为空时直接返回，调用方需自行保证会话已存在。
+    """
     if not session_id:
         return
     payload = draft.model_dump(mode="json")
@@ -923,6 +984,7 @@ def _persist_scheduled_task_draft(
 
 
 def _reply_chunks(reply: str) -> Iterator[str]:
+    """按 STREAM_REPLY_CHUNK_SIZE 把整段回复切成 SSE 增量片段。"""
     for index in range(0, len(reply), STREAM_REPLY_CHUNK_SIZE):
         yield reply[index : index + STREAM_REPLY_CHUNK_SIZE]
 
@@ -930,6 +992,7 @@ def _reply_chunks(reply: str) -> Iterator[str]:
 def _validate_chat_turn_attachments(
     request: ChatTurnRequest,
 ) -> ChatTurnRequest:
+    """校验并规整本轮附件，超限或非法时抛 400。"""
     try:
         attachments = validate_chat_turn_attachments(
             request.attachments,
@@ -948,6 +1011,7 @@ def list_slash_commands(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[SlashCommandRead]:
+    """列出当前员工可用的斜杠命令，来源是已发布 SOP 与能力清单。"""
     _ensure_request_tenant(tenant_id, current_user)
     agent = _ensure_chat_agent_available(
         db,
@@ -972,6 +1036,9 @@ async def upload_chat_attachments(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[ChatAttachmentRead]:
+    """接收并暂存本轮聊天附件，返回前端可回传的附件描述。
+    数量超过 MAX_CHAT_ATTACHMENTS 返回 400，单个文件超过大小上限返回 413。
+    """
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     if not files:
@@ -1008,6 +1075,10 @@ def chat_turn(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChatTurnResponse:
+    """处理一次非流式聊天轮次，返回完整回复。
+    先做租户、会话、员工归属与附件校验，再按需注入团队 TL 上下文或走定时任务
+    快捷路径，其余交给 AgentLoop；TL 会话在回复后还会做派任务后处理。
+    """
     _ensure_request_tenant(request.tenant_id, current_user)
     request = request.model_copy(
         update={
@@ -1083,6 +1154,10 @@ def chat_stream(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> StreamingResponse:
+    """以 SSE 返回一轮聊天的实时事件流。
+    校验逻辑与 chat_turn 一致；实际生成放在后台线程并写入事件表，本函数只把新增
+    事件按游标转成 SSE 下发，并附带心跳与空闲超时兜底。
+    """
     _ensure_request_tenant(request.tenant_id, current_user)
     request = request.model_copy(
         update={
@@ -1123,6 +1198,7 @@ def chat_stream(
     initial_cursor = _latest_event_cursor(db, request.tenant_id, request.session_id) if request.session_id else None
 
     def set_source_session(session_id: str) -> None:
+        """记录本轮真正使用的会话 id，并放行 relay 开始轮询事件。"""
         if not session_id:
             return
         source_session_id["value"] = session_id
@@ -1132,12 +1208,20 @@ def chat_stream(
         relay_ready.set()
 
     def run_stream_worker() -> None:
+        """在独立线程与数据库会话中执行生成，并把事件与终态落库。
+        成功、异常与 finally 三条路径都会尽力写入终止事件，避免前端一直等待；
+        span 回调也在这里绑定，保证 LLM 调用能被 trace 记录。
+        """
         span_sink_token = None
         try:
             with Session(engine) as worker_db:
                 span_turn_id = {"value": ""}
 
                 def persist_span(event_type: str, payload: dict[str, object]) -> None:
+                    """把本次 LLM 调用等 span 事件作为 relay-only 事件写入会话。
+                    自动补上 turn_id、user_message_id 与 client_turn_id 便于前端按轮次归组；
+                    会话 id 尚未确定时直接丢弃，避免写入无归属的记录。
+                    """
                     session_id = source_session_id["value"] or request.session_id or ""
                     if not session_id:
                         return
@@ -1399,6 +1483,10 @@ def chat_stream(
     threading.Thread(target=run_stream_worker, daemon=True).start()
 
     def stream_events() -> Iterator[str]:
+        """按游标轮询事件表，把新增事件转成 SSE 文本输出。
+        跳过 internal 可见性轮次的事件；收到终止事件后等 worker 结束再关闭连接，
+        长时间没有事件时发心跳，空闲超时则落一条中断事件后继续等待。
+        """
         nonlocal initial_cursor
         relay_ready.wait(15)
         deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
@@ -1472,6 +1560,7 @@ def cancel_chat_turn_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict[str, bool]:
+    """取消指定轮次的生成：先落库取消事件，再发布进程内快速取消信号。"""
     _ensure_request_tenant(request.tenant_id, current_user)
     chat_session = _ensure_chat_session_available(db, request.tenant_id, current_user.id, session_id)
     persisted = _persist_chat_turn_cancelled(
@@ -1497,6 +1586,10 @@ def _persist_chat_turn_cancelled(
     requested_turn_id: str,
     cancelled_by_user_id: str | None = None,
 ) -> bool:
+    """把某一轮标记为已取消，并补一条「已停止生成」的助手消息。
+    turn_id 可以是用户消息 id 或 client_turn_id；该轮已有终态事件时不重复写入，
+    返回值表示是否真的产生了取消记录。
+    """
     requested_turn_id = requested_turn_id.strip()
     if not requested_turn_id:
         return False
@@ -1606,7 +1699,9 @@ def _cancel_harness_turn_receipt(
     user_message_id: str,
     client_turn_id: str,
 ) -> bool | None:
-    """Fence the worker in the same transaction as the cancellation event."""
+    """在同一事务里改写 HarnessTurnRecord 的终态，把本轮标记为 cancelled。
+    记录不存在返回 None，已是 cancelled 返回 True，已进入其它终态返回 False。
+    """
 
     identities = {value for value in (user_message_id, client_turn_id) if value}
     if not identities:
@@ -1661,6 +1756,9 @@ def _ensure_cancelled_assistant_message(
     client_turn_id: str,
     created_at,
 ) -> bool:
+    """该轮还没有助手消息时，补一条取消占位回复。
+    用户消息不存在或不属于该会话时返回 False，避免写进错误会话。
+    """
     user_message = db.get(Message, user_message_id)
     if not user_message or user_message.tenant_id != tenant_id or user_message.session_id != chat_session.id:
         return False
@@ -1731,6 +1829,10 @@ def _persist_chat_turn_interrupted(
     reason: str,
     error_details: dict[str, object] | None = None,
 ) -> bool:
+    """把某一轮标记为中断，并补一条中断提示的助手消息。
+    该轮已有终态事件时返回 False，不覆盖正常完成的结果；否则写 stream_interrupted
+    事件与占位消息，并复位会话状态。
+    """
     message_id, client_turn_id = _resolve_turn_ids_from_events(db, tenant_id, chat_session.id, requested_turn_id)
     if not message_id:
         message_id = requested_turn_id.strip()
@@ -1780,6 +1882,9 @@ def _resolve_turn_ids_from_events(
     session_id: str,
     requested_turn_id: str,
 ) -> tuple[str, str]:
+    """用 user_message_received 事件把 turn_id 归一到（消息 id, client_turn_id）。
+    找不到匹配事件时原样返回请求里的 id。
+    """
     requested_turn_id = requested_turn_id.strip()
     if not requested_turn_id:
         return "", ""
@@ -1806,6 +1911,7 @@ def _turn_has_terminal_event(
     message_id: str,
     client_turn_id: str = "",
 ) -> bool:
+    """判断该轮是否已有终态事件：完成、取消、中断、报错或助手消息。"""
     turn_ids = {message_id}
     if client_turn_id:
         turn_ids.add(client_turn_id)
@@ -1843,6 +1949,9 @@ def _ensure_interrupted_assistant_message(
     client_turn_id: str,
     created_at,
 ) -> bool:
+    """该轮还没有助手消息时，补一条中断提示占位回复。
+    用户消息不存在、角色不符或不属于该会话时返回 False。
+    """
     user_message = db.get(Message, user_message_id)
     if not user_message or user_message.tenant_id != tenant_id or user_message.session_id != chat_session.id:
         return False
@@ -1912,6 +2021,7 @@ def _persist_relay_only_event(
     event_type: str,
     payload: dict[str, object],
 ) -> None:
+    """追加一条只供 SSE 中继的事件，并立即提交。"""
     db.add(
         AgentEvent(
             tenant_id=tenant_id,
@@ -1924,6 +2034,9 @@ def _persist_relay_only_event(
 
 
 def _relay_event_payload(row: AgentEvent) -> tuple[str, dict[str, object]]:
+    """把事件行转成 SSE 的（事件名, data）。
+    事件名按 STREAM_RELAY_EVENT_ALIASES 做别名映射，data 补齐 kind、sessionId 与时间等字段。
+    """
     payload = dict(row.payload_json or {})
     event_name = STREAM_RELAY_EVENT_ALIASES.get(row.event_type, row.event_type)
     data: dict[str, object] = {
@@ -1942,6 +2055,9 @@ def _events_after_cursor(
     session_id: str,
     cursor: tuple[object, str] | None,
 ) -> list[AgentEvent]:
+    """取游标之后的事件，按 (created_at, id) 升序，最多 200 条。
+    游标支持断点续传；span 类事件不进聊天流，直接过滤。
+    """
     statement = select(AgentEvent).where(
         AgentEvent.tenant_id == tenant_id,
         AgentEvent.session_id == session_id,
@@ -1959,6 +2075,7 @@ def _events_after_cursor(
 
 
 def _latest_event_cursor(db: Session, tenant_id: str, session_id: str) -> tuple[object, str] | None:
+    """取会话最新事件的位置作为初始游标，避免重放历史事件。"""
     row = db.exec(
         select(AgentEvent)
         .where(AgentEvent.tenant_id == tenant_id, AgentEvent.session_id == session_id)
@@ -1971,6 +2088,7 @@ def _latest_event_cursor(db: Session, tenant_id: str, session_id: str) -> tuple[
 
 
 def _sse(event: object, data: object, event_id: str | None = None) -> str:
+    """把事件名与数据序列化成一条 SSE 报文，可选带 id 行。"""
     payload = json.dumps(data, ensure_ascii=False)
     id_line = f"id: {event_id}\n" if event_id else ""
     return f"{id_line}event: {event}\ndata: {payload}\n\n"
@@ -1982,6 +2100,7 @@ def create_chat_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChatSessionRead:
+    """创建一个空聊天会话并返回其对外结构。"""
     _ensure_request_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
     _ensure_chat_agent_available(db, request.tenant_id, request.agent_id, current_user)
@@ -2005,6 +2124,10 @@ def list_chat_sessions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[ChatSessionRead]:
+    """列出当前用户可见的会话，含个人会话、其 TL 对话与团队会话。
+    隐藏 skill_test 渠道与 PilotDeck 来源的会话，非管理员还要通过团队归属过滤；
+    结果附带定时任务标记与团队名，并顺手清理过期的 SOP 会话状态。
+    """
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     rows = list(
@@ -2091,7 +2214,7 @@ def get_chat_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChatSessionRead:
-    """Read one conversation without adding team sessions to the global list."""
+    """读取单个会话详情，不把团队会话混入全局会话列表。"""
     _ensure_request_tenant(tenant_id, current_user)
     row = _get_readable_chat_session(db, tenant_id, current_user, session_id)
     team = db.get(Team, row.team_id) if row.team_id else None
@@ -2105,6 +2228,7 @@ def rename_chat_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> ChatSessionRead:
+    """重命名会话并刷新 updated_at，返回带定时任务与团队信息的详情。"""
     _ensure_request_tenant(request.tenant_id, current_user)
     row = _get_user_chat_session(db, request.tenant_id, current_user.id, session_id)
     row.title = _normalize_title(request.title)
@@ -2130,6 +2254,7 @@ def delete_chat_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict[str, str]:
+    """删除会话及其关联记录，并清理对应的工作区文件。"""
     _ensure_request_tenant(tenant_id, current_user)
     row = _get_user_chat_session(db, tenant_id, current_user.id, session_id)
     purge_chat_session_records(db, row)
@@ -2145,6 +2270,7 @@ def list_chat_messages(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[MessageRead]:
+    """按时间顺序返回会话内可见消息，附带反馈与所属轮次信息。"""
     _ensure_request_tenant(tenant_id, current_user)
     chat_session = _get_readable_chat_session(db, tenant_id, current_user, session_id)
     _cleanup_stale_completed_sessions(db, tenant_id, [chat_session])
@@ -2186,7 +2312,9 @@ def download_harness_artifact(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> StreamingResponse:
-    """Download a file explicitly published by a Harness TaskFrame."""
+    """下载 Harness TaskFrame 显式发布的产物文件。
+    只允许读取已写进消息 metadata 的产物，读取后校验 sha256 与大小，变化时返回 409。
+    """
 
     _ensure_request_tenant(tenant_id, current_user)
     _get_readable_chat_session(db, tenant_id, current_user, session_id)
@@ -2264,6 +2392,7 @@ def list_chat_session_events(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[dict]:
+    """返回会话的原始事件流（最多 500 条），并过滤 internal 可见性轮次。"""
     _ensure_request_tenant(tenant_id, current_user)
     _get_readable_chat_session(db, tenant_id, current_user, session_id)
     messages = db.exec(
@@ -2304,6 +2433,9 @@ def list_human_handoffs(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[HumanHandoffRead]:
+    """列出转人工请求，默认只看 pending。
+    非管理员在 pending 下能看到未分配或分配给自己的，其它状态限自己处理或发起的。
+    """
     _ensure_request_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     conditions = [HumanHandoffRequest.tenant_id == tenant_id]
@@ -2342,6 +2474,7 @@ def reply_human_handoff(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> HumanHandoffRead:
+    """人工坐席答复一条 pending 的转人工请求，并触发原会话恢复。"""
     _ensure_request_tenant(request.tenant_id, current_user)
     row = db.get(HumanHandoffRequest, handoff_id)
     if not row or row.tenant_id != request.tenant_id:
@@ -2370,6 +2503,9 @@ def upsert_message_feedback(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """新增或更新当前用户对某条助手消息的反馈，并重置分析状态。
+    写入后同步 skill 维度反馈、记录 message_feedback_changed 事件并投递分析任务。
+    """
     _ensure_request_tenant(request.tenant_id, current_user)
     message_row = _get_feedback_target_message(db, request.tenant_id, current_user.id, message_id)
     existing = db.exec(
@@ -2434,6 +2570,7 @@ def delete_message_feedback(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """删除当前用户对某条助手消息的反馈，并清理 skill 维度反馈。"""
     _ensure_request_tenant(tenant_id, current_user)
     message_row = _get_feedback_target_message(db, tenant_id, current_user.id, message_id)
     existing = db.exec(
@@ -2465,6 +2602,9 @@ def list_chat_session_trace(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[dict]:
+    """返回会话按轮次聚合的执行轨迹。
+    internal 可见性轮次的消息与事件会被过滤，skill 名称用于把 skill_id 渲染成可读文案。
+    """
     _ensure_request_tenant(tenant_id, current_user)
     _get_readable_chat_session(db, tenant_id, current_user, session_id)
     messages = db.exec(
@@ -2503,6 +2643,7 @@ def list_chat_session_spans(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[dict[str, object]]:
+    """返回会话内的 LLM 与知识检索 span 事件，供性能面板使用。"""
     _ensure_request_tenant(tenant_id, current_user)
     _get_readable_chat_session(db, tenant_id, current_user, session_id)
     rows = db.exec(
@@ -2526,6 +2667,7 @@ def list_chat_session_spans(
 
 
 def _get_user_chat_session(db: Session, tenant_id: str, user_id: str, session_id: str) -> ChatSession:
+    """取当前用户名下的会话；不存在或不属于该用户时抛 404。"""
     ensure_tenant(db, tenant_id)
     row = db.get(ChatSession, session_id)
     if not row or row.tenant_id != tenant_id or row.user_id != user_id:
@@ -2534,6 +2676,9 @@ def _get_user_chat_session(db: Session, tenant_id: str, user_id: str, session_id
 
 
 def _get_readable_chat_session(db: Session, tenant_id: str, current_user: User, session_id: str) -> ChatSession:
+    """取当前用户有权读取的会话：本人、其团队会话或相关转人工会话。
+    无权限与不存在统一返回 404，避免泄露会话是否存在。
+    """
     ensure_tenant(db, tenant_id)
     row = db.get(ChatSession, session_id)
     if not row or row.tenant_id != tenant_id:
@@ -2559,6 +2704,9 @@ def _published_workspace_artifact(
     task_frame_id: str,
     requested_path: str,
 ) -> dict[str, object] | None:
+    """在消息 metadata 里查找该 TaskFrame 发布的指定路径产物。
+    路径先做 Harness 规范化，非法或未发布时返回 None。
+    """
     try:
         normalized_requested_path = normalize_harness_artifact_path(requested_path)
     except HarnessArtifactAccessError:
@@ -2594,6 +2742,7 @@ def _published_workspace_artifact(
 
 
 def _safe_artifact_download_name(filename: str) -> str:
+    """去掉文件名里的换行、NUL 等字符，供 Content-Disposition 使用。"""
     cleaned = "".join(
         character
         for character in filename
@@ -2604,6 +2753,7 @@ def _safe_artifact_download_name(filename: str) -> str:
 
 
 def _user_can_read_handoff_session(db: Session, tenant_id: str, current_user: User, session_id: str) -> bool:
+    """判断当前用户是否因相关转人工请求而可读该会话。"""
     statement = select(HumanHandoffRequest).where(
         HumanHandoffRequest.tenant_id == tenant_id,
         HumanHandoffRequest.session_id == session_id,
@@ -2625,6 +2775,9 @@ def _ensure_chat_agent_available(
     agent_id: str | None,
     current_user: User,
 ) -> AgentProfile:
+    """校验员工存在、属于本租户且已发布，并检查其对当前用户的可见性。
+    不可用时按原因分别抛 400、404 或 403。
+    """
     if not agent_id:
         raise HTTPException(status_code=400, detail="Agent is required")
     ensure_tenant(db, tenant_id)
@@ -2642,6 +2795,9 @@ def _bind_request_to_session_agent(
     chat_session: ChatSession,
     current_user: User,
 ) -> ChatTurnRequest:
+    """把请求绑定到会话已有的员工；会话未绑定时用请求里的员工并持久化。
+    请求指定了另一个员工时抛 409，避免同一会话跨员工串话。
+    """
     if chat_session.agent_id:
         if request.agent_id and request.agent_id != chat_session.agent_id:
             raise HTTPException(status_code=409, detail="Session is already bound to another agent")
@@ -2656,6 +2812,9 @@ def _bind_request_to_session_agent(
 
 
 def _ensure_chat_session_available(db: Session, tenant_id: str, user_id: str, session_id: str) -> ChatSession:
+    """取本租户内可写入的会话：本人的会话或团队会话。
+    普通会话仅创建者可用，团队会话对租户成员开放（如 TL 工作台）。
+    """
     ensure_tenant(db, tenant_id)
     row = db.get(ChatSession, session_id)
     if not row or row.tenant_id != tenant_id:
@@ -2698,6 +2857,7 @@ def _team_tl_session_team(db: Session, chat_session: ChatSession) -> Team | None
 
 
 def _get_feedback_target_message(db: Session, tenant_id: str, user_id: str, message_id: str) -> Message:
+    """取可被当前用户评价的助手消息，限定本租户且会话属主为该用户。"""
     ensure_tenant(db, tenant_id)
     row = db.get(Message, message_id)
     if not row or row.tenant_id != tenant_id or row.role != "assistant":
@@ -2714,6 +2874,7 @@ def _feedback_by_message(
     user_id: str,
     message_ids: list[str],
 ) -> dict[str, str]:
+    """批量查询当前用户对若干消息的评分，返回 message_id 到 rating 的映射。"""
     if not message_ids:
         return {}
     rows = db.exec(
@@ -2731,6 +2892,9 @@ def _cleanup_stale_completed_sessions(
     tenant_id: str,
     rows: list[ChatSession],
 ) -> None:
+    """把处于已完成 SOP 终态却未收尾的会话就地收尾。
+    只处理 active_skill_id 非空的会话，有变更时统一提交并刷新这些行。
+    """
     candidates = [row for row in rows if row.active_skill_id]
     if not candidates:
         return
@@ -2770,6 +2934,9 @@ def _upsert_skill_feedback_for_message(
     rating: str,
     now,
 ) -> None:
+    """把消息级反馈同步到 skill 维度。
+    只有该助手消息能定位到 skill 上下文时才写入；已有记录做更新而非新增。
+    """
     skill_context = _active_skill_context_for_assistant_message(db, tenant_id, message_row)
     if not skill_context:
         return
@@ -2813,6 +2980,7 @@ def _delete_skill_feedback_for_message(
     user_id: str,
     message_row: Message,
 ) -> None:
+    """删除该消息对应的 skill 维度反馈，不存在时静默跳过。"""
     existing = db.exec(
         select(SkillFeedback).where(
             SkillFeedback.tenant_id == tenant_id,
@@ -2825,6 +2993,7 @@ def _delete_skill_feedback_for_message(
 
 
 def _active_skill_for_assistant_message(db: Session, tenant_id: str, message_row: Message) -> str | None:
+    """取该助手消息所属的 skill_id，无上下文时返回 None。"""
     context = _active_skill_context_for_assistant_message(db, tenant_id, message_row)
     return context["skill_id"] if context else None
 
@@ -2832,6 +3001,10 @@ def _active_skill_for_assistant_message(db: Session, tenant_id: str, message_row
 def _active_skill_context_for_assistant_message(
     db: Session, tenant_id: str, message_row: Message
 ) -> dict[str, str | None] | None:
+    """回溯该助手消息对应的用户消息，重建当时的 skill 上下文。
+    在该用户消息之后累积 skill 事件与反思结果，遇到本条助手消息即定稿；
+    版本缺失时用 Skill 表补齐。
+    """
     messages = db.exec(
         select(Message)
         .where(Message.tenant_id == tenant_id, Message.session_id == message_row.session_id)
@@ -2885,11 +3058,16 @@ def _active_skill_context_for_assistant_message(
 
 
 def _skill_id_from_event(event: AgentEvent) -> str | None:
+    """从单条事件解析 skill_id，非 skill 事件返回 None。"""
     context = _skill_context_from_event(event)
     return context["skill_id"] if context else None
 
 
 def _skill_context_from_event(event: AgentEvent, skill_hint: str | None = None) -> dict[str, str | None] | None:
+    """解析 skill 相关事件，返回 skill_id、版本与节点。
+    兼容 started、resumed、step_changed、completed 与 reflection_decision 事件，
+    缺少 skill_id 时可用 skill_hint 兜底。
+    """
     payload = event.payload_json or {}
     if event.event_type in {"skill_started", "skill_resumed", "skill_step_changed"}:
         skill_id = str(payload.get("to_skill_id") or payload.get("from_skill_id") or skill_hint or "") or None
@@ -2928,6 +3106,7 @@ def _skill_context_from_event(event: AgentEvent, skill_hint: str | None = None) 
 def _fill_skill_context_version(
     db: Session, tenant_id: str, context: dict[str, str | None] | None
 ) -> dict[str, str | None] | None:
+    """为缺少版本的 skill 上下文补上 Skill 表里的当前版本。"""
     if not context or context.get("skill_version"):
         return context
     skill_id = context.get("skill_id")
@@ -2940,6 +3119,7 @@ def _fill_skill_context_version(
 
 
 def _trace_payload_text(value: object) -> str:
+    """把 trace 载荷格式化成可折叠展示的文本，JSON 字符串会重新缩进。"""
     if value is None or value == "":
         return ""
     if isinstance(value, str):
@@ -2951,6 +3131,7 @@ def _trace_payload_text(value: object) -> str:
 
 
 def _trace_payload_language(value: str) -> str:
+    """判断 trace 文本该按 json 还是 text 渲染。"""
     if not value.strip():
         return "text"
     try:
@@ -2961,6 +3142,7 @@ def _trace_payload_language(value: str) -> str:
 
 
 def _general_skill_trace_detail(payload: dict, phase: str) -> str | None:
+    """生成通用技能 trace 的副标题：反思用 review，其余用 rationale 或错误信息。"""
     review = payload.get("review") if isinstance(payload.get("review"), dict) else {}
     if phase.startswith("reflection_"):
         parts = [
@@ -2978,10 +3160,12 @@ def _general_skill_trace_detail(payload: dict, phase: str) -> str | None:
 
 
 def _general_skill_trace_failed(phase: str) -> bool:
+    """判断通用技能的阶段是否属于失败态。"""
     return "failed" in phase or phase == "code_timeout" or phase.endswith("_error")
 
 
 def _error_trace_text(payload: dict, *, interrupted: bool = False) -> str:
+    """把错误载荷归纳成一句中文错误标题。"""
     code = str(payload.get("code") or "").strip()
     if code == "LLM_ERROR":
         return "模型调用失败"
@@ -2996,6 +3180,7 @@ def _error_trace_text(payload: dict, *, interrupted: bool = False) -> str:
 
 
 def _error_trace_detail(payload: dict) -> str | None:
+    """把 code、error_type 与 message/reason 拼成错误详情，截断到 2000 字。"""
     code = str(payload.get("code") or "").strip()
     error_type = str(payload.get("error_type") or "").strip()
     message = str(payload.get("message") or payload.get("reason") or payload.get("text") or "").strip()
@@ -3005,6 +3190,9 @@ def _error_trace_detail(payload: dict) -> str | None:
 
 
 def _general_skill_trace_output(payload: dict, phase: str) -> dict[str, str]:
+    """抽取通用技能 trace 的可折叠输出：命令输出、执行结果或校验详情。
+    按 phase 决定展示内容与标题，没有可展示内容时返回空字典。
+    """
     if phase == "stdout_chunk":
         output = _trace_payload_text(payload.get("stdout_preview") or payload.get("text"))
         return {
@@ -3128,6 +3316,7 @@ _SKILL_COMPLETED_REASON_LABELS = {
 
 
 def _resolve_tool_label(tool_name: str, tool_names: dict[str, str] | None) -> str:
+    """把工具名映射成中文展示名，未登记的工具名原样返回。"""
     tool_name = str(tool_name or "").strip()
     if not tool_name:
         return ""
@@ -3137,6 +3326,7 @@ def _resolve_tool_label(tool_name: str, tool_names: dict[str, str] | None) -> st
 
 
 def _fallback_step_label(step_id: str) -> str | None:
+    """按步骤 id 里的关键词推断中文步骤名，无法判断时返回 None。"""
     normalized = step_id.strip().lower().replace("-", "_")
     if not normalized:
         return None
@@ -3146,6 +3336,7 @@ def _fallback_step_label(step_id: str) -> str | None:
     tokens = [token for token in normalized.split("_") if token]
 
     def has_word(*roots: str) -> bool:
+        """判断 tokens 中是否有任一 token 等于或前缀匹配给定词根。"""
         return any(
             token == root or token.startswith(root)
             for token in tokens
@@ -3182,6 +3373,9 @@ def _resolve_step_label(
     step_names: dict[str, dict[str, str]] | None,
     skill_id: str | None = None,
 ) -> str:
+    """把步骤 id 解析成可读的步骤名。
+    优先取该 skill 作用域内的名称，其次遍历全部配置，最后退回关键词推断。
+    """
     step_id = str(step_id or "").strip()
     if not step_id:
         return ""
@@ -3205,6 +3399,9 @@ def _harness_event_trace_line(
     step_names: dict[str, dict[str, str]] | None = None,
     tool_names: dict[str, str] | None = None,
 ) -> dict | None:
+    """把 Harness 生命周期事件转成 trace 行。
+    覆盖 TaskFrame 起止、动作创建、MCP App 视图与单步超时，不认识的事件返回 None。
+    """
     payload = event.payload_json or {}
     event_type = event.event_type
     frame_id = str(payload.get("task_frame_id") or event.id).strip()
@@ -3369,11 +3566,13 @@ def _harness_event_trace_line(
 
 
 def _ensure_request_tenant(tenant_id: str, current_user: User) -> None:
+    """校验请求租户与登录用户一致，不一致时抛 403。"""
     if tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
 
 
 def _chat_agent_visible_to_user(row: AgentProfile, user: User) -> bool:
+    """判断员工是否对当前用户可见：管理员、属主或已发布到能力大厅。"""
     if is_admin_user(user):
         return True
     metadata = row.metadata_json or {}
@@ -3381,6 +3580,7 @@ def _chat_agent_visible_to_user(row: AgentProfile, user: User) -> bool:
 
 
 def _normalize_title(value: str | None) -> str | None:
+    """规整会话标题：去空白，空标题抛 400，超长截断到 80 个字符。"""
     if value is None:
         return None
     title = value.strip()
@@ -3390,6 +3590,7 @@ def _normalize_title(value: str | None) -> str | None:
 
 
 def _message_turn_ids_from_events(events: list[AgentEvent]) -> dict[str, str]:
+    """从消息事件建立 message_id 到 turn_id 的映射，用于把回复归到所属轮次。"""
     turn_ids: dict[str, str] = {}
     for event in events:
         payload = event.payload_json or {}
@@ -3413,6 +3614,10 @@ def _build_turn_traces(
     events: list[AgentEvent],
     skill_names: dict[str, str],
 ) -> list[dict]:
+    """把会话事件聚合成按轮次划分的前端执行轨迹。
+    遇到 user_message_received 开新轮次，后续事件按 turn_id 归属；助手回复、取消、
+    中断或报错会收尾该轮，未收尾的用最后事件时间兜底。
+    """
     if not events:
         return []
 
@@ -3490,6 +3695,7 @@ def _build_turn_traces(
 
 
 def _event_trace_turn_id(event: AgentEvent, _active_turn_id: str | None) -> str | None:
+    """确定事件归属的 turn_id，缺失时返回 None 由调用方跳过。"""
     payload = event.payload_json or {}
     if event.event_type == "user_message_received":
         return str(payload.get("message_id") or payload.get("user_message_id") or "").strip() or event.id
@@ -3500,6 +3706,7 @@ def _event_trace_turn_id(event: AgentEvent, _active_turn_id: str | None) -> str 
 
 
 def _with_scheduled_draft_message_traces(traces: list[dict], messages: list[Message]) -> list[dict]:
+    """为只有草案消息、没有事件的定时任务轮次补一条轨迹。"""
     traced_turn_ids = {str(trace.get("turn_id") or "") for trace in traces}
     next_traces = list(traces)
     previous_user: Message | None = None
@@ -3534,6 +3741,7 @@ def _event_trace_lines(
     step_names: dict[str, dict[str, str]] | None = None,
     tool_names: dict[str, str] | None = None,
 ) -> list[dict]:
+    """把单条事件转成 trace 行列表，并补上默认图标。"""
     line = _event_trace_line(event, skill_names, skill_hint, step_names, tool_names)
     if not line:
         return []
@@ -3544,6 +3752,7 @@ def _event_trace_lines(
 
 
 def _event_trace_icon(event: AgentEvent, line: dict) -> str:
+    """按事件类型与阶段选择前端图标：judge、tool、generated、loading 或 advance。"""
     event_type = event.event_type
     payload = event.payload_json or {}
     phase = str(payload.get("phase") or "").strip()
@@ -3595,6 +3804,9 @@ def _event_trace_line(
     step_names: dict[str, dict[str, str]] | None = None,
     tool_names: dict[str, str] | None = None,
 ) -> dict | list[dict] | None:
+    """把一条 AgentEvent 转成前端 trace 行，未知事件返回 None。
+    覆盖 Harness、SOP、知识检索、工具调用、反思与错误等事件，部分阶段会返回多行。
+    """
     payload = event.payload_json or {}
     if event.event_type in {
         "task_frame_started",
@@ -4112,6 +4324,7 @@ def _event_trace_line(
 
 
 def _tool_trace_detail(payload: dict) -> str | None:
+    """拼出工具结果的补充说明：结果复用、来源、是否命中及改进建议。"""
     data = payload.get("data")
     data_dict = data if isinstance(data, dict) else {}
     parts = [
@@ -4130,6 +4343,7 @@ def _reflection_trace_detail(
     step_names: dict[str, dict[str, str]] | None = None,
     skill_hint: str | None = None,
 ) -> str | None:
+    """拼出反思结论的补充说明：原因、目标工具或技能与目标步骤。"""
     target_step_id = str(payload.get("target_step_id") or "").strip()
     if not target_step_id:
         step_part = ""
@@ -4148,6 +4362,7 @@ def _reflection_trace_detail(
 
 
 def _knowledge_trace_line_id(payload: dict) -> str:
+    """以查询词生成知识检索 trace 行的稳定 id，便于同一查询合并成一行。"""
     raw_query = payload.get("query")
     if isinstance(raw_query, dict):
         raw_query = raw_query.get("query")
@@ -4156,6 +4371,7 @@ def _knowledge_trace_line_id(payload: dict) -> str:
 
 
 def _upsert_trace_line(lines: list[dict], line: dict) -> None:
+    """按 id 覆盖或追加 trace 行，让同一动作的多次事件收敛为一行。"""
     for index, item in enumerate(lines):
         if item.get("id") == line.get("id"):
             lines[index] = line
@@ -4164,6 +4380,7 @@ def _upsert_trace_line(lines: list[dict], line: dict) -> None:
 
 
 def _complete_trace_lines(lines: list[dict]) -> None:
+    """把仍在 running 的 trace 行收尾，并改写 thinking 行的文案。"""
     for line in lines:
         if line.get("state") == "running":
             line["state"] = "completed"
@@ -4174,6 +4391,7 @@ def _complete_trace_lines(lines: list[dict]) -> None:
 
 
 def _finish_trace_if_needed(trace: dict, fallback_time) -> None:
+    """轮次缺结束时间时用兜底时间补齐，并收尾其中的 trace 行。"""
     if not trace.get("completed_at") and fallback_time:
         trace["completed_at"] = fallback_time.isoformat()
     _complete_trace_lines(trace["lines"])

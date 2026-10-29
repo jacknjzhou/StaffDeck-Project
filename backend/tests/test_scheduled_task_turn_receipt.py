@@ -8,6 +8,7 @@ from app.session.session_schema import ChatTurnRequest
 
 
 def test_scheduled_task_shortcut_replays_same_turn_without_duplicate_side_effects(monkeypatch) -> None:
+    """验证同一计划任务轮次重复投递时复用首轮回执，不产生重复消息与事件。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -59,6 +60,7 @@ def test_scheduled_task_shortcut_replays_same_turn_without_duplicate_side_effect
 
 
 def test_scheduled_task_shortcut_honors_pre_message_cancellation(monkeypatch) -> None:
+    """验证已取消的轮次直接跳过计划任务快捷路径，不触发检测也不落库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -68,6 +70,7 @@ def test_scheduled_task_shortcut_honors_pre_message_cancellation(monkeypatch) ->
     detector_calls = 0
 
     def detect(*args, **kwargs):  # noqa: ANN002, ANN003
+        """统计检测器调用次数；一旦被调用即失败，用于证明取消后不再触达检测。"""
         nonlocal detector_calls
         detector_calls += 1
         raise AssertionError("cancelled shortcut must not run the detector")

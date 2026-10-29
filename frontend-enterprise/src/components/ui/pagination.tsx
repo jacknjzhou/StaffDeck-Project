@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { buttonVariants } from './button';
 import type { Button } from './button';
 
+/** 分页容器，渲染居中的 `nav` 并向下透传原生属性。 */
 function Pagination({ className, ...props }: React.ComponentProps<'nav'>) {
   return (
     <nav
@@ -17,6 +18,7 @@ function Pagination({ className, ...props }: React.ComponentProps<'nav'>) {
   );
 }
 
+/** 分页列表容器，以横向排列承载各分页条目。 */
 function PaginationContent({ className, ...props }: React.ComponentProps<'ul'>) {
   return (
     <ul
@@ -27,6 +29,7 @@ function PaginationContent({ className, ...props }: React.ComponentProps<'ul'>) 
   );
 }
 
+/** 单个分页条目，作为 `li` 承载页码或翻页控件。 */
 function PaginationItem({ ...props }: React.ComponentProps<'li'>) {
   return <li data-slot="pagination-item" {...props} />;
 }
@@ -36,6 +39,7 @@ type PaginationLinkProps = {
 } & Pick<React.ComponentProps<typeof Button>, 'size'> &
   React.ComponentProps<'a'>;
 
+/** 页码链接：按 `isActive` 切换按钮样式，并把当前页标记为 `aria-current="page"`。 */
 function PaginationLink({ className, isActive, size = 'icon', ...props }: PaginationLinkProps) {
   return (
     <a
@@ -54,6 +58,7 @@ function PaginationLink({ className, isActive, size = 'icon', ...props }: Pagina
   );
 }
 
+/** 上一页链接，桌面端显示 Previous 文案并附带左箭头。 */
 function PaginationPrevious({ className, ...props }: React.ComponentProps<typeof PaginationLink>) {
   return (
     <PaginationLink
@@ -68,6 +73,7 @@ function PaginationPrevious({ className, ...props }: React.ComponentProps<typeof
   );
 }
 
+/** 下一页链接，桌面端显示 Next 文案并附带右箭头。 */
 function PaginationNext({ className, ...props }: React.ComponentProps<typeof PaginationLink>) {
   return (
     <PaginationLink
@@ -82,6 +88,7 @@ function PaginationNext({ className, ...props }: React.ComponentProps<typeof Pag
   );
 }
 
+/** 省略号占位，表示中间还有更多页码（对读屏隐藏，仅提供 More pages 提示）。 */
 function PaginationEllipsis({ className, ...props }: React.ComponentProps<'span'>) {
   return (
     <span

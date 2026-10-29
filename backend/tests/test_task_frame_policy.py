@@ -4,6 +4,7 @@ from app.session.session_schema import PendingTask, RouterDecision
 
 
 def test_pending_decision_prefers_persisted_slots_and_identity() -> None:
+    """验证从持久化待办恢复决策时优先采用已存槽位与任务标识。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_test",
@@ -28,6 +29,7 @@ def test_pending_decision_prefers_persisted_slots_and_identity() -> None:
 
 
 def test_turn_followup_frames_preserves_router_order() -> None:
+    """验证回调帧按路由顺序保留，且单个帧可直接构造出决策。"""
     first = PendingTask(task_id="task-1", target_skill_id="purchase")
     second = PendingTask(task_id="task-2", target_skill_id="refund")
     decision = RouterDecision(
@@ -41,6 +43,7 @@ def test_turn_followup_frames_preserves_router_order() -> None:
 
 
 def test_next_pending_task_skips_non_pending_and_invalid_frames() -> None:
+    """验证取下一个待办时跳过已完成与缺少技能标识的无效帧。"""
     session = ChatSession(
         id="session_test",
         tenant_id="tenant_test",
@@ -55,6 +58,7 @@ def test_next_pending_task_skips_non_pending_and_invalid_frames() -> None:
 
 
 def test_reply_merge_and_empty_continuation_preserve_legacy_shape() -> None:
+    """验证回复片段合并会去除首尾空白，纯空白续写不产生新片段。"""
     assert TaskFramePolicy.merge_reply_segment(["one"], " two ") == (
         ["one", "two"],
         False,

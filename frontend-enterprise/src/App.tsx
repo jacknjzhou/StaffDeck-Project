@@ -125,6 +125,12 @@ const EMPTY_AGENT_FORM: AgentCreateFormState = {
   copyFromAgentId: "",
 };
 
+/**
+ * 企业控制台主框架：承载侧边栏、数字员工作用域、模型配置提示与全部路由分发。
+ *
+ * - 挂载后拉取数字员工与团队列表，并监听作用域变更、模型配置更新等全局事件。
+ * - 作用域切换会持久化到 localStorage 并广播事件，保证各页面共享同一选中员工。
+ */
 function Shell({
   auth,
   onLogout,
@@ -195,6 +201,7 @@ function Shell({
     loadTeams();
   }, []);
 
+  /** 拉取租户内的模型配置列表；失败时清空配置并标记为未加载完成。 */
   const loadModelConfigs = useCallback(() => {
     return api
       .get<ModelConfigRead[]>(`/api/enterprise/model-configs?tenant_id=${TENANT_ID}`)
@@ -289,6 +296,7 @@ function Shell({
       );
   }, []);
 
+  /** 拉取租户内的团队列表，失败时回退为空数组。 */
   function loadTeams() {
     return api
       .get<TeamRead[]>(`/api/enterprise/teams?tenant_id=${TENANT_ID}`)
@@ -296,6 +304,13 @@ function Shell({
       .catch(() => setScopeTeams([]));
   }
 
+  /**
+   * 拉取数字员工列表，并据此校正当前选中的员工作用域。
+   *
+   * - 优先保留 preferredAgentId 或当前选中项；团队作用域不会被覆盖。
+   * - 选中项失效时按管理员/普通用户优先级回退，并同步持久化与广播事件。
+   * - 无论请求成功或失败，最终都会把 agentsLoaded 置为 true。
+   */
   function loadAgents(preferredAgentId = "") {
     return api
       .get<AgentProfileRead[]>(`/api/enterprise/agents?tenant_id=${TENANT_ID}`)
@@ -334,16 +349,24 @@ function Shell({
       .finally(() => setAgentsLoaded(true));
   }
 
+  /** 判断该数字员工在当前用户下是否可作为作用域选中（仅限启用中的员工）。 */
   function canUseAgentScope(agent: AgentProfileRead): boolean {
     return canSelectCurrentEmployeeAgent(agent, auth.user, { activeOnly: true });
   }
 
+  /** 切换当前员工作用域：更新本地状态、持久化并广播作用域变更事件。 */
   function changeAgentScope(agentId: string) {
     setSelectedAgentId(agentId);
     persistSharedAgentScope(agentId, auth.user.id);
     emitAgentScopeChange(agentId);
   }
 
+  /**
+   * 选中团队作用域并为其创建群聊会话，随后跳转到对应会话页。
+   *
+   * - 接口未返回 session_id 时抛出错误，由 catch 统一提示。
+   * - 失败时不会改动当前作用域，仅弹出错误提示。
+   */
   async function selectTeamScope(teamId: string) {
     const scope = toTeamScope(teamId);
     try {
@@ -361,6 +384,7 @@ function Shell({
     }
   }
 
+  /** 更新侧边栏展开状态并写入 localStorage，供下次进入时恢复。 */
   function handleSidebarOpenChange(open: boolean) {
     setSidebarExpanded(open);
     window.localStorage.setItem(
@@ -408,6 +432,7 @@ function Shell({
       ? "开放广场"
       : employeeProfile(selectedAgent).roleName
     : "-";
+  /** 打开新建数字员工弹窗：重置表单并预填复制来源。 */
   function openCreateAgentModal() {
     setAgentForm({
       ...EMPTY_AGENT_FORM,
@@ -416,6 +441,12 @@ function Shell({
     setAgentCreateOpen(true);
   }
 
+  /**
+   * 校验并提交新建数字员工表单，成功后刷新列表并切换到新员工作用域。
+   *
+   * - 姓名为空时直接提示并中止提交。
+   * - 复制模式继承来源员工的元数据与职位，空白模式则重建空白元数据。
+   */
   async function saveAgentCreateModal() {
     const name = agentForm.name.trim();
     if (!name) {
@@ -968,6 +999,12 @@ function Shell({
   );
 }
 
+/**
+ * 已登录后的路由入口：处理历史地址重定向与工作区路由，其余路径交给 Shell 渲染。
+ *
+ * - `/`、`/chat` 等旧地址会重定向到广场或工作区会话页。
+ * - `/workspace` 前缀下单独挂载聊天页面，不渲染企业侧边栏。
+ */
 function AuthedApp({
   auth,
   onLogout,
@@ -1023,6 +1060,12 @@ function AuthedApp({
   return <Shell auth={auth} onLogout={onLogout} guidesCompleted={guidesCompleted} />;
 }
 
+/**
+ * 应用根组件：维护登录态校验、引导完成状态与全局 Provider 布局。
+ *
+ * - 存在 token 时调用 /api/auth/me 刷新用户信息，鉴权失败则清空会话。
+ * - 订阅快捷上手完成事件，用于解锁新手引导与更新提醒。
+ */
 export default function App() {
   // Subscribe the application tree to locale changes so locale-sensitive dates
   // and computed labels update without remounting or losing form state.
@@ -1070,6 +1113,7 @@ export default function App() {
     };
   }, [auth?.token]);
 
+  /** 清除本地登录会话，并把登录态重置为未登录。 */
   function logout() {
     clearEnterpriseAuthSession();
     setAuth(null);

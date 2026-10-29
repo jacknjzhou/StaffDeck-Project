@@ -39,18 +39,26 @@ logger = logging.getLogger(__name__)
 
 
 def new_callback_token() -> str:
+    """生成回调鉴权用的随机 token（URL 安全，32 字节熵）。"""
     return secrets.token_urlsafe(32)
 
 
 def callback_token_hash(token: str) -> str:
+    """计算回调 token 的 SHA-256 十六进制摘要；数据库只落库摘要不存明文。"""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def verify_callback_token(task: ExternalBusinessTask, token: str) -> bool:
+    """用常量时间比较任务上存储的摘要与候选 token，判断回调是否可信。"""
     return bool(token) and hmac.compare_digest(task.callback_token_hash, callback_token_hash(token))
 
 
 def normalize_status(value: object) -> str:
+    """把供应商返回的各种状态词归一成 StaffDeck 内部状态。
+
+    未知或缺失的状态一律按 working 处理；成功类词统一映射为 completed，取消类词统一
+    映射为 cancelled，accept/submitted/queued/pending 统一映射为 accepted。
+    """
     status = str(value or "working").strip().lower()
     if status in SUCCESS_STATUSES:
         return "completed"
@@ -76,6 +84,11 @@ def apply_task_event(
     status: object,
     data: dict[str, Any],
 ) -> bool:
+    """幂等地记录一条外部任务事件，并据此推进任务状态与结果字段。
+
+    同一 event_id 重复投递（或并发插入撞上唯一约束）返回 False；任务已进入终态时只
+    补记事件、不再改状态。返回 True 表示本次事件已被接受且已提交事务。
+    """
     existing = db.exec(
         select(ExternalBusinessTaskEvent).where(
             ExternalBusinessTaskEvent.task_id == task.id,
@@ -133,6 +146,11 @@ def apply_task_event(
 
 
 def _prepare_sop_resume(db: Session, task: ExternalBusinessTask) -> None:
+    """外部任务终结后把结果回写到所属任务帧，并置为可恢复状态。
+
+    只处理仍在等待外部任务、且未被其他执行者持有的任务帧；running 帧由当前引擎自行
+    合并结果，已完成或已失败的帧保持不动。会话帧直接按任务成败收尾。
+    """
     if not task.task_frame_id or task.status not in PERSISTED_TERMINAL_STATUSES:
         return
     frame = db.exec(
@@ -182,6 +200,11 @@ def update_external_task_checkpoint(
     frame: HarnessTaskFrameRecord,
     task: ExternalBusinessTask,
 ) -> None:
+    """把外部任务结果回填进 agent loop 的 checkpoint，供恢复时复用。
+
+    已有指向该任务的 tool 消息或能力结果时原地更新，否则追加一条 external_task_status
+    记录；函数只改内存对象，是否提交由调用方决定。
+    """
     if not frame.agent_loop_id:
         return
     loop = db.get(HarnessAgentLoopRecord, frame.agent_loop_id)
@@ -241,6 +264,11 @@ def update_external_task_checkpoint(
 
 
 def poll_due_external_tasks(db: Session) -> int:
+    """单次调度入口：回收过期租约、结算超时任务，再轮询与执行到期的外部任务。
+
+    返回本轮实际处理的任务数（租约回收、超时、状态轮询与本地执行之和）；单任务异常
+    只回滚该任务并记日志，不中断整批调度。
+    """
     now = utc_now()
     stale_tasks = db.exec(
         select(ExternalBusinessTask).where(
@@ -364,6 +392,11 @@ def poll_due_external_tasks(db: Session) -> int:
 
 
 def _execute_local_task(db: Session, task: ExternalBusinessTask) -> None:
+    """认领一条 queued 的外部任务并执行。
+
+    provider_task 策略走提交分支，其余策略直接调用工具的同步 HTTP 接口。先用条件更新
+    抢占租约，抢不到立即回滚返回；无论成败都在 finally 中释放本次持有的租约。
+    """
     task_id = task.id
     owner = new_id("exttasklease")
     now = utc_now()
@@ -464,6 +497,11 @@ def _execute_local_task(db: Session, task: ExternalBusinessTask) -> None:
 
 
 def _submit_provider_task(db: Session, task: ExternalBusinessTask, tool: Tool) -> None:
+    """按 provider_task 策略向外部供应商提交异步任务，并把回执落库。
+
+    提交前生成回调 token 摘要（只存摘要）并带上幂等键；超时或执行异常导致结果不确定时
+    标记 outcome_unknown，明确失败则标记 failed，两者都不允许重放请求。
+    """
     from app.config import get_settings
     from app.tools.tool_executor import ToolExecutor
 
@@ -555,12 +593,18 @@ def _submit_provider_task(db: Session, task: ExternalBusinessTask, tool: Tool) -
 
 
 def _task_strategy(task: ExternalBusinessTask) -> str:
+    """读取任务的异步执行策略；缺失或取值非法时回落为 staffdeck_worker。"""
     config = task.status_config_json if isinstance(task.status_config_json, dict) else {}
     strategy = str(config.get("async_strategy") or "staffdeck_worker")
     return strategy if strategy == PROVIDER_TASK_STRATEGY else "staffdeck_worker"
 
 
 def _poll_task(db: Session, task: ExternalBusinessTask, *, owner: str) -> None:
+    """轮询一次供应商任务状态并按响应推进任务。
+
+    轮询异常只写入 POLL_ERROR 并保留任务原状态，等下一次 next_poll_at 重试；无论成败
+    都在 finally 中释放属于本次调用的租约。
+    """
     tool = db.get(Tool, task.tool_id)
     if tool is None or not task.external_task_id or not task.status_url:
         return
@@ -624,6 +668,7 @@ def _poll_task(db: Session, task: ExternalBusinessTask, *, owner: str) -> None:
 
 
 def _json_path(value: Any, path: str) -> Any:
+    """按点号路径从 JSON 对象取值；路径不存在或中途不是对象时返回 None。"""
     current = value
     for part in (item for item in path.split(".") if item):
         if not isinstance(current, dict):

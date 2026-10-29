@@ -106,6 +106,7 @@ const STEPS: QuickStartStep[] = [
   },
 ];
 
+/** 按 data-guide-target 查找当前可见的引导锚点，宽高均为 0 的元素视为不可见。 */
 function findVisibleTarget(targetName: string) {
   return Array.from(document.querySelectorAll<HTMLElement>(`[data-guide-target="${targetName}"]`)).find((element) => {
     const rect = element.getBoundingClientRect();
@@ -113,10 +114,18 @@ function findVisibleTarget(targetName: string) {
   });
 }
 
+/** 解析步骤对应的锚点：优先主目标，找不到时回退到 fallbackTarget。 */
 function findStepTarget(step: QuickStartStep) {
   return findVisibleTarget(step.target) || (step.fallbackTarget ? findVisibleTarget(step.fallbackTarget) : undefined);
 }
 
+/**
+ * 新手快速上手引导气泡：按步骤高亮各功能区，并把用户带到对应路由。
+ *
+ * - 已看过欢迎引导且未看过快速上手引导时自动弹出，也可由 OPEN_QUICK_START_EVENT 唤起。
+ * - 锚点位置随滚动、resize 与 DOM 变化实时更新；主目标缺失时延迟启用兜底目标。
+ * - 完成或关闭会写入 localStorage 并广播 QUICK_START_COMPLETED_EVENT。
+ */
 export default function QuickStartGuide({ isAdmin }: { isAdmin: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -133,6 +142,7 @@ export default function QuickStartGuide({ isAdmin }: { isAdmin: boolean }) {
   }, []);
 
   useEffect(() => {
+    /** 收到打开事件时重置到第一步并重新展开；已看过引导则忽略。 */
     const reopen = () => {
       if (window.localStorage.getItem(QUICK_START_SEEN_KEY)) return;
       setStep(0);
@@ -142,12 +152,14 @@ export default function QuickStartGuide({ isAdmin }: { isAdmin: boolean }) {
     return () => window.removeEventListener(OPEN_QUICK_START_EVENT, reopen);
   }, []);
 
+  /** 标记引导已看过、关闭气泡并广播完成事件。 */
   function finish() {
     window.localStorage.setItem(QUICK_START_SEEN_KEY, "1");
     setOpen(false);
     window.dispatchEvent(new Event(QUICK_START_COMPLETED_EVENT));
   }
 
+  /** 进入下一步；最后一步时跳转 nextRoute 并结束引导。 */
   function goNext() {
     if (step === steps.length - 1) {
       if (current.nextRoute) navigate(current.nextRoute);
@@ -155,10 +167,12 @@ export default function QuickStartGuide({ isAdmin }: { isAdmin: boolean }) {
     } else setStep((current) => current + 1);
   }
 
+  /** 回退到上一步，已在第一步时保持不变。 */
   function goPrev() {
     setStep((current) => Math.max(0, current - 1));
   }
 
+  /** 跳转当前步骤路由并触发动作：优先派发业务事件，否则延时点击目标元素。 */
   function runAction() {
     const current = steps[step];
     navigate(current.route);
@@ -183,6 +197,7 @@ export default function QuickStartGuide({ isAdmin }: { isAdmin: boolean }) {
     let frame = 0;
     let fallbackAllowed = false;
     setAnchorReady(false);
+    /** 在下一帧重新测量目标元素位置；目标缺失或未到兜底时间时保持隐藏。 */
     const updateAnchor = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {

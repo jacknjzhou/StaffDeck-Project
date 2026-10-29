@@ -9,11 +9,11 @@ from typing import Any, Sequence
 
 
 class ManagedProcessError(RuntimeError):
-    pass
+    """受管子进程启动或进程隔离初始化失败时抛出的运行期错误。"""
 
 
 class _WindowsJobAssignmentError(OSError):
-    """Assignment failure enriched with the process' existing Job state."""
+    """Job Object 分配失败，并附带父/子进程原有的 Job 归属状态。"""
 
     def __init__(
         self,
@@ -23,6 +23,7 @@ class _WindowsJobAssignmentError(OSError):
         parent_in_job: bool | None,
         child_in_job: bool | None,
     ) -> None:
+        """保存 winerror、提示信息与父子进程的 Job 归属探测结果。"""
         super().__init__(winerror, message)
         self.winerror = winerror
         self.parent_in_job = parent_in_job
@@ -30,7 +31,7 @@ class _WindowsJobAssignmentError(OSError):
 
 
 def _is_process_in_windows_job(kernel32: Any, process_handle: Any) -> bool | None:
-    """Return Job membership, or None when Windows cannot inspect the handle."""
+    """返回进程是否属于某个 Job Object；Windows 无法查询该句柄时返回 None。"""
 
     import ctypes
     from ctypes import wintypes
@@ -42,6 +43,7 @@ def _is_process_in_windows_job(kernel32: Any, process_handle: Any) -> bool | Non
 
 
 def _resume_windows_process(proc: subprocess.Popen[Any]) -> None:
+    """用 NtResumeProcess 恢复以 CREATE_SUSPENDED 创建的子进程，失败时抛 OSError。"""
     import ctypes
     from ctypes import wintypes
 
@@ -54,18 +56,22 @@ def _resume_windows_process(proc: subprocess.Popen[Any]) -> None:
 
 
 class _WindowsJob:
-    """Windows Job Object configured to terminate every descendant on close."""
+    """关闭时一并终止全部后代的 Windows Job Object 封装。"""
 
     def __init__(self, handle: Any, kernel32: Any) -> None:
+        """保存 Job 句柄与已绑定函数原型的 kernel32。"""
         self._handle = handle
         self._kernel32 = kernel32
 
     @classmethod
     def assign(cls, proc: subprocess.Popen[Any]) -> _WindowsJob:
+        """创建 KILL_ON_JOB_CLOSE 的 Job 并挂入子进程，失败抛带归属状态的错误。"""
         import ctypes
         from ctypes import wintypes
 
         class BasicLimitInformation(ctypes.Structure):
+            """Job Object 的基础限额信息结构体。"""
+
             _fields_ = [
                 ("PerProcessUserTimeLimit", ctypes.c_longlong),
                 ("PerJobUserTimeLimit", ctypes.c_longlong),
@@ -79,6 +85,8 @@ class _WindowsJob:
             ]
 
         class IoCounters(ctypes.Structure):
+            """Job Object 的 IO 计数器结构体。"""
+
             _fields_ = [
                 ("ReadOperationCount", ctypes.c_ulonglong),
                 ("WriteOperationCount", ctypes.c_ulonglong),
@@ -89,6 +97,8 @@ class _WindowsJob:
             ]
 
         class ExtendedLimitInformation(ctypes.Structure):
+            """扩展限额信息结构体，用于设置 KILL_ON_JOB_CLOSE 标志。"""
+
             _fields_ = [
                 ("BasicLimitInformation", BasicLimitInformation),
                 ("IoInfo", IoCounters),
@@ -157,9 +167,11 @@ class _WindowsJob:
         return cls(handle, kernel32)
 
     def resume(self, proc: subprocess.Popen[Any]) -> None:
+        """恢复已挂入 Job 的挂起子进程，使其开始执行。"""
         _resume_windows_process(proc)
 
     def close(self) -> None:
+        """终止 Job 内全部进程并关闭句柄；重复调用安全。"""
         if not self._handle:
             return
         self._kernel32.TerminateJobObject(self._handle, 1)
@@ -168,6 +180,7 @@ class _WindowsJob:
 
 
 def _popen_platform_options(platform_name: str) -> dict[str, Any]:
+    """返回按平台隔离子进程所需的 Popen 选项：Windows 挂起创建，POSIX 独立会话。"""
     if platform_name == "nt":
         return {
             "creationflags": (
@@ -181,6 +194,8 @@ def _popen_platform_options(platform_name: str) -> dict[str, Any]:
 
 @dataclass
 class ManagedProcess:
+    """受管子进程：启动时建立平台进程隔离，close 时确保整棵进程树被回收。"""
+
     process: subprocess.Popen[Any]
     platform_name: str
     isolation_mode: str = "posix_session"
@@ -196,6 +211,11 @@ class ManagedProcess:
         platform_name: str | None = None,
         **popen_kwargs: Any,
     ) -> ManagedProcess:
+        """按平台启动子进程并建立隔离，返回受管句柄。
+
+        Windows 用 Job Object 隔离（先挂起创建）；嵌套 Job 被拒时降级为进程组，
+        其余失败会清理进程树并抛 ManagedProcessError。
+        """
         platform = platform_name or os.name
         proc = subprocess.Popen(
             list(argv),
@@ -251,6 +271,7 @@ class ManagedProcess:
         )
 
     def close(self) -> None:
+        """幂等关闭：先结束 Job Object，再回收子进程树及其标准流。"""
         if self._closed:
             return
         self._closed = True
@@ -261,6 +282,7 @@ class ManagedProcess:
 
 
 def _terminate_process_tree(proc: subprocess.Popen[Any], platform_name: str) -> None:
+    """尽力回收整个进程树：Windows 用 taskkill /T，POSIX 用进程组信号，最后兜底 terminate/kill。"""
     if platform_name == "nt" and proc.poll() is None:
         with suppress(OSError, subprocess.SubprocessError):
             subprocess.run(

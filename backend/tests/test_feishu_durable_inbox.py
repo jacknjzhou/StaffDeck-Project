@@ -35,6 +35,7 @@ from app.db.models import (
 
 
 def _engine(tmp_path):
+    """基于临时文件创建 SQLite 引擎并建表，供并发与落库用例使用。"""
     engine = create_engine(
         f"sqlite:///{tmp_path / 'feishu-inbox.db'}",
         connect_args={"check_same_thread": False, "timeout": 2},
@@ -44,6 +45,7 @@ def _engine(tmp_path):
 
 
 def _seed_binding(engine, *, revision: int = 7) -> str:
+    """写入租户与飞书渠道绑定，返回绑定 ID 供后续暂存使用。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_a", name="Tenant A"))
         binding = ChannelBinding(
@@ -62,6 +64,7 @@ def _seed_binding(engine, *, revision: int = 7) -> str:
 
 
 def _inbound(event_id: str, text_value: str = "hello") -> ChannelInbound:
+    """构造默认的单聊飞书入站事件，便于用例按需覆盖字段。"""
     return ChannelInbound(
         channel="feishu",
         event_id=event_id,
@@ -79,6 +82,7 @@ def _inbound(event_id: str, text_value: str = "hello") -> ChannelInbound:
 
 
 def _stage(engine, event_id: str, *, tenant_key: str = "tenant_key_a", text_value="hello"):
+    """按固定修订号与目标地址暂存一条飞书事件，返回暂存结果。"""
     return stage_feishu_inbound(
         db_engine=engine,
         binding_id="chan_feishu",
@@ -96,6 +100,7 @@ def _stage(engine, event_id: str, *, tenant_key: str = "tenant_key_a", text_valu
 
 
 def test_stage_commits_received_event_and_provider_scope_without_side_effects(tmp_path) -> None:
+    """验证暂存只写入 received 事件与租户、身份范围，不创建用户、会话或消息。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
 
@@ -125,6 +130,7 @@ def test_stage_commits_received_event_and_provider_scope_without_side_effects(tm
 
 
 def test_duplicate_is_acknowledged_without_overwriting_first_envelope(tmp_path) -> None:
+    """验证重复投递同一事件被应答为重复，且不覆盖首次写入的信封。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
 
@@ -141,6 +147,7 @@ def test_duplicate_is_acknowledged_without_overwriting_first_envelope(tmp_path) 
 
 
 def test_competing_provider_tenant_is_security_dropped_without_new_event(tmp_path) -> None:
+    """验证供应商租户冲突时安全丢弃、仍然应答，且不新增事件记录。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     assert _stage(engine, "om_first").disposition is StageDisposition.STAGED
@@ -157,10 +164,12 @@ def test_competing_provider_tenant_is_security_dropped_without_new_event(tmp_pat
 
 
 def test_inbox_insert_failure_rolls_back_tenant_and_scope_pin(tmp_path) -> None:
+    """验证收件箱写入失败时回滚租户与身份范围的固定，并返回 NACK。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
 
     def fail_insert(_conn, _cursor, statement, *_args):
+        """注入收件箱插入失败，用于模拟数据库写入异常。"""
         if statement.lstrip().startswith("INSERT INTO channel_inbound_events"):
             raise OperationalError(statement, {}, RuntimeError("injected insert failure"))
 
@@ -178,6 +187,7 @@ def test_inbox_insert_failure_rolls_back_tenant_and_scope_pin(tmp_path) -> None:
 
 
 def test_concurrent_stage_and_claim_each_have_one_winner(tmp_path) -> None:
+    """验证并发暂存与并发认领各自只有一个成功者。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
 
@@ -207,16 +217,20 @@ def test_concurrent_stage_and_claim_each_have_one_winner(tmp_path) -> None:
 def test_daemon_recovers_received_event_without_memory_notification(
     monkeypatch, tmp_path
 ) -> None:
+    """验证守护进程可恢复 received 事件并落库消息，重复运行不会重复处理。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     staged = _stage(engine, "om_recover")
     calls = []
 
     class FakeAgentLoop:
+        """模拟 AgentLoop，处理轮次时写入用户消息与助手回复。"""
         def __init__(self, db, *, event_sink=None):
+            """保存数据库会话，并忽略事件回调参数。"""
             self.db = db
 
         def handle_turn(self, request):
+            """记录轮次 ID 并写入用户消息与助手回复。"""
             calls.append(request.client_turn_id)
             user_message = Message(
                 id=new_id("msg"),
@@ -258,6 +272,7 @@ def test_group_event_creates_group_session_and_preserves_sender_context(
     monkeypatch,
     tmp_path,
 ) -> None:
+    """验证群聊事件创建群会话，并在消息中保留发送者上下文。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     inbound = ChannelInbound(
@@ -291,10 +306,13 @@ def test_group_event_creates_group_session_and_preserves_sender_context(
     requests = []
 
     class FakeAgentLoop:
+        """模拟 AgentLoop，仅记录收到的轮次请求。"""
         def __init__(self, db, *, event_sink=None):
+            """保存数据库会话，并忽略事件回调参数。"""
             self.db = db
 
         def handle_turn(self, request):
+            """记录收到的轮次请求供后续断言。"""
             requests.append(request)
 
     monkeypatch.setattr("app.core.agent_loop.AgentLoop", FakeAgentLoop)
@@ -315,6 +333,7 @@ def test_group_event_creates_group_session_and_preserves_sender_context(
 
 
 def test_unknown_replay_envelope_is_failed_once(tmp_path) -> None:
+    """验证未知信封版本只会失败一次，不会被重复处理。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     with Session(engine) as db:
@@ -341,6 +360,7 @@ def test_unknown_replay_envelope_is_failed_once(tmp_path) -> None:
 
 
 def test_daemon_does_not_claim_other_channel_received_rows(tmp_path) -> None:
+    """验证守护进程不会认领其他渠道的 received 记录。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     with Session(engine) as db:
@@ -366,6 +386,7 @@ def test_daemon_does_not_claim_other_channel_received_rows(tmp_path) -> None:
 
 
 def test_feishu_command_stages_notice_with_immutable_target(tmp_path) -> None:
+    """验证斜杠命令产生回复与通知投递，并固定不可变的目标地址。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     staged = _stage(engine, "om_help", text_value="/帮助")
@@ -388,6 +409,7 @@ def test_feishu_command_stages_notice_with_immutable_target(tmp_path) -> None:
 
 
 def test_replay_account_change_is_rejected_before_identity_creation(tmp_path) -> None:
+    """验证重放时账号范围发生变化会在创建用户身份前被拒绝。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     staged = _stage(engine, "om_scope_change")
@@ -407,11 +429,13 @@ def test_replay_account_change_is_rejected_before_identity_creation(tmp_path) ->
 
 
 def test_claimed_event_returns_to_received_after_pre_turn_failure(monkeypatch, tmp_path) -> None:
+    """验证轮次前的身份解析失败会把已认领事件退回 received。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     staged = _stage(engine, "om_pre_turn_failure")
 
     def fail_identity(*_args, **_kwargs):
+        """注入用户身份解析失败，用于模拟轮次前的异常。"""
         raise RuntimeError("injected identity failure")
 
     monkeypatch.setattr(
@@ -430,6 +454,7 @@ def test_claimed_event_returns_to_received_after_pre_turn_failure(monkeypatch, t
 def test_startup_sweep_decodes_stale_feishu_processing_envelope(
     monkeypatch, tmp_path
 ) -> None:
+    """验证启动清扫能解码滞留的 processing 事件并处理完成。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     staged = _stage(engine, "om_stale_processing")
@@ -442,10 +467,13 @@ def test_startup_sweep_decodes_stale_feishu_processing_envelope(
     calls = []
 
     class FakeAgentLoop:
+        """模拟 AgentLoop，处理轮次时写入用户消息与助手回复。"""
         def __init__(self, db, *, event_sink=None):
+            """保存数据库会话，并忽略事件回调参数。"""
             self.db = db
 
         def handle_turn(self, request):
+            """记录轮次 ID 并写入用户消息与助手回复。"""
             calls.append(request.client_turn_id)
             user_message = Message(
                 id=new_id("msg"),
@@ -490,11 +518,13 @@ def test_startup_sweep_decodes_stale_feishu_processing_envelope(
 
 
 def test_claim_is_released_when_claimed_loader_fails(monkeypatch, tmp_path) -> None:
+    """验证认领后的加载阶段失败时会释放认领并退回 received。"""
     engine = _engine(tmp_path)
     _seed_binding(engine)
     staged = _stage(engine, "om_loader_failure")
 
     def fail_loader(*_args, **_kwargs):
+        """注入认领事件加载失败，用于模拟处理器异常。"""
         raise RuntimeError("injected claimed loader failure")
 
     monkeypatch.setattr(
@@ -510,6 +540,7 @@ def test_claim_is_released_when_claimed_loader_fails(monkeypatch, tmp_path) -> N
 
 
 def test_envelope_round_trips_attachments_as_dataclass() -> None:
+    """验证附件往返编解码后仍是 ChannelInboundAttachment 且字段完整。"""
     inbound = ChannelInbound(
         channel="feishu",
         event_id="om_att_1",
@@ -565,6 +596,7 @@ def test_envelope_round_trips_attachments_as_dataclass() -> None:
 
 
 def test_envelope_round_trips_empty_attachments() -> None:
+    """验证无附件的信封往返后附件仍为空列表。"""
     inbound = _inbound("om_no_att")
     assert inbound.attachments == []
     envelope = encode_replay_envelope(inbound, app_id="cli_app_a", tenant_key="tenant_key_a")

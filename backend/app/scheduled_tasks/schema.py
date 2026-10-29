@@ -12,6 +12,8 @@ MisfirePolicy = Literal["coalesce", "skip"]
 
 
 class ScheduledTaskBase(BaseModel):
+    """定时任务的公共可写字段：调度方式、时区、并发/补跑策略与生效区间。"""
+
     tenant_id: str
     agent_id: str
     title: str
@@ -31,10 +33,13 @@ class ScheduledTaskBase(BaseModel):
 
 
 class ScheduledTaskCreateRequest(ScheduledTaskBase):
-    pass
+    """创建定时任务的请求体，字段与 ScheduledTaskBase 完全一致。"""
+
 
 
 class ScheduledTaskUpdateRequest(BaseModel):
+    """更新定时任务的请求体，字段全部可选，仅覆盖显式传入的项。"""
+
     tenant_id: str
     agent_id: Optional[str] = None
     title: Optional[str] = None
@@ -53,6 +58,8 @@ class ScheduledTaskUpdateRequest(BaseModel):
 
 
 class ScheduledTaskDraftRequest(BaseModel):
+    """用自然语言消息起草定时任务的请求，可指定来源会话与时区。"""
+
     tenant_id: str
     agent_id: str
     session_id: Optional[str] = None
@@ -61,6 +68,8 @@ class ScheduledTaskDraftRequest(BaseModel):
 
 
 class ScheduledTaskDraftRead(BaseModel):
+    """起草结果：是否应当创建，以及解析出的标题、prompt 与调度配置。"""
+
     should_create: bool
     tenant_id: str
     agent_id: str
@@ -77,6 +86,8 @@ class ScheduledTaskDraftRead(BaseModel):
 
 
 class ScheduledTaskRead(BaseModel):
+    """定时任务读取视图：配置字段之外还带下次/上次运行时间与运行计数。"""
+
     id: str
     tenant_id: str
     agent_id: str
@@ -106,6 +117,8 @@ class ScheduledTaskRead(BaseModel):
 
 
 class ScheduledTaskRunRead(BaseModel):
+    """单次运行记录：计划时间、执行状态、结果摘要与错误信息。"""
+
     id: str
     tenant_id: str
     scheduled_task_id: str

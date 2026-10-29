@@ -23,6 +23,7 @@ const agent: AgentProfileRead = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+/** 构造返回 JSON 体的 fetch 成功响应。 */
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -53,7 +54,9 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+/** 验证 AgentsPage 对团队作用域缓存的兼容表现。 */
 describe('AgentsPage team scope compatibility', () => {
+  /** 验证本地缓存为团队作用域时页面仍能正常渲染员工列表。 */
   it('renders gracefully when the stored scope is a team', async () => {
     window.localStorage.setItem(ENTERPRISE_AGENT_STORAGE_KEY, 'team:team-1');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

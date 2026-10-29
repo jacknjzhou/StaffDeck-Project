@@ -9,6 +9,7 @@ from app.security.managed_subprocess import ManagedProcess, ManagedProcessError
 
 
 class _FakeProcess:
+    """子进程替身，提供隔离测试所需的最小属性与等待接口。"""
     pid = 123
     _handle = 456
     stdin = None
@@ -16,33 +17,41 @@ class _FakeProcess:
     stderr = None
 
     def poll(self) -> int:
+        """返回 0 表示进程已退出。"""
         return 0
 
     def wait(self, timeout: float | None = None) -> int:
+        """忽略超时参数并立即返回退出码 0。"""
         del timeout
         return 0
 
 
 def test_windows_start_is_suspended_before_job_assignment_and_resume(monkeypatch) -> None:
+    """验证 Windows 启动顺序为挂起创建、加入 Job、再恢复，且关闭幂等。"""
     events: list[str] = []
     popen_kwargs: dict[str, Any] = {}
     proc = _FakeProcess()
 
     class FakeJob:
+        """Job 对象替身，记录加入与恢复调用的先后顺序。"""
         @classmethod
         def assign(cls, assigned_proc):  # noqa: ANN001
+            """校验目标进程并记录加入动作，返回 Job 实例。"""
             assert assigned_proc is proc
             events.append("assign")
             return cls()
 
         def resume(self, resumed_proc) -> None:  # noqa: ANN001
+            """校验目标进程并记录恢复动作。"""
             assert resumed_proc is proc
             events.append("resume")
 
         def close(self) -> None:
+            """记录 Job 关闭动作。"""
             events.append("job-close")
 
     def fake_popen(argv, **kwargs):  # noqa: ANN001
+        """记录创建参数并返回替身进程，模拟挂起启动。"""
         assert argv == ["node", "index.js"]
         events.append("popen-suspended")
         popen_kwargs.update(kwargs)
@@ -63,12 +72,15 @@ def test_windows_start_is_suspended_before_job_assignment_and_resume(monkeypatch
 
 
 def test_windows_job_failure_terminates_suspended_process(monkeypatch) -> None:
+    """验证 Job 加入失败时终止挂起的子进程并抛出启动错误。"""
     proc = _FakeProcess()
     terminated: list[tuple[object, str]] = []
 
     class FailingJob:
+        """加入 Job 必定失败的替身。"""
         @classmethod
         def assign(cls, assigned_proc):  # noqa: ANN001
+            """校验目标进程后抛出 OSError，触发失败清理。"""
             assert assigned_proc is proc
             raise OSError("job denied")
 
@@ -88,12 +100,15 @@ def test_windows_job_failure_terminates_suspended_process(monkeypatch) -> None:
 
 @pytest.mark.parametrize("winerror", [5, 50])
 def test_windows_nested_job_failure_falls_back_to_process_group(monkeypatch, winerror) -> None:
+    """验证父子进程均在 Job 中时降级为进程组隔离并记录原因码。"""
     proc = _FakeProcess()
     events: list[str] = []
 
     class NestedJobRejected:
+        """模拟嵌套 Job 被拒绝的替身。"""
         @classmethod
         def assign(cls, assigned_proc):  # noqa: ANN001
+            """抛出带父/子进程状态的任务分配错误。"""
             assert assigned_proc is proc
             raise managed_subprocess._WindowsJobAssignmentError(
                 winerror,
@@ -131,12 +146,15 @@ def test_windows_nested_job_failure_falls_back_to_process_group(monkeypatch, win
 
 
 def test_windows_assignment_failure_without_existing_job_still_fails_closed(monkeypatch) -> None:
+    """验证非嵌套场景的分配失败仍失败关闭并终止子进程。"""
     proc = _FakeProcess()
     terminated: list[tuple[object, str]] = []
 
     class AssignmentRejected:
+        """模拟普通分配失败的替身。"""
         @classmethod
         def assign(cls, assigned_proc):  # noqa: ANN001
+            """抛出父/子进程均不在 Job 中的分配错误。"""
             assert assigned_proc is proc
             raise managed_subprocess._WindowsJobAssignmentError(
                 5,
@@ -160,10 +178,12 @@ def test_windows_assignment_failure_without_existing_job_still_fails_closed(monk
 
 
 def test_posix_start_uses_a_new_session(monkeypatch) -> None:
+    """验证 POSIX 启动使用新会话，关闭时按进程树终止。"""
     captured: dict[str, Any] = {}
     terminated: list[tuple[object, str]] = []
 
     def fake_popen(argv, **kwargs):  # noqa: ANN001
+        """记录创建参数并返回替身进程。"""
         captured.update(kwargs)
         return _FakeProcess()
 

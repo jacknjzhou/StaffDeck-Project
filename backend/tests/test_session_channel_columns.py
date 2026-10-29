@@ -6,6 +6,7 @@ from app.db import database
 
 
 def _legacy_sessions_ddl(conn) -> None:
+    """在连接上建出旧版 sessions 表结构，作为渠道列迁移的起点。"""
     conn.execute(
         text(
             """
@@ -23,6 +24,7 @@ def _legacy_sessions_ddl(conn) -> None:
 
 
 def test_channel_columns_migration_is_idempotent(monkeypatch, tmp_path) -> None:
+    """验证渠道列迁移可重复执行，并生成四列唯一索引按绑定隔离会话。"""
     db_path = tmp_path / "migrate.db"
     engine = create_engine(f"sqlite:///{db_path}")
     with engine.begin() as conn:

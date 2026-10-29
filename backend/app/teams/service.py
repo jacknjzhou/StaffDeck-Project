@@ -57,7 +57,8 @@ _JSON_BLOCK_RE = re.compile(r"```json\s*\n?(.*?)```", re.DOTALL)
 
 
 class TeamTaskTransitionError(ValueError):
-    pass
+    """非法任务状态流转时抛出，供调用方区分业务校验失败。"""
+
 
 
 def extract_json_blocks(text: str) -> list[dict[str, Any]]:
@@ -82,6 +83,7 @@ def strip_team_control_blocks(text: str) -> str:
     """只隐藏团队运行控制块，保留普通 JSON 代码示例供人阅读。"""
 
     def replace(match: re.Match[str]) -> str:
+        """隐藏团队控制块，普通 JSON 代码块原样保留。"""
         try:
             value = json.loads(match.group(1))
         except (json.JSONDecodeError, ValueError):
@@ -97,6 +99,7 @@ def strip_team_control_blocks(text: str) -> str:
 
 
 def _string_list(value: Any) -> list[str]:
+    """把列表值转成去空白、去重的字符串列表；非列表返回空列表。"""
     if not isinstance(value, list):
         return []
     result: list[str] = []
@@ -326,6 +329,7 @@ def parse_blackboard_suggestions(reply: str) -> list[dict[str, Any]]:
 
 
 def get_team(db: Session, tenant_id: str, team_id: str) -> Team:
+    """按租户取团队；不存在或跨租户时抛 404。"""
     team = db.get(Team, team_id)
     if team is None or team.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Team not found")
@@ -333,10 +337,12 @@ def get_team(db: Session, tenant_id: str, team_id: str) -> Team:
 
 
 def list_team_members(db: Session, team_id: str) -> list[TeamMember]:
+    """列出团队的全部成员。"""
     return list(db.exec(select(TeamMember).where(TeamMember.team_id == team_id)).all())
 
 
 def get_team_leader(db: Session, team_id: str) -> TeamMember | None:
+    """返回团队的 leader 成员；没有 leader 时返回 None。"""
     return db.exec(
         select(TeamMember).where(TeamMember.team_id == team_id, TeamMember.role == "leader")
     ).first()
@@ -351,6 +357,10 @@ def create_team(
     owner_user_id: str,
     config: dict[str, Any] | None = None,
 ) -> Team:
+    """创建团队：校验名称非空且同租户内唯一，返回已提交的团队。
+
+    名称冲突（含并发写入触发的 IntegrityError）统一转成 409。
+    """
     name = name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Team name cannot be empty")
@@ -403,6 +413,7 @@ def delete_team(db: Session, team: Team) -> None:
 
 
 def _ensure_team_agent(db: Session, team: Team, agent_id: str) -> AgentProfile:
+    """校验 agent 属于该团队租户且状态为 active，否则抛 404/400。"""
     agent = db.get(AgentProfile, agent_id)
     if agent is None or agent.tenant_id != team.tenant_id:
         raise HTTPException(status_code=404, detail="Agent not found in this tenant")
@@ -412,6 +423,7 @@ def _ensure_team_agent(db: Session, team: Team, agent_id: str) -> AgentProfile:
 
 
 def add_member(db: Session, team: Team, *, agent_id: str, role: str = "member") -> TeamMember:
+    """把 agent 加入团队；role=leader 时通过 set_leader 换任唯一 TL。"""
     if role not in TEAM_MEMBER_ROLES:
         raise HTTPException(status_code=400, detail=f"Invalid team member role: {role}")
     _ensure_team_agent(db, team, agent_id)
@@ -438,6 +450,7 @@ def add_member(db: Session, team: Team, *, agent_id: str, role: str = "member") 
 
 
 def remove_member(db: Session, team: Team, agent_id: str) -> None:
+    """把成员移出团队；成员不存在时抛 404。"""
     member = db.exec(
         select(TeamMember).where(
             TeamMember.team_id == team.id, TeamMember.agent_id == agent_id
@@ -479,6 +492,7 @@ def record_task_event(
     event_type: str,
     payload: dict[str, Any] | None = None,
 ) -> TeamTaskEvent:
+    """构造一条任务审计事件并加入会话，由调用方统一提交。"""
     event = TeamTaskEvent(
         task_id=task_id,
         team_id=team_id,
@@ -704,6 +718,7 @@ def blackboard_context_lines(
     query = (query_text or "").lower()
 
     def sort_key(entry: TeamBlackboardEntry) -> tuple[int, bool, float]:
+        """黑板排序键：命中标签多者优先，其次 pinned，最后按更新时间倒序。"""
         score = sum(
             1 for tag in entry.tags_json if isinstance(tag, str) and tag and tag in query
         )

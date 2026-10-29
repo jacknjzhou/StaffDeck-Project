@@ -29,6 +29,7 @@ _RUNTIME_ALLOWLIST = {
 
 
 def _user_data_dir() -> Path:
+    """解析跨平台用户数据目录，优先使用 ULTRARAG_DATA_DIR 覆盖。"""
     override = os.environ.get("ULTRARAG_DATA_DIR", "").strip()
     if override:
         return Path(override).expanduser().resolve()
@@ -40,6 +41,7 @@ def _user_data_dir() -> Path:
 
 
 def binding_lock_path(binding_id: str, database_path: Path) -> Path:
+    """按数据库路径与绑定 id 的指纹生成锁文件路径。"""
     database = database_path.expanduser().resolve()
     database_fingerprint = hashlib.sha256(str(database).encode("utf-8")).hexdigest()[:16]
     binding_fingerprint = hashlib.sha256(binding_id.encode("utf-8")).hexdigest()[:16]
@@ -51,11 +53,14 @@ def binding_lock_path(binding_id: str, database_path: Path) -> Path:
 
 
 class BindingProcessLock:
+    """基于文件锁保证同一绑定只存活一个连接器子进程。"""
     def __init__(self, path: Path):
+        """记录锁文件路径，成功加锁前句柄保持为空。"""
         self.path = path
         self._handle = None
 
     def acquire(self) -> bool:
+        """非阻塞获取文件锁，被占用或锁文件不可写时返回 False。"""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             handle = self.path.open("a+b")
@@ -83,6 +88,7 @@ class BindingProcessLock:
         return True
 
     def release(self) -> None:
+        """释放锁并关闭文件句柄，未持锁时直接返回。"""
         handle = self._handle
         if handle is None:
             return
@@ -103,6 +109,7 @@ class BindingProcessLock:
 
 @dataclass(frozen=True)
 class ConnectorChildSpec:
+    """子进程启动所需的绑定、运行时与看门狗参数快照。"""
     binding_id: str
     config_revision: int
     child_nonce: str
@@ -113,7 +120,9 @@ class ConnectorChildSpec:
 
 
 class ChildControl:
+    """子进程侧控制通道：上报事件、监听 STOP 命令并执行停止回调。"""
     def __init__(self, spec: ConnectorChildSpec, connection):
+        """保存 spec 与连接，创建停止事件、互斥锁与命令读取线程。"""
         self.spec = spec
         self.connection = connection
         self.stop_requested = threading.Event()
@@ -128,9 +137,11 @@ class ChildControl:
         )
 
     def start(self) -> None:
+        """启动命令读取线程，开始接收父进程的 STOP 指令。"""
         self._thread.start()
 
     def add_stop_callback(self, callback: Callable[[], None]) -> None:
+        """注册停止回调；已收到停止指令时立即同步执行。"""
         with self._callback_lock:
             if not self.stop_requested.is_set():
                 self._stop_callbacks.append(callback)
@@ -139,12 +150,14 @@ class ChildControl:
             callback()
 
     def join(self, timeout: float = 1.0) -> bool:
+        """在超时内等待命令线程退出，返回其是否已结束。"""
         if self._thread is threading.current_thread():
             return False
         self._thread.join(timeout=timeout)
         return not self._thread.is_alive()
 
     def emit(self, event: str, **payload: Any) -> None:
+        """向父进程发送带绑定标识的事件，管道断开时标记父进程已退出。"""
         message = {
             "event": event,
             "binding_id": self.spec.binding_id,
@@ -161,6 +174,7 @@ class ChildControl:
             self.parent_gone.set()
 
     def _read_commands(self) -> None:
+        """循环读取父进程命令，校验绑定标识后触发停止回调。"""
         while True:
             try:
                 message = self.connection.recv()
@@ -192,6 +206,7 @@ class ChildControl:
 
 
 class FrameWatchdog:
+    """监视已派发帧的处理超时，超时即以约定退出码结束子进程。"""
     def __init__(
         self,
         control: ChildControl,
@@ -199,6 +214,7 @@ class FrameWatchdog:
         *,
         exit_fn: Callable[[int], None] = os._exit,
     ):
+        """保存控制通道与超时阈值，初始化按令牌记录的截止时间。"""
         self.control = control
         self.timeout_seconds = timeout_seconds
         self.exit_fn = exit_fn
@@ -212,9 +228,11 @@ class FrameWatchdog:
         )
 
     def start(self) -> None:
+        """启动看门狗守护线程。"""
         self._thread.start()
 
     def arm(self, token: str) -> None:
+        """为帧令牌登记截止时间并上报派发开始事件。"""
         with self._condition:
             deadline = time.monotonic() + self.timeout_seconds
             self._deadlines[token] = deadline
@@ -226,6 +244,7 @@ class FrameWatchdog:
         )
 
     def disarm(self, token: str) -> bool:
+        """移除帧令牌的截止时间并上报派发结束事件，未登记时返回 False。"""
         with self._condition:
             if token not in self._deadlines:
                 return False
@@ -235,6 +254,7 @@ class FrameWatchdog:
         return True
 
     def stop(self) -> None:
+        """停止看门狗线程并唤醒等待中的循环。"""
         with self._condition:
             self._stopped = True
             self._condition.notify_all()
@@ -242,6 +262,7 @@ class FrameWatchdog:
             self._thread.join(timeout=1.0)
 
     def _run(self) -> None:
+        """等待最早的帧截止时间，超时后上报并退出进程。"""
         while True:
             with self._condition:
                 if self._stopped:
@@ -260,6 +281,7 @@ class FrameWatchdog:
 
 
 def _load_runtime(path: str) -> Callable[[ConnectorChildSpec, ChildControl, FrameWatchdog], None]:
+    """按白名单校验并加载运行时入口可调用对象。"""
     if path not in _RUNTIME_ALLOWLIST:
         raise ValueError(f"Feishu connector runtime is not allowed: {path!r}")
     module_name, separator, attribute = path.partition(":")
@@ -272,6 +294,7 @@ def _load_runtime(path: str) -> Callable[[ConnectorChildSpec, ChildControl, Fram
 
 
 def connector_child_entry(spec: ConnectorChildSpec, connection) -> None:
+    """子进程入口：抢锁、启动控制与看门狗、加载运行时并在退出时清理。"""
     lock = BindingProcessLock(Path(spec.binding_lock_path))
     if not lock.acquire():
         try:
@@ -307,6 +330,7 @@ def connector_child_entry(spec: ConnectorChildSpec, connection) -> None:
 
 
 def _contract_config(spec: ConnectorChildSpec) -> dict[str, Any]:
+    """等待并读取契约测试配置，超时则报错。"""
     path = _user_data_dir() / "feishu-spike" / f"{spec.child_nonce}.json"
     deadline = time.monotonic() + 5.0
     while not path.exists():
@@ -317,6 +341,7 @@ def _contract_config(spec: ConnectorChildSpec) -> dict[str, Any]:
 
 
 def _fault_point(config: dict[str, Any], name: str) -> None:
+    """契约测试故障注入点：写入到达标记并阻塞到 release 文件出现。"""
     if config.get("fault_point") != name:
         return
     root = Path(config["fault_dir"])
@@ -332,7 +357,7 @@ def run_sdk_contract_runtime(
     control: ChildControl,
     watchdog: FrameWatchdog,
 ) -> None:
-    """Real SDK runtime used by the process spike against a local WebSocket endpoint."""
+    """基于真实 lark-channel-sdk 连接本地 WebSocket 的契约运行时。"""
     if importlib.metadata.version("lark-channel-sdk") != SDK_CONTRACT_VERSION:
         raise RuntimeError(f"lark-channel-sdk must be exactly {SDK_CONTRACT_VERSION}")
     config = _contract_config(spec)
@@ -346,6 +371,7 @@ def run_sdk_contract_runtime(
     from lark_channel.ws.const import HEADER_MESSAGE_ID, HEADER_TRACE_ID
 
     def stage(event) -> None:
+        """校验消息 id 并幂等写入收件箱，在提交前后插入故障注入点。"""
         message_id = str(event.event.message.message_id or "")
         if not message_id:
             raise ValueError("missing message_id")
@@ -357,6 +383,7 @@ def run_sdk_contract_runtime(
             _fault_point(config, "AFTER_WRITE_BEFORE_COMMIT")
 
             def trace(statement: str) -> None:
+                """在 SQLite 跟踪回调中识别 COMMIT 语句以触发故障注入。"""
                 if statement.strip().upper() == "COMMIT":
                     _fault_point(config, "COMMIT_ENTERED")
 
@@ -372,11 +399,14 @@ def run_sdk_contract_runtime(
     )
 
     class ContractClient(WsClient):
+        """包装 WsClient，在连接、收帧与重连时向父进程上报事件。"""
         async def _connect(self) -> None:
+            """建立连接后向父进程上报 CONNECTED 事件。"""
             await super()._connect()
             control.emit("CONNECTED")
 
         async def _handle_data_frame(self, frame) -> None:
+            """按消息与链路 id 生成帧令牌，收帧期间启停看门狗并注入故障点。"""
             token = ":".join(
                 (
                     _get_by_key(frame.headers, HEADER_MESSAGE_ID),
@@ -390,10 +420,12 @@ def run_sdk_contract_runtime(
             _fault_point(config, "ACK_WRITTEN")
 
         async def _disconnect_and_reconnect(self, *, expected_conn=None):
+            """重连前上报 DISCONNECTED 事件。"""
             control.emit("DISCONNECTED")
             return await super()._disconnect_and_reconnect(expected_conn=expected_conn)
 
         async def _write_message(self, data: bytes) -> None:
+            """按配置延迟 DATA 响应写出，模拟确认链路耗时。"""
             delay = float(config.get("ack_write_delay", 0.0))
             if delay > 0:
                 from lark_channel.ws.pb.pbbp2_pb2 import Frame
@@ -414,7 +446,9 @@ def run_sdk_contract_runtime(
     )
 
     def request_stop() -> None:
+        """收到停止指令时关闭自动重连、断开连接并停止事件循环。"""
         async def shutdown() -> None:
+            """关闭自动重连并断开连接，最后停止事件循环。"""
             client._auto_reconnect = False
             try:
                 await client._disconnect()
@@ -446,6 +480,7 @@ def run_idle_contract_runtime(
     control: ChildControl,
     watchdog: FrameWatchdog,
 ) -> None:
+    """契约运行时：上报已连接后空转，直到收到停止指令。"""
     del spec, watchdog
     control.emit("CONNECTED")
     control.stop_requested.wait()
@@ -456,6 +491,7 @@ def run_parent_watchdog_contract_runtime(
     control: ChildControl,
     watchdog: FrameWatchdog,
 ) -> None:
+    """契约运行时：忽略 SIGTERM 并保留未完成帧以触发看门狗。"""
     del watchdog
     import signal
 
@@ -477,6 +513,7 @@ def run_unstoppable_contract_runtime(
     control: ChildControl,
     watchdog: FrameWatchdog,
 ) -> None:
+    """契约运行时：忽略 SIGTERM 并空转，用于验证强制回收路径。"""
     del spec, watchdog
     import signal
 

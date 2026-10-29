@@ -21,6 +21,7 @@ from app.db.models import (
 
 @dataclass(frozen=True)
 class HarnessSessionRecordCleanup:
+    """一次 Harness 会话记录删除的计数摘要，供调用方记录清理规模。"""
     session_lease_count: int
     turn_count: int
     invocation_count: int
@@ -34,7 +35,11 @@ def stage_harness_session_execution_reset(
     tenant_id: str,
     session_id: str,
 ) -> None:
-    """Cancel durable Harness execution state while preserving turn receipts."""
+    """取消会话中仍在执行的 Harness 持久化状态，但保留 turn 收据。
+
+    started 的 turn 被标记为 cancelled 并写入 SESSION_RESET 错误；started 的
+    invocation、running 的 run、未终结的 task frame 与全部租约则被删除。
+    """
     invocations = db.exec(
         select(HarnessInvocationRecord).where(
             HarnessInvocationRecord.tenant_id == tenant_id,
@@ -102,10 +107,9 @@ def stage_harness_session_record_deletion(
     tenant_id: str,
     session_id: str,
 ) -> HarnessSessionRecordCleanup:
-    """Stage Harness v2 records for deletion in dependency order.
+    """按依赖顺序登记 Harness v2 记录的删除，并返回各类记录的删除数量。
 
-    The caller owns the surrounding transaction so chat-session deletion remains
-    atomic with the existing message, event, and feedback cleanup.
+    外层事务由调用方持有，使该清理与消息、事件、反馈的删除保持原子。
     """
 
     invocations = db.exec(
@@ -165,7 +169,11 @@ def stage_harness_session_record_deletion(
 
 
 def harness_path_segment(value: str) -> str:
-    """Map an external identifier to the exact Harness workspace segment."""
+    """把外部标识映射为确定的 Harness 工作区路径片段。
+
+    保留字母、数字与 -/_，取前 72 个字符并追加原始值的短哈希，既避免碰撞
+    也阻断路径穿越；空值的前缀退化为 unknown。
+    """
 
     raw = str(value or "")
     normalized = "".join(
@@ -179,7 +187,11 @@ def harness_path_segment(value: str) -> str:
 
 
 def harness_storage_root(*, tenant_id: str, db: Session | None = None) -> Path:
-    """Resolve the administrator-selected root for new non-sandboxed workspaces."""
+    """解析新非沙箱工作区的根目录。
+
+    仅当租户配置了 UI 存储路径且未启用沙箱时使用该路径，否则回退到用户
+    数据目录下的 harness_workspaces。
+    """
 
     default_root = paths.user_data_dir().resolve() / "harness_workspaces"
     if db is not None:
@@ -193,6 +205,7 @@ def harness_storage_root(*, tenant_id: str, db: Session | None = None) -> Path:
 def harness_session_workspace_path(
     *, tenant_id: str, session_id: str, db: Session | None = None
 ) -> Path:
+    """返回租户与会话两级路径片段拼出的 Harness 工作区目录。"""
     return (
         harness_storage_root(tenant_id=tenant_id, db=db)
         / harness_path_segment(tenant_id)
@@ -207,6 +220,10 @@ def harness_task_workspace_path(
     task_frame_id: str,
     db: Session | None = None,
 ) -> Path:
+    """返回某个 task frame 的工作区路径，遇到符号链接时拒绝创建。
+
+    会话目录及其父级任一为符号链接都会抛 OSError，防止工作区被重定向到别处。
+    """
     session_path = harness_session_workspace_path(
         tenant_id=tenant_id,
         session_id=session_id,
@@ -229,11 +246,10 @@ def harness_task_workspace_path(
 def remove_harness_session_workspace(
     *, tenant_id: str, session_id: str, db: Session | None = None
 ) -> bool:
-    """Remove only one exact tenant/session Harness workspace.
+    """只删除一个确切的租户/会话工作区，并返回是否发生了删除。
 
-    Parent symlinks are rejected so cleanup can never traverse a redirected
-    ``harness_workspaces`` or tenant directory. A symlink at the exact session
-    path is unlinked without touching its target.
+    父级为符号链接时一律拒绝，避免清理被重定向；会话路径本身是符号链接时只
+    unlink 链接而不触碰目标。非目录文件直接删除，路径不存在则返回 False。
     """
 
     session_path = harness_session_workspace_path(

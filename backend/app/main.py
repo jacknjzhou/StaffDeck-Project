@@ -90,6 +90,7 @@ _ROLE_MAP = {
 
 
 def _role_enables(capability: str) -> bool:
+    """判断当前进程角色是否启用某一能力组（api/worker/connector）。"""
     return capability in _ROLE_MAP.get(
         get_settings().process_role, {"api", "worker", "connector"}
     )
@@ -104,12 +105,10 @@ LEASE_RENEW_INTERVAL_SECONDS = 20.0
 
 
 def _start_lease_renewer() -> None:
-    """Keep held role leases alive.
+    """为已持有的角色租约周期续期。
 
-    Leases carry a short TTL so a crashed process cannot block its role forever,
-    which means a healthy long-running process must renew them. Without this the
-    lease silently expires after LEASE_TTL_SECONDS and the exclusivity guarantee
-    disappears for every process that outlives it.
+    租约 TTL 很短，崩溃的进程不会永久占用角色，因此存活进程必须续期；否则
+    超过 LEASE_TTL_SECONDS 后租约静默过期，互斥保证随之失效。
     """
     global _lease_renew_thread
     if not _held_leases:
@@ -117,6 +116,7 @@ def _start_lease_renewer() -> None:
     _lease_renew_stop.clear()
 
     def renew_loop() -> None:
+        """后台循环：每次间隔结束后为全部已持有租约续期一次。"""
         while not _lease_renew_stop.wait(LEASE_RENEW_INTERVAL_SECONDS):
             for lease in list(_held_leases):
                 try:
@@ -134,6 +134,7 @@ def _start_lease_renewer() -> None:
 
 
 def _stop_lease_renewer() -> None:
+    """停止续期线程并最多等待 5 秒，随后清空线程句柄。"""
     global _lease_renew_thread
     _lease_renew_stop.set()
     thread = _lease_renew_thread
@@ -143,6 +144,10 @@ def _stop_lease_renewer() -> None:
 
 
 def _release_held_leases() -> None:
+    """停止续期并尽力释放本进程持有的全部角色租约。
+
+    释放异常被忽略：shutdown 阶段 Redis 不可达不应阻塞退出，过期由 TTL 兜底。
+    """
     _stop_lease_renewer()
     for lease in _held_leases:
         # 释放尽力而为：shutdown 阶段 Redis 不可达不应阻塞进程退出，
@@ -154,6 +159,11 @@ def _release_held_leases() -> None:
 
 @app.on_event("startup")
 def on_startup() -> None:
+    """应用启动钩子：获取实例锁与角色租约，再按角色启动后台服务。
+
+    SQLite 部署用进程级文件锁互斥，PG + Redis 部署改由角色租约互斥；任一步
+    失败都会释放已持有的租约与实例锁，避免残留占用阻塞后续启动。
+    """
     # 实例文件锁只用于 SQLite 数据库的单机互斥；PG 部署允许多进程/多机，
     # 由下方角色租约负责互斥。
     if sqlite_database_path(get_settings().database_url) is not None:
@@ -174,6 +184,7 @@ def on_startup() -> None:
 
 
 def _startup_by_role() -> None:
+    """按进程角色初始化数据库，并启动该角色对应的后台线程与 worker。"""
     init_db()
     if _role_enables("api"):
         with Session(engine) as db:
@@ -201,6 +212,7 @@ def _startup_by_role() -> None:
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
+    """应用关闭钩子：按角色停止后台服务，最后释放租约与实例锁。"""
     try:
         if _role_enables("worker"):
             stop_codex_a2a_tasks()
@@ -219,6 +231,7 @@ def on_shutdown() -> None:
 
 @app.get("/api/health", tags=["health"])
 def health() -> dict[str, str]:
+    """健康检查端点，返回固定的 ok 状态与应用名，供探活使用。"""
     return {"status": "ok", "app": "StaffDeck"}
 
 

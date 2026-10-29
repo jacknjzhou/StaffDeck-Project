@@ -18,6 +18,7 @@ import type { ChatTurnResponse } from '../types';
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
+/** Agent 调试页面：手动发起单轮对话，并在右侧查看最近一轮的 trace 快照。 */
 export default function DebugPage() {
   const [sessionId, setSessionId] = useState('');
   const [input, setInput] = useState('');
@@ -25,6 +26,12 @@ export default function DebugPage() {
   const [lastTurn, setLastTurn] = useState<ChatTurnResponse | null>(null);
   const [loading, setLoading] = useState(false);
 
+  /**
+   * 发送一条调试消息，并把用户消息与助手回复追加到本地记录。
+   *
+   * 输入为空时直接返回；请求中置 loading，成功后复用返回的 session_id 并更新 trace，
+   * 失败弹出错误提示，最后在 finally 中恢复 loading。
+   */
   async function send() {
     if (!input.trim()) return;
     const userText = input;

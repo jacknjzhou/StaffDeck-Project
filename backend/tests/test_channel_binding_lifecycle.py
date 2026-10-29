@@ -25,6 +25,7 @@ from app.db.models import (
 
 
 def _test_engine():
+    """创建内存 SQLite 引擎并建表，为单个用例提供隔离的数据库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -35,6 +36,7 @@ def _test_engine():
 
 
 def test_binding_lifecycle_lock_serializes_same_binding() -> None:
+    """验证同一绑定的生命周期锁串行化并发请求，后到者需等先到者退出。"""
     from app.channels import binding_lifecycle_lock
 
     first_entered = threading.Event()
@@ -43,6 +45,7 @@ def test_binding_lifecycle_lock_serializes_same_binding() -> None:
     order: list[str] = []
 
     def first_request() -> None:
+        """模拟先到请求：获取锁后记录进入与退出顺序。"""
         with binding_lifecycle_lock("chan_same"):
             order.append("first_enter")
             first_entered.set()
@@ -50,6 +53,7 @@ def test_binding_lifecycle_lock_serializes_same_binding() -> None:
             order.append("first_exit")
 
     def second_request() -> None:
+        """模拟后到请求：需等先到请求释放锁后才能进入临界区。"""
         assert first_entered.wait(timeout=5.0)
         with binding_lifecycle_lock("chan_same"):
             order.append("second_enter")
@@ -71,6 +75,7 @@ def test_binding_lifecycle_lock_serializes_same_binding() -> None:
 
 
 def test_connector_process_lock_rejects_second_process(monkeypatch, tmp_path) -> None:
+    """验证连接器进程锁被持有时，另一个进程无法再获取同一把锁。"""
     import app.channels as channels
     import app.db as app_db
 
@@ -102,6 +107,7 @@ def test_connector_process_lock_rejects_second_process(monkeypatch, tmp_path) ->
 
 
 def test_shutdown_keeps_connector_lock_until_consumers_exit(monkeypatch, tmp_path) -> None:
+    """验证消费者未退出前仍持有连接器锁，全部退出后才允许新进程接管。"""
     import app.channels as channels
     import app.channels.service_outbox as outbox_module
     import app.db as app_db
@@ -111,9 +117,12 @@ def test_shutdown_keeps_connector_lock_until_consumers_exit(monkeypatch, tmp_pat
     monkeypatch.setattr(app_db, "engine", engine)
 
     class ControlledManager:
+        """可手动切换停止结果的渠道管理器替身，用于观察关停时锁的释放时机。"""
+
         stopped = False
 
         def stop(self, timeout_seconds=5.0):
+            """返回预设的停止结果，模拟消费者是否已经全部退出。"""
             return self.stopped
 
     manager = ControlledManager()
@@ -132,6 +141,7 @@ def test_shutdown_keeps_connector_lock_until_consumers_exit(monkeypatch, tmp_pat
     )
 
     def child_result() -> str:
+        """在子进程中尝试获取连接器锁，返回其打印的 True/False。"""
         result = subprocess.run(
             [sys.executable, "-c", code],
             cwd=Path(__file__).resolve().parents[1],
@@ -154,6 +164,7 @@ def test_shutdown_keeps_connector_lock_until_consumers_exit(monkeypatch, tmp_pat
 
 
 def _make_api_client(engine):
+    """构建挂载渠道路由的测试客户端，并用测试引擎替换数据库依赖。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -164,6 +175,7 @@ def _make_api_client(engine):
     app.include_router(channels_api.router)
 
     def override_get_session():
+        """为每个请求提供绑定到测试引擎的数据库会话。"""
         with Session(engine) as session:
             yield session
 
@@ -172,6 +184,7 @@ def _make_api_client(engine):
 
 
 def _seed_users(engine) -> dict[str, User]:
+    """创建演示租户、所有者用户与两名智能体，返回可按角色取用的用户表。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         owner = User(id="user_owner", tenant_id="tenant_demo", username="owner", password_hash="x")
@@ -199,6 +212,7 @@ def _seed_users(engine) -> dict[str, User]:
 
 
 def _auth(user: User) -> dict[str, str]:
+    """为指定用户签发访问令牌并组装认证请求头。"""
     from app.security.auth import create_access_token
 
     return {"Authorization": f"Bearer {create_access_token(user)}"}
@@ -208,6 +222,7 @@ def _auth(user: User) -> dict[str, str]:
 
 
 def test_delete_binding_cascades_mounts_and_conv_states(monkeypatch) -> None:
+    """验证删除渠道绑定后，挂载智能体与会话状态被一并级联清理。"""
     import app.api.channels as channels_api
 
     engine = _test_engine()
@@ -261,6 +276,7 @@ def test_delete_binding_cascades_mounts_and_conv_states(monkeypatch) -> None:
 
 
 def test_adopt_orphan_channel_sessions() -> None:
+    """验证重绑只认领符合渠道与挂载集条件的孤儿会话，其余保持不变。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -362,6 +378,7 @@ def test_adopt_orphan_channel_sessions() -> None:
 
 
 def test_adopt_orphan_sessions_legacy_mount_fallback() -> None:
+    """验证无挂载行的存量绑定会回退到自身智能体并认领孤儿会话。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -393,6 +410,7 @@ def test_adopt_orphan_sessions_legacy_mount_fallback() -> None:
 
 
 def test_same_wecom_corp_and_bot_is_unique_across_tenants() -> None:
+    """验证同一企微企业与机器人组合全局唯一，跨租户重复写入会被拒绝。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_a", name="A"))
@@ -419,6 +437,7 @@ def test_same_wecom_corp_and_bot_is_unique_across_tenants() -> None:
 
 
 def test_same_wecom_bot_id_in_different_corps_is_allowed() -> None:
+    """验证不同企业下出现相同机器人 ID 时允许共存，不会触发唯一约束。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_a", name="A"))
@@ -447,6 +466,7 @@ def test_same_wecom_bot_id_in_different_corps_is_allowed() -> None:
 
 
 def _stageable_session(**overrides) -> ChatSession:
+    """构造可投递的渠道会话，并允许用关键字覆盖默认字段。"""
     values = {
         "id": "session_x",
         "tenant_id": "tenant_demo",
@@ -459,6 +479,7 @@ def _stageable_session(**overrides) -> ChatSession:
 
 
 def _message(session_id: str) -> Message:
+    """构造该会话下的一条助手回复，作为投递的触发消息。"""
     return Message(
         id=f"msg_{session_id}",
         tenant_id="tenant_demo",
@@ -469,6 +490,7 @@ def _message(session_id: str) -> Message:
 
 
 def test_delivery_does_not_fallback_when_original_binding_is_deleted() -> None:
+    """验证会话原绑定被删除时不回退到其他绑定，直接标记投递失败。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -498,6 +520,7 @@ def test_delivery_does_not_fallback_when_original_binding_is_deleted() -> None:
 
 
 def test_delivery_fallback_default_agent_still_works() -> None:
+    """验证无绑定会话按账号键回退到默认智能体的 active 绑定并完成投递。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
@@ -530,6 +553,7 @@ def test_delivery_fallback_default_agent_still_works() -> None:
 
 
 def test_delivery_gives_up_when_no_active_binding_matches() -> None:
+    """验证没有可用 active 绑定时投递放弃，并记录失败原因。"""
     engine = _test_engine()
     with Session(engine) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))

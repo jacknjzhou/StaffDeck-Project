@@ -6,6 +6,7 @@ from app.scheduled_tasks import service as scheduled_service
 
 
 def test_model_failure_does_not_create_keyword_based_draft(monkeypatch) -> None:
+    """验证模型识别失败时不会退化为按关键词创建定时任务草稿。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_demo", tenant_id="tenant_demo", name="客服", is_overall=False))
@@ -25,6 +26,7 @@ def test_model_failure_does_not_create_keyword_based_draft(monkeypatch) -> None:
 
 
 def test_llm_draft_is_used_without_confidence_fallback(monkeypatch) -> None:
+    """验证模型草稿即使置信度很低也直接采用，不触发置信度兜底逻辑。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_demo", tenant_id="tenant_demo", name="客服", is_overall=False))
@@ -60,6 +62,7 @@ def test_llm_draft_is_used_without_confidence_fallback(monkeypatch) -> None:
 
 
 def test_llm_draft_defaults_to_requested_timezone(monkeypatch) -> None:
+    """验证模型未给出时区时，草稿时区回退为调用方请求的时区。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_demo", tenant_id="tenant_demo", name="客服", is_overall=False))
@@ -95,6 +98,7 @@ def test_llm_draft_defaults_to_requested_timezone(monkeypatch) -> None:
 
 
 def test_llm_negative_result_does_not_fallback(monkeypatch) -> None:
+    """验证模型判定不该创建任务时直接返回 None，不回退关键词解析。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(AgentProfile(id="agent_demo", tenant_id="tenant_demo", name="客服", is_overall=False))
@@ -122,6 +126,7 @@ def test_llm_negative_result_does_not_fallback(monkeypatch) -> None:
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 会话并建表，让每个用例拥有彼此隔离的数据。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

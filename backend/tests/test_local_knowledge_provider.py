@@ -7,12 +7,16 @@ from app.knowledge.schema import KnowledgeChunkRead, KnowledgeSearchResponse
 
 
 class FakeKnowledgeService:
+    """本地知识能力适配器测试替身，记录调用并返回固定的搜索结果。"""
+
     calls: ClassVar[list[object]] = []
 
     def __init__(self, db: object) -> None:
+        """保存数据库会话，供被测适配器原样透传。"""
         self.db = db
 
     def search(self, request: object, model_config: object) -> KnowledgeSearchResponse:
+        """记录请求与模型配置，并返回带固定分片和 trace 的搜索结果。"""
         self.calls.append((request, model_config))
         return KnowledgeSearchResponse(
             chunks=[
@@ -35,6 +39,7 @@ class FakeKnowledgeService:
 
 
 def test_local_knowledge_scope_listing_is_tenant_and_agent_scoped(monkeypatch) -> None:
+    """验证能力范围列表来自租户与员工可见知识库，并保留其元数据。"""
     monkeypatch.setattr(
         "app.capabilities.local_knowledge.visible_knowledge_base_versions",
         lambda db, tenant_id, agent_id: {
@@ -62,6 +67,7 @@ def test_local_knowledge_scope_listing_is_tenant_and_agent_scoped(monkeypatch) -
 
 
 def test_local_knowledge_adapter_preserves_service_owned_result() -> None:
+    """验证适配器透传知识服务结果与查询上下文，内存引用不允许被解析。"""
     FakeKnowledgeService.calls = []
     runtime = LocalKnowledgeRuntime(FakeKnowledgeService, db=object(), model_config="model")
     result = runtime.search(
@@ -107,6 +113,7 @@ def test_local_knowledge_adapter_preserves_service_owned_result() -> None:
 
 
 def test_local_knowledge_adapter_rejects_unknown_query_type() -> None:
+    """验证未知查询类型抛出 KNOWLEDGE_UNSUPPORTED_QUERY_TYPE，而非被静默降级。"""
     runtime = LocalKnowledgeRuntime(FakeKnowledgeService, db=object(), model_config=None)
     try:
         runtime.search(

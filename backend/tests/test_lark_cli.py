@@ -21,6 +21,7 @@ from app.lark_cli import policy, runner, service
 
 
 def _submit_skill() -> Skill:
+    """构造带提交节点的最小 SOP 技能，供提交授权闸测试复用。"""
     return Skill(
         tenant_id="t1",
         skill_id="sop-lark",
@@ -46,6 +47,7 @@ def _submit_skill() -> Skill:
 
 
 def test_policy_allows_read_and_marks_dry_run() -> None:
+    """验证读命令判为 read，且 gated_write 加 --dry-run 时不算副作用写。"""
     resolved = policy.resolve(
         ["approval", "approvals", "search", "--data", '{"keyword":"报销"}']
     )
@@ -96,6 +98,7 @@ def test_policy_allows_read_and_marks_dry_run() -> None:
     ],
 )
 def test_policy_blocks(argv: list[str], code: str) -> None:
+    """验证各类违规参数分别返回对应的策略错误码。"""
     with pytest.raises(policy.LarkCliPolicyError) as exc:
         policy.resolve(argv)
     assert exc.value.code == code
@@ -131,6 +134,7 @@ def test_policy_unknown_commands_become_risk_probe_candidates() -> None:
 
 
 def test_submission_digest_is_stable_and_ignores_uuid() -> None:
+    """验证摘要稳定、忽略 uuid，但表单内容变化会改变摘要。"""
     base = {"approval_code": "A", "form": '[{"id":"w1","value":"x"}]'}
     digest = policy.submission_digest(dict(base))
     assert digest == policy.submission_digest({**base, "uuid": "anything"})
@@ -146,6 +150,7 @@ def test_submission_digest_is_encoding_agnostic() -> None:
 
 
 def test_wire_submission_data_serializes_form_to_string() -> None:
+    """验证提交体把数组 form 序列化为服务端要求的 JSON 字符串。"""
     wire = policy.wire_submission_data(
         {"approval_code": "A", "form": [{"id": "w1", "value": "x"}]}
     )
@@ -183,6 +188,7 @@ def test_wire_form_dates_normalized_to_rfc3339() -> None:
 
 
 def test_wire_form_date_interval_normalized_and_unparseable_passthrough() -> None:
+    """验证 dateInterval 起止时间转为 RFC3339，无法解析的值原样透传。"""
     wire = policy.wire_submission_data(
         {
             "form": [
@@ -229,6 +235,7 @@ def test_form_error_guidance_covers_observed_server_rejections() -> None:
 
 
 def test_policy_allows_help_on_intermediate_prefix() -> None:
+    """验证中间前缀加 --help 视为只读帮助，而 api 域仍被拒绝。"""
     resolved = policy.resolve(["approval", "instances", "--help"])
     assert resolved.is_help and not resolved.is_side_effect_write
     assert policy.resolve(["config", "--help"]).is_help
@@ -237,6 +244,7 @@ def test_policy_allows_help_on_intermediate_prefix() -> None:
 
 
 def test_task_requirement_carries_current_time() -> None:
+    """验证编译出的任务需求携带含星期与 ISO 时间的当前时间。"""
     from app.core.task_request_compiler import CapabilityManifest, TaskRequestCompiler
     from app.session.session_schema import PlannedTaskFrame
 
@@ -251,6 +259,7 @@ def test_task_requirement_carries_current_time() -> None:
 
 
 def test_logical_signature_only_for_real_submission() -> None:
+    """验证仅真实提交生成防重放签名，dry-run、登录与 help 均不生成。"""
     submit = ["approval", "instances", "create", "--data", '{"approval_code":"A"}']
     assert policy.logical_write_signature({"args": submit}) is not None
     assert policy.logical_write_signature({"args": [*submit, "--dry-run"]}) is None
@@ -271,6 +280,7 @@ def test_logical_signature_only_for_real_submission() -> None:
 
 
 def test_parse_envelope_picks_last_json_object() -> None:
+    """验证从混杂输出中取最后一个 JSON 对象，无 JSON 时返回 None。"""
     text = 'OK: saved\n{"first": true}\nnoise\n{"ok": false, "error": {"message": "x"}}'
     parsed = runner._parse_envelope(text)
     assert parsed == {"ok": False, "error": {"message": "x"}}
@@ -278,10 +288,12 @@ def test_parse_envelope_picks_last_json_object() -> None:
 
 
 def test_redact_removes_secret() -> None:
+    """验证脱敏会把给定密文从文本中移除。"""
     assert "s3cret" not in runner._redact("token s3cret leaked", ("s3cret",))
 
 
 def test_user_home_dir_isolated_per_user(monkeypatch, tmp_path: Path) -> None:
+    """验证不同用户的 HOME 相互隔离，POSIX 下目录权限为 0700。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     home_a = runner.user_home_dir("tenant-1", "user/a")
     home_b = runner.user_home_dir("tenant-1", "user-b")
@@ -362,6 +374,7 @@ print(json.dumps({"ok": True, "argv": args, "env_ci": os.environ.get("CI", "")})
 
 @pytest.fixture()
 def db() -> Session:
+    """创建内存 SQLite 会话，供服务层测试共用同一份 metadata。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -372,6 +385,7 @@ def db() -> Session:
 
 @pytest.fixture()
 def lark_env(monkeypatch, tmp_path: Path, db: Session):
+    """提供已启用、已配置且带渠道绑定的服务测试环境，并指向假 CLI 二进制。"""
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
     binary = tmp_path / "fake-lark-cli"
     binary.write_text(_FAKE_BINARY, encoding="utf-8")
@@ -416,6 +430,7 @@ def lark_env_unbound(monkeypatch, tmp_path: Path, db: Session):
 
 
 def _invoke(env, arguments, *, active_skill=None, active_step_id=None):
+    """以统一租户、会话与帧参数调用 lark_cli 服务，减少测试样板代码。"""
     return service.invoke_lark_cli(
         env["db"],
         tenant_id="t1",
@@ -429,6 +444,7 @@ def _invoke(env, arguments, *, active_skill=None, active_step_id=None):
 
 
 def test_service_disabled_returns_precondition(monkeypatch, db: Session) -> None:
+    """验证功能开关关闭时返回 LARK_CLI_DISABLED 前置条件错误。"""
     monkeypatch.setattr(
         service, "get_settings", lambda: Settings(lark_cli_enabled=False)
     )
@@ -486,6 +502,7 @@ def test_service_conversational_config_works_without_binding(
 
 
 def test_service_read_command_runs_and_configures_home(lark_env) -> None:
+    """验证读命令执行成功、自动补 --json，并把应用写入隔离 HOME。"""
     result = _invoke(lark_env, {"args": ["auth", "status"]})
     # auth status 信封没有 ok 字段，exit 0 且无 error 必须判成功。
     assert result["success"] is True
@@ -497,6 +514,7 @@ def test_service_read_command_runs_and_configures_home(lark_env) -> None:
 
 
 def test_service_injects_as_user_for_approval_commands(lark_env) -> None:
+    """验证审批读命令自动注入 --as user 身份。"""
     result = _invoke(
         lark_env,
         {"args": ["approval", "approvals", "search", "--data", '{"keyword":"请假"}']},
@@ -507,6 +525,7 @@ def test_service_injects_as_user_for_approval_commands(lark_env) -> None:
 
 
 def test_service_allows_help_and_auth_scopes(lark_env) -> None:
+    """验证 help 与 auth scopes 直接放行，不触发提交闸。"""
     helped = _invoke(lark_env, {"args": ["auth", "login", "--help"]})
     assert helped["success"] is True
     # --help 时不触发提交闸：即便是 gated_write 前缀也按只读处理。
@@ -539,6 +558,7 @@ def test_service_auth_scopes_failure_redirects_to_login(lark_env) -> None:
 
 
 def test_service_dry_run_returns_digest(lark_env) -> None:
+    """验证 dry-run 返回 sha256 摘要、注入 --as，并回传规范化提交体。"""
     data = '{"approval_code":"A","form":"[]"}'
     result = _invoke(
         lark_env,
@@ -553,6 +573,7 @@ def test_service_dry_run_returns_digest(lark_env) -> None:
 
 
 def test_service_dry_run_normalizes_array_form_to_wire_string(lark_env) -> None:
+    """验证 dry-run 发往 CLI 的 form 已序列化为字符串。"""
     data = '{"approval_code":"A","form":[{"id":"w1","value":"x"}]}'
     result = _invoke(
         lark_env,
@@ -604,6 +625,7 @@ def test_service_submit_accepts_cross_encoding_confirmation(lark_env) -> None:
 
 
 def test_service_submit_requires_confirmation_and_preview(lark_env) -> None:
+    """验证缺少确认摘要、摘要不符、无预览记录三种提交均被拒绝。"""
     data = '{"approval_code":"A","form":"[]"}'
     submit_args = {"args": ["approval", "instances", "create", "--data", data]}
     skill = _submit_skill()
@@ -679,6 +701,7 @@ def test_service_submit_blocked_outside_authorizing_sop_step(lark_env) -> None:
 
 
 def test_service_submit_happy_path_injects_yes_and_uuid(lark_env) -> None:
+    """验证合法提交自动补 --yes、--as user 与稳定 uuid。"""
     data = '{"approval_code":"A","form":"[]"}'
     digest = policy.submission_digest(json.loads(data))
     lark_env["db"].add(
@@ -728,6 +751,7 @@ def _add_preview_record(
     run_id: str = "run-p",
     started_at: datetime | None = None,
 ) -> None:
+    """写入一条预览调用记录，模拟先前 dry-run 产生的摘要与规范化数据。"""
     data: dict = {"submission_digest": digest}
     if canonical is not None:
         data["canonical_data"] = canonical
@@ -776,6 +800,7 @@ def test_service_submit_without_data_replays_latest_preview(lark_env) -> None:
 
 
 def test_service_submit_without_data_requires_replayable_preview(lark_env) -> None:
+    """验证无预览或最近预览缺少规范化数据时拒绝零参数重放。"""
     no_record = _invoke(
         lark_env,
         {"args": ["approval", "instances", "create"]},
@@ -921,6 +946,7 @@ def test_validate_form_catches_real_failure_modes() -> None:
 
 
 def test_validate_form_accepts_correct_nesting_and_missing_optional() -> None:
+    """验证正确嵌套且省略可选控件时表单校验无错误。"""
     good = [
         {
             "id": "widgetLeaveGroupV2",
@@ -1002,6 +1028,7 @@ def test_service_dry_run_skips_validation_when_definition_unavailable(lark_env) 
 
 
 def test_service_translates_cli_error_envelope(lark_env) -> None:
+    """验证 CLI 错误信封被翻译为权限错误并提示重新登录。"""
     result = _invoke(
         lark_env,
         {"args": ["approval", "approvals", "search", "--data", '{"keyword":"trigger_error"}']},
@@ -1070,6 +1097,7 @@ def test_policy_safe_write_allowlist_is_local_state_only() -> None:
 
 
 def test_policy_config_init_rules() -> None:
+    """验证 config init 的凭据与 --new 写法放行，危险 flag 与其它子命令封禁。"""
     resolved = policy.resolve(
         ["config", "init", "--app-id", "cli_x", "--app-secret", "s3cret"]
     )
@@ -1106,6 +1134,7 @@ def test_service_conversational_config_init_then_commands_work(lark_env_unbound)
 
 
 def test_service_config_init_requires_credentials_or_new(lark_env_unbound) -> None:
+    """验证 config init 缺少凭据与 --new 时返回参数缺失错误。"""
     result = _invoke(lark_env_unbound, {"args": ["config", "init", "--app-id", "cli_x"]})
     assert result["error"]["subcode"] == "LARK_CLI_CONFIG_ARGS_REQUIRED"
 
@@ -1149,6 +1178,7 @@ def test_audit_arguments_redact_secret_flag_values() -> None:
 
 
 def test_background_failure_reports_output_tail(tmp_path: Path) -> None:
+    """验证后台建应用失败时返回输出尾部详情并清理注册表。"""
     from app.lark_cli import background
 
     binary = tmp_path / "failing-cli"
@@ -1166,6 +1196,7 @@ def test_background_failure_reports_output_tail(tmp_path: Path) -> None:
 
 
 def test_service_secret_never_reaches_argv_or_output(lark_env) -> None:
+    """验证渠道密钥不会出现在调用结果中。"""
     result = _invoke(lark_env, {"args": ["auth", "status"]})
     blob = json.dumps(result, ensure_ascii=False)
     assert "app-secret-value" not in blob
@@ -1177,6 +1208,7 @@ def test_service_secret_never_reaches_argv_or_output(lark_env) -> None:
 
 
 def test_lark_cli_reserved_name() -> None:
+    """验证 lark_cli 被登记为保留的 harness 能力名。"""
     assert "lark_cli" in RESERVED_HARNESS_CAPABILITY_NAMES
 
 
@@ -1260,6 +1292,7 @@ def test_gallery_seed_fixture_matches_docs_card() -> None:
 
 
 def test_manifest_descriptor_gating(monkeypatch, db: Session) -> None:
+    """验证能力描述符随开关禁用以至隐藏，开启后无需预检凭据即可用。"""
     import app.core.capability_manifest as manifest_module
 
     monkeypatch.setattr(

@@ -51,6 +51,7 @@ from app.tools.tool_schema import (
 
 
 def _test_session() -> Session:
+    """创建使用内存 SQLite 的测试会话，让每个用例拥有独立的数据库状态。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -61,6 +62,7 @@ def _test_session() -> Session:
 
 
 def _admin_user() -> User:
+    """构造演示租户的管理员用户，用于模拟调用接口的当前登录者。"""
     return User(
         id="admin",
         tenant_id="tenant_demo",
@@ -71,6 +73,7 @@ def _admin_user() -> User:
 
 
 def test_distill_catalog_uses_capabilities_visible_to_selected_agent() -> None:
+    """验证技能蒸馏只提供对所选智能体可见的工具与通用技能。"""
     with _test_session() as db:
         tenant = Tenant(id="tenant_demo", name="Demo")
         agent = AgentProfile(id="agent_writer", tenant_id=tenant.id, name="Writer")
@@ -151,6 +154,7 @@ def test_distill_catalog_uses_capabilities_visible_to_selected_agent() -> None:
 
 
 def test_capability_scope_request_defaults_and_update_compatibility() -> None:
+    """验证各请求模型的 capability_scope 默认值、更新可选语义与非法值拒绝。"""
     assert GeneralSkillImportRequest(tenant_id="tenant_demo", markdown="# demo").capability_scope is None
     assert (
         KnowledgeBaseCreateRequest(tenant_id="tenant_demo", name="制度库").capability_scope
@@ -186,6 +190,7 @@ def test_capability_scope_request_defaults_and_update_compatibility() -> None:
 
 
 def test_create_update_and_read_apis_round_trip_capability_scope() -> None:
+    """验证通用技能、工具与知识库的创建和更新都能保存并回读能力范围。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -318,6 +323,7 @@ def test_create_update_and_read_apis_round_trip_capability_scope() -> None:
 
 
 def test_read_models_expose_effective_capability_scope() -> None:
+    """验证各读取模型回显已存能力范围，并把非法值归一化为 general。"""
     general_skill = GeneralSkill(
         tenant_id="tenant_demo",
         slug="demo",
@@ -345,6 +351,7 @@ def test_read_models_expose_effective_capability_scope() -> None:
 
 
 def test_knowledge_base_versions_inherit_root_scope() -> None:
+    """验证知识库版本会继承根条目的能力范围，并在读取时体现。"""
     with _test_session() as db:
         knowledge_base = KnowledgeBase(
             tenant_id="tenant_demo",
@@ -363,6 +370,7 @@ def test_knowledge_base_versions_inherit_root_scope() -> None:
 
 
 def test_private_knowledge_scope_update_uses_an_isolated_branch_version() -> None:
+    """验证私有智能体改能力范围只生成独立分支版本，根知识库保持 general。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -433,6 +441,7 @@ def test_private_knowledge_scope_update_uses_an_isolated_branch_version() -> Non
 
 
 def test_mcp_server_scope_cascades_only_to_inherited_children() -> None:
+    """验证 MCP 服务器能力范围只级联到继承型子工具，已覆盖的子工具不变。"""
     with _test_session() as db:
         server = MCPServer(
             tenant_id="tenant_demo",
@@ -479,6 +488,7 @@ def test_mcp_server_scope_cascades_only_to_inherited_children() -> None:
 
 
 def test_mcp_sync_inherits_server_scope_and_accepts_child_override() -> None:
+    """验证 MCP 同步默认继承服务器能力范围，并支持单独覆盖子工具。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -526,6 +536,7 @@ def test_mcp_sync_inherits_server_scope_and_accepts_child_override() -> None:
 
 
 def test_sqlite_capability_scope_migration_backfills_and_is_idempotent(tmp_path) -> None:
+    """验证 SQLite 迁移会为旧数据回填 general，且重复执行结果保持一致。"""
     engine = create_engine(f"sqlite:///{tmp_path / 'capability-scope.db'}")
     table_names = {
         "general_skills",

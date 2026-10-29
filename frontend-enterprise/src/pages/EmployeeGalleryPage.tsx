@@ -29,6 +29,12 @@ const ENTERPRISE_AGENT_STORAGE_KEY = 'ultrarag_enterprise_agent_scope';
 
 type GalleryScope = 'all' | 'mine' | 'teams' | 'gallery';
 
+/**
+ * 数字员工目录页：按「所有员工 / 我的数字员工 / 团队对话 / 数字员工广场」分类浏览并搜索。
+ *
+ * 挂载时并行拉取员工与团队列表；搜索与分类筛选均在客户端计算，不额外请求后端。
+ * 删除当前选中的员工时会改写本地存储并广播作用域变更事件。
+ */
 export default function EmployeeGalleryPage({
   currentUser,
   isAdmin = false,
@@ -54,6 +60,7 @@ export default function EmployeeGalleryPage({
   const [scope, setScope] = useState<GalleryScope>('all');
   const navigate = useNavigate();
 
+  /** 拉取当前租户的员工列表并写入 agents；请求期间维护 loading，失败时弹出错误提示。 */
   async function load() {
     setLoading(true);
     try {
@@ -66,6 +73,11 @@ export default function EmployeeGalleryPage({
     }
   }
 
+  /**
+   * 拉取当前租户的团队列表并写入 teams。
+   *
+   * 失败时把 teamsLoadFailed 置为 true，供切换到团队标签时重试；成功后清除该标记。
+   */
   async function loadTeams() {
     try {
       const rows = await api.get<TeamRead[]>(`/api/enterprise/teams?tenant_id=${TENANT_ID}`);
@@ -130,6 +142,11 @@ export default function EmployeeGalleryPage({
     ].some((value) => value.toLowerCase().includes(keyword));
   });
 
+  /**
+   * 发起与单个员工的对话：优先调用外部传入的 onStartChat，否则跳转到草稿会话路由。
+   *
+   * 请求进行中以 startingAgentId 去重，避免重复点击；失败时提示错误并复位状态。
+   */
   async function startEmployeeChat(row: AgentProfileRead) {
     if (startingAgentId) return;
     setStartingAgentId(row.id);
@@ -146,6 +163,11 @@ export default function EmployeeGalleryPage({
     }
   }
 
+  /**
+   * 为指定团队创建群聊会话并跳转到该会话。
+   *
+   * 创建期间以 startingTeamId 去重；后端未返回 session_id 时按失败处理并提示错误。
+   */
   async function startTeamChat(team: TeamRead) {
     if (startingTeamId) return;
     setStartingTeamId(team.id);
@@ -163,6 +185,11 @@ export default function EmployeeGalleryPage({
     }
   }
 
+  /**
+   * 上线 / 下线员工：PUT 更新 status 后重新拉取列表，并广播作用域刷新事件。
+   *
+   * 只提交 status 与原有 metadata，不改动其它字段；失败时提示错误。
+   */
   async function updateStatus(row: AgentProfileRead, status: 'active' | 'archived') {
     try {
       await api.put<AgentProfileRead>(`/api/enterprise/agents/${row.id}`, {
@@ -178,6 +205,12 @@ export default function EmployeeGalleryPage({
     }
   }
 
+  /**
+   * 发布 / 下架数字员工广场：只改 metadata 中与广场相关的字段。
+   *
+   * 发布时写入发布时间与操作人并清除下架痕迹；下架时把两者置空（序列化时被丢弃）。
+   * 成功后重新拉取列表并广播作用域刷新事件。
+   */
   async function updateGalleryState(row: AgentProfileRead, published: boolean) {
     try {
       const metadata: Record<string, unknown> = {
@@ -202,6 +235,12 @@ export default function EmployeeGalleryPage({
     }
   }
 
+  /**
+   * 确认删除员工：DELETE 成功后刷新列表并广播作用域刷新事件。
+   *
+   * 若删除的正是本地当前选中的员工，会自动切换到其它在册员工（优先在线）并广播变更；
+   * 删除期间以 deleting 标记对话框 loading，失败时保留对话框并提示错误。
+   */
   async function confirmDelete() {
     const row = deleteTarget;
     if (!row) return;
@@ -230,6 +269,7 @@ export default function EmployeeGalleryPage({
     }
   }
 
+  /** 用保存后的员工数据替换列表中同 id 项，供头像 / 档案编辑回调使用，避免整表重拉。 */
   function updateAgentInList(row: AgentProfileRead) {
     setAgents((current) => current.map((item) => (item.id === row.id ? row : item)));
   }
@@ -241,6 +281,7 @@ export default function EmployeeGalleryPage({
     { value: 'gallery', label: '数字员工广场' },
   ];
 
+  /** 切换员工分类；若团队列表此前加载失败，则在切到团队标签时重试一次。 */
   function changeScope(nextScope: GalleryScope) {
     setScope(nextScope);
     if (nextScope === 'teams' && teamsLoadFailed) {
@@ -358,6 +399,7 @@ export default function EmployeeGalleryPage({
   );
 }
 
+/** 员工 / 团队列表的空态占位：渲染搜索图标、标题与补充说明。 */
 function EmployeeGalleryEmptyState({
   title,
   description,

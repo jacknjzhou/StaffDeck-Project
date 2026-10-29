@@ -28,8 +28,10 @@ def _fernet_key() -> bytes:
 
 
 def encrypt_channel_secret(plaintext: str) -> str:
+    """用渠道密钥加密凭证明文，返回可直接入库的 Fernet token 字符串。"""
     return Fernet(_fernet_key()).encrypt(plaintext.encode("utf-8")).decode("utf-8")
 
 
 def decrypt_channel_secret(token: str) -> str:
+    """解密渠道凭证 token；密钥不匹配或数据被篡改时由 Fernet 抛出 InvalidToken。"""
     return Fernet(_fernet_key()).decrypt(token.encode("utf-8")).decode("utf-8")

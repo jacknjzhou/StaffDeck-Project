@@ -28,6 +28,12 @@ import TeamCollaborationPanel, {
   useTeamCollaborations,
 } from './TeamCollaborationPanel';
 
+/**
+ * 聊天消息时间线：将团队协作条目与消息按顺序合并渲染，并为每条助手消息计算 trace 渲染数据。
+ *
+ * 无任何条目时渲染 emptyState 或内置空态；存在未落盘的定时任务草稿时在末尾追加草稿卡片。
+ * SHOW_DEBUG 开启时额外输出上一轮会话状态。
+ */
 export default function MessageList({
   chat,
   emptyState,

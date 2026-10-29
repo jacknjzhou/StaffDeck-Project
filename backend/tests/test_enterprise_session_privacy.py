@@ -11,6 +11,7 @@ from app.db.models import AgentEvent, ChatSession, Message, MessageFeedback, Ten
 
 
 def test_enterprise_sessions_are_limited_to_current_user_even_for_admin() -> None:
+    """验证会话列表只返回当前用户的会话,但管理员仍可打开任意会话详情。"""
     with _test_session() as db:
         admin, _other = _seed_session_privacy_rows(db)
 
@@ -24,6 +25,10 @@ def test_enterprise_sessions_are_limited_to_current_user_even_for_admin() -> Non
 
 
 def test_enterprise_feedback_lists_own_sessions_without_scope_but_admin_can_open_detail() -> None:
+    """验证反馈统计默认只覆盖自己的会话,按 agent 过滤后才纳入他人会话。
+
+    反馈列表按 agent 过滤后才包含他人会话,详情与 trace 仍完整可取。
+    """
     with _test_session() as db:
         admin, _other = _seed_session_privacy_rows(db)
         _seed_feedback_rows(db)
@@ -75,6 +80,7 @@ def test_enterprise_feedback_lists_own_sessions_without_scope_but_admin_can_open
 
 
 def _seed_session_privacy_rows(db: Session) -> tuple[User, User]:
+    """写入两名用户、各自会话与事件流,返回 (admin, other)。"""
     started_at = datetime(2026, 8, 2, 10, 0, 0)
     db.add(Tenant(id="tenant_demo", name="Demo"))
     admin = User(id="admin_user", tenant_id="tenant_demo", username="admin", role="admin", password_hash="x")
@@ -214,6 +220,7 @@ def _seed_session_privacy_rows(db: Session) -> tuple[User, User]:
 
 
 def _seed_feedback_rows(db: Session) -> None:
+    """为两条助手回复各写入一条差评反馈。"""
     db.add(
         MessageFeedback(
             id="feedback_admin",
@@ -240,6 +247,7 @@ def _seed_feedback_rows(db: Session) -> None:
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 引擎并返回会话,供每个用例独享数据库。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

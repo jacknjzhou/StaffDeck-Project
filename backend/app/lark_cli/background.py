@@ -31,6 +31,8 @@ _PIDFILE_NAME = "config_init_new.pid"
 
 @dataclass
 class _InitProcess:
+    """一个 ``config init --new`` 后台进程的注册项：句柄、输出缓冲与提取到的 URL。"""
+
     process: subprocess.Popen[str]
     started_at: float
     output: list[str] = field(default_factory=list)
@@ -112,6 +114,7 @@ def config_init_new_status(binary: Path, home: Path) -> dict[str, object]:
 
 
 def _spawn(binary: Path, home: Path) -> _InitProcess:
+    """起一个 ``config init --new`` 子进程，挂上读线程并写 pidfile 后返回注册项。"""
     process = subprocess.Popen(
         [str(binary), "config", "init", "--new"],
         cwd=str(home),
@@ -130,6 +133,7 @@ def _spawn(binary: Path, home: Path) -> _InitProcess:
 
 
 def _read_output(entry: _InitProcess) -> None:
+    """读线程主体：按行缓存输出（有字符上限）并从首个命中处提取 verification URL。"""
     stream = entry.process.stdout
     if stream is None:
         return
@@ -145,6 +149,10 @@ def _read_output(entry: _InitProcess) -> None:
 
 
 def _wait_for_url(entry: _InitProcess) -> str | None:
+    """轮询等待输出里出现 verification URL，最多 _WAIT_FOR_URL_SECONDS 秒。
+
+    进程提前退出时立即结束等待，返回已拿到的 URL（可能仍为 None）。
+    """
     deadline = time.monotonic() + _WAIT_FOR_URL_SECONDS
     while time.monotonic() < deadline:
         with entry.lock:
@@ -158,15 +166,18 @@ def _wait_for_url(entry: _InitProcess) -> str | None:
 
 
 def _output_tail(entry: _InitProcess) -> str:
+    """取输出末尾 800 字符放进错误详情；完全没有输出时返回占位文案。"""
     with entry.lock:
         return "".join(entry.output)[-800:].strip() or "（无输出）"
 
 
 def _failed(detail: str) -> dict[str, object]:
+    """构造统一的失败结果 dict，detail 会被原样转述给用户。"""
     return {"status": "failed", "detail": detail}
 
 
 def _terminate(entry: _InitProcess) -> None:
+    """杀掉注册项对应的进程并回收；进程已退出时直接返回。"""
     if entry.process.poll() is not None:
         return
     _kill_pid(entry.process.pid)
@@ -175,17 +186,20 @@ def _terminate(entry: _InitProcess) -> None:
 
 
 def _pidfile(home: Path) -> Path:
+    """返回该 HOME 下的 pidfile 路径，必要时先创建 tmp 目录。"""
     tmp = home / "tmp"
     tmp.mkdir(exist_ok=True)
     return tmp / _PIDFILE_NAME
 
 
 def _write_pidfile(home: Path, pid: int) -> None:
+    """把进程 pid 写入 pidfile，供后端重启后回收孤儿进程；写失败静默忽略。"""
     with contextlib.suppress(OSError):
         _pidfile(home).write_text(str(pid), encoding="utf-8")
 
 
 def _remove_pidfile(home: Path) -> None:
+    """删除 pidfile；文件不存在或删除失败都静默忽略。"""
     with contextlib.suppress(OSError):
         _pidfile(home).unlink(missing_ok=True)
 
@@ -202,6 +216,7 @@ def _kill_stale_pidfile(home: Path) -> None:
 
 
 def _kill_pid(pid: int) -> None:
+    """强杀指定 pid：POSIX 优先杀整个进程组，不可用时退回单进程 kill。"""
     if pid <= 0:
         return
     if os.name == "posix":

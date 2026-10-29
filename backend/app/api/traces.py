@@ -22,6 +22,11 @@ def list_traces(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[dict]:
+    """列出当前用户在租户下的会话轨迹摘要。
+
+    每个会话附带最近一次 router_decision_created、最后一条消息、工具调用次数与状态，
+    按会话更新时间倒序；先校验当前用户归属与该租户存在。
+    """
     ensure_current_user_tenant(tenant_id, current_user)
     ensure_tenant(db, tenant_id)
     sessions = db.exec(
@@ -70,6 +75,7 @@ def get_trace(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> dict:
+    """返回单个会话的完整轨迹详情，复用 get_session_detail 的组装与权限校验逻辑。"""
     return get_session_detail(
         session_id=session_id,
         tenant_id=tenant_id,

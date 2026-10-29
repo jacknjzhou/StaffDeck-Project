@@ -48,10 +48,12 @@ const TYPE_STYLES: Record<string, { color: string; label: string }> = {
 const FALLBACK_TYPE_STYLE = { color: '#94a3b8', label: '概念' };
 const TYPE_ORDER = Object.keys(TYPE_STYLES);
 
+/** 把数值限制在 [min, max] 区间内。 */
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+/** 归一化概念引用：去掉开头的斜杠与结尾的 .md 后缀，便于按 concept_id 匹配。 */
 function normalizeConceptRef(target: string) {
   let value = target.trim();
   if (value.startsWith('/')) value = value.slice(1);
@@ -59,15 +61,18 @@ function normalizeConceptRef(target: string) {
   return value;
 }
 
+/** 从引用链接（形如 documents/<id>）中提取文档 ID，匹配不到时返回 null。 */
 function extractCitationDocumentId(target: string) {
   const match = /documents\/([^/?#\s]+)/.exec(target);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/** 截断过长的节点标题，超过 max 个字符时以省略号结尾。 */
 function truncateLabel(value: string, max = 12) {
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
+/** 估算文本在给定字号下的像素宽度：中日韩字符按全角计，其余字符按 0.56 倍字号计。 */
 function measureLabel(text: string, fontSize: number) {
   let width = 0;
   for (const char of text) {
@@ -76,6 +81,12 @@ function measureLabel(text: string, fontSize: number) {
   return width;
 }
 
+/**
+ * 把知识概念列表转换为可绘制的图数据（节点 + 连线）。
+ *
+ * - 按 concept_id 去重，未登记的概念类型回退到默认样式与标签。
+ * - link 边按概念引用匹配，citation 边按链接中的文档 ID 匹配，同一方向同类型只保留一条。
+ */
 function buildGraph(concepts: KnowledgeConceptRead[]): GraphData {
   const nodes: GraphNode[] = [];
   const indexById = new Map<string, number>();
@@ -139,6 +150,11 @@ function buildGraph(concepts: KnowledgeConceptRead[]): GraphData {
   return { nodes, edges };
 }
 
+/**
+ * 生成节点索引比较器：先按类型在 TYPE_ORDER 中的次序排序，同类型再按标题的中文顺序排序。
+ *
+ * 返回的函数可直接传给 Array.prototype.sort 使用。
+ */
 function compareNodeIndices(nodes: GraphNode[]) {
   return (left: number, right: number) => {
     const leftRank = TYPE_ORDER.indexOf(nodes[left].concept.concept_type);
@@ -150,10 +166,12 @@ function compareNodeIndices(nodes: GraphNode[]) {
   };
 }
 
-// Deterministic layered radial layout: source document at the center, its direct
-// neighbors on the first ring, remaining connected nodes on a second ring, and
-// orphan nodes in rows below. Positions are computed once; interactions never
-// re-run the layout, so dragging a node can never move any other node.
+/**
+ * 确定性的分层放射布局：原始资料居中，直接邻居排第一圈，其余有连线的节点排第二圈，孤立节点按行置底。
+ *
+ * - 位置只在图数据变化时计算一次，交互过程不会重新布局。
+ * - 因此拖动某个节点只会移动它自己，不会带动其他任何节点。
+ */
 function layoutGraph(graph: GraphData) {
   const { nodes, edges } = graph;
   if (nodes.length === 0) return;
@@ -217,6 +235,12 @@ function layoutGraph(graph: GraphData) {
   }
 }
 
+/**
+ * 计算让全部节点完整落入视野的自适应视图。
+ *
+ * - 围绕节点包围盒等比缩放，四周预留 60px 留白，缩放系数限制在 0.2–1.1。
+ * - 没有节点时返回居中的默认视图。
+ */
 function computeFitView(graph: GraphData, height: number): ViewTransform {
   if (graph.nodes.length === 0) {
     return { k: 1, tx: CANVAS_WIDTH / 2, ty: height / 2 };
@@ -241,14 +265,23 @@ function computeFitView(graph: GraphData, height: number): ViewTransform {
   };
 }
 
-// Distance from a pill node center to its border along a unit direction,
-// approximating the pill with an ellipse.
+/**
+ * 估算从胶囊节点中心沿给定单位方向到边框的距离。
+ *
+ * 用椭圆近似胶囊形状，用于把连线端点裁剪到节点边缘之外。
+ */
 function nodeBorderRadius(node: GraphNode, ux: number, uy: number) {
   const a = node.width / 2 + 2;
   const b = node.height / 2 + 2;
   return (a * b) / Math.sqrt(b * b * ux * ux + a * a * uy * uy);
 }
 
+/**
+ * 知识图谱画布：用 SVG 渲染概念节点与连线，支持缩放、平移、拖动节点与悬浮高亮。
+ *
+ * - 点击节点（且未发生拖动）时回调 onSelectConcept 交给外层选中概念。
+ * - 滚轮以指针位置为锚点缩放，空白处拖拽平移，「复位」回到自适应全局视图。
+ */
 export default function KnowledgeGraphCanvas({
   concepts,
   onSelectConcept,
@@ -258,11 +291,13 @@ export default function KnowledgeGraphCanvas({
   onSelectConcept: (concept: KnowledgeConceptRead) => void;
   height?: number;
 }) {
+  /** 概念列表变化时重新构图并布局，得到带世界坐标的节点与连线。 */
   const graph = useMemo(() => {
     const data = buildGraph(concepts);
     layoutGraph(data);
     return data;
   }, [concepts]);
+  /** 依据当前图与画布高度推导自适应视图，作为初始值与「复位」目标。 */
   const fitView = useMemo(() => computeFitView(graph, height), [graph, height]);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const viewRef = useRef<ViewTransform>(fitView);
@@ -281,10 +316,12 @@ export default function KnowledgeGraphCanvas({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
 
+  /** 保持 viewRef 与 view 同步，让指针事件回调总能读到最新视图。 */
   useEffect(() => {
     viewRef.current = view;
   }, [view]);
 
+  /** 图或画布高度变化时重置为自适应视图，并清空拖动偏移与选中、悬浮状态。 */
   useEffect(() => {
     setView(fitView);
     viewRef.current = fitView;
@@ -293,6 +330,7 @@ export default function KnowledgeGraphCanvas({
     setHoverId(null);
   }, [fitView]);
 
+  /** 把布局坐标与用户拖动产生的偏移合并，得到每个节点最终用于渲染的位置。 */
   const positions = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
     graph.nodes.forEach((node) => {
@@ -302,9 +340,15 @@ export default function KnowledgeGraphCanvas({
     return map;
   }, [graph, offsets]);
 
+  /**
+   * 为画布注册滚轮缩放监听。
+   *
+   * 以 passive: false 绑定以便阻止画布区域的页面滚动，缩放时保持指针下的世界坐标不动。
+   */
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return undefined;
+    /** 滚轮缩放：把指针坐标换算成世界坐标，缩放后仍保持该点在指针下不动。 */
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const rect = svg.getBoundingClientRect();
@@ -323,6 +367,7 @@ export default function KnowledgeGraphCanvas({
     return () => svg.removeEventListener('wheel', onWheel);
   }, [height]);
 
+  /** 以画布中心为锚点按比例缩放，缩放系数限制在 0.2–4 之间。 */
   const zoomBy = useCallback(
     (factor: number) => {
       setView((current) => {
@@ -337,10 +382,12 @@ export default function KnowledgeGraphCanvas({
     [height],
   );
 
+  /** 把视图恢复到自适应全局视图（清空手动缩放与平移）。 */
   const resetView = useCallback(() => {
     setView(fitView);
   }, [fitView]);
 
+  /** 节点上按下主键时记录拖动起点与既有偏移，并捕获指针以持续接收移动事件。 */
   const handleNodePointerDown = useCallback(
     (event: ReactPointerEvent<SVGGElement>, node: GraphNode) => {
       if (event.button !== 0) return;
@@ -359,6 +406,7 @@ export default function KnowledgeGraphCanvas({
     [offsets],
   );
 
+  /** 画布空白处按下主键时进入平移模式，记录起始指针位置与当前平移量。 */
   const handleBackgroundPointerDown = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return;
     panRef.current = {
@@ -371,6 +419,12 @@ export default function KnowledgeGraphCanvas({
     setIsPanning(true);
   }, []);
 
+  /**
+   * 指针移动时优先处理节点拖动，否则处理画布平移。
+   *
+   * - 节点拖动会把屏幕像素位移按当前缩放换算成世界坐标偏移。
+   * - 位移超过 CLICK_SLOP_PX 即标记为已移动，抬起时便不再触发选中。
+   */
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<SVGSVGElement>) => {
       const svg = svgRef.current;
@@ -400,6 +454,12 @@ export default function KnowledgeGraphCanvas({
     [height],
   );
 
+  /**
+   * 指针抬起或取消时收尾本次手势。
+   *
+   * - 未发生位移的节点点击会选中节点并回调 onSelectConcept。
+   * - 随后清空拖动/平移状态并释放指针捕获。
+   */
   const handlePointerEnd = useCallback(
     (event: ReactPointerEvent<SVGSVGElement>) => {
       const nodeDrag = nodeDragRef.current;
@@ -420,6 +480,7 @@ export default function KnowledgeGraphCanvas({
     [graph, onSelectConcept],
   );
 
+  /** 悬浮节点自身与邻居节点的 ID 集合，用于高亮相关连线；无悬浮节点时返回 null。 */
   const neighborIds = useMemo(() => {
     if (hoverId === null) return null;
     const ids = new Set<string>([hoverId]);
@@ -432,6 +493,7 @@ export default function KnowledgeGraphCanvas({
     return ids;
   }, [graph, hoverId]);
 
+  /** 图例项：按 TYPE_ORDER 排列图中实际出现的类型，未登记的类型排在末尾并使用兜底样式。 */
   const legendItems = useMemo(() => {
     const present = new Set(graph.nodes.map((node) => node.concept.concept_type));
     const ordered = TYPE_ORDER.filter((type) => present.has(type));

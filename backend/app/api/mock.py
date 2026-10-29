@@ -106,15 +106,21 @@ ARCHIVE_ORDER_CENTER = {
 
 
 class MockOrderQueryRequest(BaseModel):
+    """订单查询请求：按订单号在 mock 主订单中心检索。"""
+
     order_id: str
 
 
 class MockOrderRefundRequest(BaseModel):
+    """订单退款请求：指定订单号与退款原因，仅可退未退款且可退的订单。"""
+
     order_id: str
     refund_reason: str
 
 
 class MockProductPurchaseRequest(BaseModel):
+    """商品下单购买请求：商品/规格与数量，数量限制在 1 到 99 之间。"""
+
     user_id: str = "user_demo"
     product_id: str
     sku_id: str | None = None
@@ -123,10 +129,14 @@ class MockProductPurchaseRequest(BaseModel):
 
 
 class MockProductPriceQueryRequest(BaseModel):
+    """商品价格查询请求：可用商品 id、SKU 或展示名做模糊匹配。"""
+
     product_name: str
 
 
 class MockOrderAddRequest(BaseModel):
+    """手工创建 mock 订单请求：下单商品与初始状态，订单号可自选。"""
+
     user_id: str = "user_demo"
     order_id: str | None = None
     product_id: str
@@ -136,6 +146,8 @@ class MockOrderAddRequest(BaseModel):
 
 
 class MockBenefitReconcileRequest(BaseModel):
+    """会员权益核对请求：按订单与会员等级比对应有权益与实际发放。"""
+
     user_id: str
     order_id: str
     member_level: str | None = None
@@ -144,6 +156,8 @@ class MockBenefitReconcileRequest(BaseModel):
 
 
 class MockFulfillmentReroutePlanRequest(BaseModel):
+    """履约改道方案请求：给出目标地址、期望时效与会员等级以计算改道建议。"""
+
     order_id: str
     user_id: str | None = None
     target_address: str | None = None
@@ -157,6 +171,7 @@ class MockFulfillmentReroutePlanRequest(BaseModel):
 def mock_order_query(
     request: MockOrderQueryRequest, db: Session = Depends(get_session)
 ) -> dict[str, Any]:
+    """查询单个订单：先查 mock 动态订单表，再回落到内置的主订单中心样例数据。"""
     order_id = _normalize_id(request.order_id)
     dynamic_record = _find_dynamic_order(db, order_id)
     if dynamic_record:
@@ -169,6 +184,7 @@ def mock_order_query(
 
 @router.post("/order/archive-query")
 def mock_order_archive_query(request: MockOrderQueryRequest) -> dict[str, Any]:
+    """查询历史订单中心；未收录的订单号返回标准未命中结构，便于编排层换下一个工具。"""
     order_id = _normalize_id(request.order_id)
     record = ARCHIVE_ORDER_CENTER.get(order_id)
     if not record:
@@ -180,6 +196,10 @@ def mock_order_archive_query(request: MockOrderQueryRequest) -> dict[str, Any]:
 def mock_order_refund(
     request: MockOrderRefundRequest, db: Session = Depends(get_session)
 ) -> dict[str, Any]:
+    """对订单发起退款：订单不存在、已退款、不可退款分别返回对应语义的结果。
+
+    退款成功会写回 refunded 状态与 refund_id，重复调用按幂等回放处理。
+    """
     order_id = _normalize_id(request.order_id)
     row = db.get(MockOrder, order_id)
     if row is None:
@@ -239,6 +259,7 @@ def mock_order_refund(
 def mock_product_purchase(
     request: MockProductPurchaseRequest, db: Session = Depends(get_session)
 ) -> dict[str, Any]:
+    """按商品购买：查商品目录算总价，生成订单并写入 mock 动态订单表。"""
     record = _find_product_record(request.product_id)
     if not record:
         return _product_miss(request.product_id)
@@ -281,6 +302,10 @@ def mock_product_purchase(
 
 @router.post("/member/benefit-reconcile")
 def mock_member_benefit_reconcile(request: MockBenefitReconcileRequest) -> dict[str, Any]:
+    """核对会员订单权益：黑金等级视为应发未发，其他等级判定为不符合资格。
+
+    返回应有、已发、缺失三类清单以及是否可自动补发，供补偿类 SOP 决策。
+    """
     order_id = _normalize_id(request.order_id)
     benefit_type = (request.benefit_type or "coupon").strip().lower()
     member_level = (request.member_level or "").strip().lower()
@@ -316,6 +341,10 @@ def mock_member_benefit_reconcile(request: MockBenefitReconcileRequest) -> dict[
 
 @router.post("/fulfillment/reroute-plan")
 def mock_fulfillment_reroute_plan(request: MockFulfillmentReroutePlanRequest) -> dict[str, Any]:
+    """生成履约改道方案：有地址、时效诉求或高等级会员时给出两条候选路由。
+
+    返回推荐方案与是否需二次确认；不可改道时通过 failure_reason 说明原因。
+    """
     order_id = _normalize_id(request.order_id)
     high_priority = (request.member_level or "").strip().lower() in {"black", "黑金", "vip_black", "black_card"}
     reroutable = bool(request.target_address or request.expected_delivery_time or high_priority)
@@ -363,6 +392,7 @@ def mock_fulfillment_reroute_plan(request: MockFulfillmentReroutePlanRequest) ->
 @router.post("/product/price-query", operation_id="mock_product_price_query")
 @router.post("/product/price_query", operation_id="mock_product_price_query_legacy")
 def mock_product_price_query(request: MockProductPriceQueryRequest) -> dict[str, Any]:
+    """按商品名或 SKU 查询价格；同时挂新旧两条路由，兼容历史工具定义。"""
     product_name = request.product_name.strip()
     record = _find_product_record(product_name)
     if not record:
@@ -385,6 +415,7 @@ def mock_product_price_query(request: MockProductPriceQueryRequest) -> dict[str,
 def mock_order_add(
     request: MockOrderAddRequest, db: Session = Depends(get_session)
 ) -> dict[str, Any]:
+    """手工在 mock 订单中心创建订单；订单号缺省时生成 ADD 前缀的新号。"""
     record = _find_product_record(request.product_id)
     if not record:
         return _product_miss(request.product_id)
@@ -423,6 +454,7 @@ def mock_order_add(
 
 
 def _find_product_record(value: str) -> dict[str, Any] | None:
+    """按 id、展示名或归一化名称在商品目录里查记录，全部未命中时返回 None。"""
     normalized_id = _normalize_id(value)
     if normalized_id in PRODUCT_CATALOG:
         return PRODUCT_CATALOG[normalized_id]
@@ -440,6 +472,7 @@ def _find_product_record(value: str) -> dict[str, Any] | None:
 
 
 def _product_miss(product_name: str) -> dict[str, Any]:
+    """构造商品未命中的标准返回，附带可用 mock 商品名提示引导重试。"""
     return {
         "product_name": product_name,
         "found": False,
@@ -450,14 +483,17 @@ def _product_miss(product_name: str) -> dict[str, Any]:
 
 
 def _normalize_id(value: str) -> str:
+    """订单号、SKU 等标识统一去空格并转大写，避免大小写导致查不到。"""
     return value.strip().upper()
 
 
 def _normalize_product_name(value: str) -> str:
+    """商品名归一化：小写、压缩空白，便于宽松匹配展示名。"""
     return " ".join(value.strip().lower().split())
 
 
 def _order_hit(order_id: str, source: str, record: dict[str, Any]) -> dict[str, Any]:
+    """把命中的订单记录包成统一结构，并标注数据来源与 found=True。"""
     return {
         "order_id": order_id,
         "found": True,
@@ -467,6 +503,7 @@ def _order_hit(order_id: str, source: str, record: dict[str, Any]) -> dict[str, 
 
 
 def _order_miss(order_id: str, source: str) -> dict[str, Any]:
+    """构造订单未命中的标准返回，提示可换用其他已配置的订单查询工具。"""
     return {
         "order_id": order_id,
         "found": False,
@@ -478,6 +515,7 @@ def _order_miss(order_id: str, source: str) -> dict[str, Any]:
 
 
 def _find_dynamic_order(db: object, order_id: str) -> dict[str, Any] | None:
+    """把动态创建的 MockOrder 行转成查询结果字典；非 Session 或行不存在时返回 None。"""
     if not isinstance(db, Session):
         return None
     row = db.get(MockOrder, order_id)
@@ -516,6 +554,10 @@ def _upsert_dynamic_order(
     currency: str,
     metadata: dict[str, Any],
 ) -> None:
+    """按订单号插入或更新 mock 订单行并提交；db 不是 Session 时静默跳过。
+
+    无论新建还是更新都会把 signed_days 置 0、refundable 置真，保证后续流程有初始状态。
+    """
     if not isinstance(db, Session):
         return
     normalized_order_id = _normalize_id(order_id)
@@ -541,4 +583,5 @@ def _upsert_dynamic_order(
 
 
 def _now_iso() -> str:
+    """返回去掉时区后缀的 UTC 当前时间 ISO 字符串，与 mock 数据的时间格式一致。"""
     return datetime.now(UTC).replace(tzinfo=None).isoformat()

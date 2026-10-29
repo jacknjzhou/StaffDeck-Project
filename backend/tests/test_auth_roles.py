@@ -15,6 +15,7 @@ from app.security.auth import hash_password
 
 
 def test_unknown_login_does_not_create_account() -> None:
+    """验证登录不存在的账号返回 401，且不会顺带创建用户。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -31,6 +32,7 @@ def test_unknown_login_does_not_create_account() -> None:
 
 
 def test_database_role_controls_account_management() -> None:
+    """验证账号管理只看数据库 role：名为 admin 的普通成员被拒，管理员可建号并改角色。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         member_named_admin = User(
@@ -84,6 +86,7 @@ def test_database_role_controls_account_management() -> None:
 
 
 def test_admin_password_update_allows_login_with_unique_display_name() -> None:
+    """验证管理员改密后可用唯一的 display_name 登录，会话仍返回原 username。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         admin = User(
@@ -122,6 +125,7 @@ def test_admin_password_update_allows_login_with_unique_display_name() -> None:
 
 
 def test_duplicate_display_name_cannot_be_used_to_login() -> None:
+    """验证重名 display_name 无法匹配到任何账号，登录返回 401。"""
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -157,6 +161,7 @@ def test_duplicate_display_name_cannot_be_used_to_login() -> None:
 
 
 def _test_session() -> Session:
+    """创建内存 SQLite 会话，让每个账号相关用例拥有独立数据。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

@@ -51,6 +51,11 @@ _audit_worker_lock = threading.Lock()
 
 
 def _audit_loop() -> None:
+    """审计队列的唯一消费者：逐条写入 APIAuditLog，遇到 None 哨兵就退出。
+
+    SQLite 下先设 busy_timeout 避免写锁竞争；写失败只告警不重试，因为响应
+    早已返回，静默丢弃才是真正的事故。
+    """
     while True:
         item = _audit_queue.get()
         if item is None:
@@ -81,6 +86,7 @@ def _audit_loop() -> None:
 
 
 def _ensure_audit_worker() -> None:
+    """确保审计消费线程在运行；双重检查加锁避免并发起多个 worker。"""
     global _audit_worker
     if _audit_worker is not None and _audit_worker.is_alive():
         return
@@ -94,10 +100,9 @@ def _ensure_audit_worker() -> None:
 
 
 def flush_audit_queue(timeout: float = 5.0) -> bool:
-    """Block until queued audit rows are written. Returns False on timeout.
+    """阻塞等待队列里的审计行全部写完，返回是否在超时前完成。
 
-    Exposed so tests and shutdown paths can observe audit rows deterministically
-    instead of sleeping.
+    供测试与停机流程确定性地观察审计结果，不必靠 sleep 轮询。
     """
     deadline = time.monotonic() + timeout
     while _audit_queue.unfinished_tasks:
@@ -114,12 +119,10 @@ def _write_audit_log(
     status_code: int,
     duration_ms: float,
 ) -> None:
-    """Queue the audit row instead of blocking the response on a write lock.
+    """把审计行放进队列，而不是在响应路径上直接写库。
 
-    Writing it inline made the request wait out SQLite's busy timeout whenever
-    another connection held the lock, which turned a 0.3s request into 33s and
-    then dropped the row. Queueing keeps the response fast and lets one worker
-    own the write, so latency never depends on audit contention.
+    同步写在 SQLite 写锁被占用时要等满 busy_timeout，曾把 0.3s 的请求拖成
+    33s 还丢掉该行；改为入队后由单一 worker 落库，队列满时告警并丢弃。
     """
     _ensure_audit_worker()
     try:
@@ -144,6 +147,7 @@ def _write_audit_log(
 
 
 def create_public_api_app() -> FastAPI:
+    """构建 Open API 的 FastAPI 应用：装异常处理器、请求上下文中间件与各业务路由。"""
     settings = get_settings()
     app = FastAPI(
         title=f"{settings.app_name} Open API",
@@ -159,6 +163,7 @@ def create_public_api_app() -> FastAPI:
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):
+        """为每个请求分配 request_id、回写响应头，并在结束后把审计行入队。"""
         request.state.request_id = request.headers.get("X-Request-ID") or f"req_{uuid4().hex}"
         started = perf_counter()
         status_code = 500
@@ -184,6 +189,7 @@ def create_public_api_app() -> FastAPI:
 
     @app.get("/health", tags=["health"])
     def health() -> dict[str, str]:
+        """健康检查：固定返回服务状态与所用引擎的版本标识。"""
         return {"status": "ok", "version": "v1", "engine": "harness_v2"}
 
     app.include_router(credentials.router)

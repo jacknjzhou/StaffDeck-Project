@@ -6,6 +6,7 @@ from app.tools.tool_schema import ToolError, ToolResult
 
 
 def test_response_payload_has_single_source_for_each_business_fact() -> None:
+    """验证响应载荷中每项业务事实只有一个来源，不重复携带会话与路由信息。"""
     skill = Skill(
         tenant_id="tenant_demo",
         skill_id="medical",
@@ -66,6 +67,7 @@ def test_response_payload_has_single_source_for_each_business_fact() -> None:
 
 
 def test_multi_task_payload_projects_all_results_for_one_final_reply() -> None:
+    """验证多任务场景下所有子任务结果都投影到同一个最终回复载荷。"""
     generator = ResponseGenerator()
     payload = generator._payload(
         "先查询额度，再提交报销",
@@ -111,10 +113,13 @@ def test_multi_task_payload_projects_all_results_for_one_final_reply() -> None:
 
 
 def test_clarify_does_not_leak_internal_router_prompt(monkeypatch):
+    """验证澄清回复直接采用步骤回复，不泄露内部路由提示词。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """返回带内部路由提示词文案的固定回复，用于验证泄漏过滤。"""
         return "请提供当前用户消息、会话状态、技能进度及可用技能列表，以便进行准确的路由决策。"
 
     monkeypatch.setattr(LLMClient, "__init__", fake_init)
@@ -147,10 +152,13 @@ def test_clarify_does_not_leak_internal_router_prompt(monkeypatch):
 
 
 def test_tool_result_reply_is_model_driven(monkeypatch):
+    """验证工具成功时回复由模型基于工具结果生成。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """断言载荷携带工具结果，并返回固定回复。"""
         assert payload["tool_result"]["tool_name"] == "ticket.create"
         return "已创建报修工单 T-100，工程师会尽快联系您。"
 
@@ -175,7 +183,9 @@ def test_tool_result_reply_is_model_driven(monkeypatch):
 
 
 def test_failed_tool_result_returns_explicit_failure_without_model_call(monkeypatch):
+    """验证工具失败时直接返回明确的失败说明，不调用模型。"""
     def forbidden_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """禁止被调用：工具失败时不应依赖模型生成回复。"""
         raise AssertionError("failed tool replies should not rely on model generation")
 
     monkeypatch.setattr(LLMClient, "generate_text", forbidden_generate_text)
@@ -198,10 +208,13 @@ def test_failed_tool_result_returns_explicit_failure_without_model_call(monkeypa
 
 
 def test_model_failure_returns_explicit_reason(monkeypatch):
+    """验证模型异常时返回带错误码的明确失败原因。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """抛出运行时异常，模拟模型调用失败。"""
         raise RuntimeError("upstream timeout")
 
     monkeypatch.setattr(LLMClient, "__init__", fake_init)
@@ -221,10 +234,13 @@ def test_model_failure_returns_explicit_reason(monkeypatch):
 
 
 def test_pending_reply_without_tool_result_uses_model_reply(monkeypatch):
+    """验证未完成步骤且无工具结果时，回复采用模型生成内容。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """返回固定回复，模拟模型对未完成步骤的响应。"""
         return "好的，正在为您创建订单，请稍候..."
 
     monkeypatch.setattr(LLMClient, "__init__", fake_init)
@@ -248,10 +264,13 @@ def test_pending_reply_without_tool_result_uses_model_reply(monkeypatch):
 
 
 def test_pending_step_reply_without_tool_result_does_not_fall_back_to_last_question(monkeypatch):
+    """验证进行中步骤的回复不会回退为上一轮智能体提问。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """返回固定回复，模拟模型对进行中步骤的响应。"""
         return "正在处理，请稍等。"
 
     monkeypatch.setattr(LLMClient, "__init__", fake_init)
@@ -276,6 +295,7 @@ def test_pending_step_reply_without_tool_result_does_not_fall_back_to_last_quest
 
 
 def test_pending_phrase_in_confirmation_question_is_not_rejected(monkeypatch):
+    """验证确认问句中的待处理措辞不会被误判为无效回复。"""
     step_reply = (
         "好的，已为您记录购买 1 个 A1 的意向。"
         "稍后我会为您处理 iPhone 15 的购买需求。"
@@ -283,9 +303,11 @@ def test_pending_phrase_in_confirmation_question_is_not_rejected(monkeypatch):
     )
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """返回带确认问句的固定回复，模拟模型输出。"""
         return step_reply
 
     monkeypatch.setattr(LLMClient, "__init__", fake_init)
@@ -320,6 +342,7 @@ def test_pending_phrase_in_confirmation_question_is_not_rejected(monkeypatch):
 
 
 def test_response_payload_does_not_include_stale_last_question(monkeypatch):
+    """验证非流式响应载荷不包含过期的上一轮提问。"""
     stale_price_reply = (
         "您好，已为您查询到 A1 和 A3 的价格信息：\n\n"
         "1. **A1 标准商品**：价格 **129.0 元**\n"
@@ -329,9 +352,11 @@ def test_response_payload_does_not_include_stale_last_question(monkeypatch):
     refund_reply = "好的，已为您记录退款申请。为了继续处理，请提供您的订单号。"
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """断言载荷不含旧会话，并返回固定回复。"""
         assert "session" not in payload
         assert payload["step_summary"]["reply"] == refund_reply
         return stale_price_reply
@@ -359,13 +384,16 @@ def test_response_payload_does_not_include_stale_last_question(monkeypatch):
 
 
 def test_stream_payload_does_not_include_stale_last_question(monkeypatch):
+    """验证流式响应载荷同样不包含过期的上一轮提问。"""
     stale_price_reply = "A1 和 A3 的比价结果如下。请问您是否决定购买 A1？"
     refund_reply = "好的，已为您记录退款申请。为了继续处理，请提供您的订单号。"
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text_stream(self, system_prompt, payload):  # noqa: ANN001
+        """断言载荷不含旧会话，并分两段产出固定文本。"""
         assert "session" not in payload
         yield stale_price_reply[:12]
         yield stale_price_reply[12:]
@@ -396,13 +424,16 @@ def test_stream_payload_does_not_include_stale_last_question(monkeypatch):
 
 
 def test_stream_reply_with_tool_result_is_model_driven(monkeypatch):
+    """验证流式回复在带工具结果时由模型驱动。"""
     stale_price_reply = "A1 和 A3 的比价结果如下。请问您是否决定购买 A1？"
     refund_reply = "订单 MOCKD57272DB0E 的退款申请已提交，当前状态为处理中。"
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text_stream(self, system_prompt, payload):  # noqa: ANN001
+        """断言载荷携带工具结果，并分两段产出固定文本。"""
         assert payload["tool_result"]["tool_name"] == "order.refund"
         yield stale_price_reply[:12]
         yield stale_price_reply[12:]
@@ -437,7 +468,9 @@ def test_stream_reply_with_tool_result_is_model_driven(monkeypatch):
 
 
 def test_stream_failed_tool_result_returns_explicit_failure_without_model_call(monkeypatch):
+    """验证流式调用在工具失败时直接返回明确的失败说明。"""
     def forbidden_generate_text_stream(self, system_prompt, payload):  # noqa: ANN001
+        """禁止被调用：工具失败时不应依赖模型流式生成。"""
         raise AssertionError("failed tool replies should not rely on model generation")
 
     monkeypatch.setattr(LLMClient, "generate_text_stream", forbidden_generate_text_stream)
@@ -462,10 +495,13 @@ def test_stream_failed_tool_result_returns_explicit_failure_without_model_call(m
 
 
 def test_stream_model_failure_returns_explicit_reason(monkeypatch):
+    """验证流式调用在模型异常时返回带错误码的明确失败原因。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text_stream(self, system_prompt, payload):  # noqa: ANN001
+        """抛出运行时异常，模拟流式调用失败。"""
         raise RuntimeError("connection refused")
         yield ""  # pragma: no cover
 
@@ -488,10 +524,13 @@ def test_stream_model_failure_returns_explicit_reason(monkeypatch):
 
 
 def test_stream_pending_reply_without_tool_result_is_model_driven(monkeypatch):
+    """验证流式调用在未完成步骤且无工具结果时采用模型回复。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text_stream(self, system_prompt, payload):  # noqa: ANN001
+        """分两段产出固定文本，模拟流式回复。"""
         yield "好的，"
         yield "正在为您创建订单，请稍候..."
 
@@ -519,12 +558,15 @@ def test_stream_pending_reply_without_tool_result_is_model_driven(monkeypatch):
 
 
 def test_stream_reply_yields_provider_chunks_without_collecting_first(monkeypatch):
+    """验证流式接口逐段透传模型输出，不先收集完整回复。"""
     emitted: list[str] = []
 
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text_stream(self, system_prompt, payload):  # noqa: ANN001
+        """记录调用时序并按段产出文本，用于验证流式透传。"""
         emitted.append("provider_started")
         yield "第一段"
         emitted.append("after_first_chunk")
@@ -550,10 +592,13 @@ def test_stream_reply_yields_provider_chunks_without_collecting_first(monkeypatc
 
 
 def test_completed_step_reply_is_model_driven(monkeypatch):
+    """验证步骤完成后的回复由模型基于进度载荷生成。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """断言进度字段完整，并返回固定回复。"""
         assert payload["progress"]["missing_current_step_info"] == []
         assert payload["progress"]["missing_required_info"] == []
         assert payload["progress"]["skill_completion_ready"] is True
@@ -602,10 +647,13 @@ def test_completed_step_reply_is_model_driven(monkeypatch):
 
 
 def test_knowledge_result_does_not_prefer_generic_step_reply(monkeypatch):
+    """验证知识结果场景不退回通用步骤回复，且引用载荷受裁剪。"""
     def fake_init(self, model_config):  # noqa: ANN001
-        return None
+        """跳过真实客户端初始化并返回 None，避免依赖模型配置。"""
+        return
 
     def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        """断言知识引用载荷的结构约束，并返回带引用的固定回复。"""
         assert payload["retrieved_knowledge"]
         assert payload["knowledge_citation_hints"]
         assert "knowledge_results" not in payload["step_summary"]
@@ -650,7 +698,9 @@ def test_knowledge_result_does_not_prefer_generic_step_reply(monkeypatch):
 
 
 def test_response_generator_skips_model_for_simple_step_question(monkeypatch) -> None:
+    """验证简单追问直接返回步骤回复，跳过响应模型调用。"""
     def fail_generate_text(*_args, **_kwargs):
+        """禁止被调用：简单追问不应调用响应模型。"""
         raise AssertionError("simple ask_user reply must not call the response model")
 
     monkeypatch.setattr("app.core.response_generator.LLMClient.generate_text", fail_generate_text)
@@ -668,7 +718,9 @@ def test_response_generator_skips_model_for_simple_step_question(monkeypatch) ->
 
 
 def test_response_generator_stream_skips_model_for_simple_clarification(monkeypatch) -> None:
+    """验证简单澄清直接返回步骤回复，跳过响应模型流式调用。"""
     def fail_generate_text_stream(*_args, **_kwargs):
+        """禁止被调用：简单澄清不应调用响应模型。"""
         raise AssertionError("simple clarification must not call the response model")
 
     monkeypatch.setattr(
@@ -691,6 +743,7 @@ def test_response_generator_stream_skips_model_for_simple_clarification(monkeypa
 
 
 def test_response_prompt_preserves_previous_reply_for_format_followup() -> None:
+    """验证提示词保留上一条助手回复，以便处理格式改写类追问。"""
     prompt = ResponseGenerator()._stage_payload(
         {
             "user_message": "你按照 markdown 语法返回",
@@ -711,6 +764,7 @@ def test_response_prompt_preserves_previous_reply_for_format_followup() -> None:
 
 
 def test_response_prompt_requires_readable_markdown_without_report_template() -> None:
+    """验证提示词要求 Markdown 结构清晰且不使用结构化完成报告模板。"""
     prompt = ResponseGenerator()._stage_payload(
         {
             "user_message": "查询请假制度和办公用品制度",

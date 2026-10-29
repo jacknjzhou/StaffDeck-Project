@@ -14,7 +14,10 @@ _RECOVERABLE_STATES = {"submitted", "working"}
 
 
 def recover_a2a_client_tasks() -> None:
-    """Resume durable outbound A2A tasks after an application restart."""
+    """应用重启后为仍处于 submitted/working 的出站 A2A 任务各起一个守护线程续跑。
+
+    只读一次数据库取出待恢复的 run id，实际恢复放到线程里做，避免阻塞启动流程。
+    """
 
     with Session(engine) as db:
         run_ids = list(
@@ -35,6 +38,7 @@ def recover_a2a_client_tasks() -> None:
 
 
 def _recover_one(run_id: str) -> None:
+    """恢复单条 A2A 客户端任务，记录残缺或工具已删除时直接标记失败并落库。"""
     with Session(engine) as db:
         run = db.get(A2ATaskRun, run_id)
         if run is None or run.direction != "client" or run.status not in _RECOVERABLE_STATES:

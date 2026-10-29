@@ -6,12 +6,14 @@ import { AlertDialog as AlertDialogPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
+/** 警告对话框根组件，承接 Radix Root 的受控/非受控打开状态。 */
 function AlertDialog({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
   return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />
 }
 
+/** 触发器，点击后打开所属的警告对话框。 */
 function AlertDialogTrigger({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Trigger>) {
@@ -20,6 +22,7 @@ function AlertDialogTrigger({
   )
 }
 
+/** 门户容器，把弹层内容挂载到 DOM 的其他位置以避免父级样式裁切。 */
 function AlertDialogPortal({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Portal>) {
@@ -28,6 +31,7 @@ function AlertDialogPortal({
   )
 }
 
+/** 遮罩层，覆盖全屏并带淡入淡出动画，可透传自定义 className。 */
 function AlertDialogOverlay({
   className,
   ...props
@@ -44,6 +48,11 @@ function AlertDialogOverlay({
   )
 }
 
+/**
+ * 对话框内容容器，居中渲染并自动附带门户与遮罩。
+ *
+ * size 控制最大宽度（default / sm）；Esc 键默认被拦截，防止误关破坏性操作。
+ */
 function AlertDialogContent({
   className,
   size = "default",
@@ -72,6 +81,7 @@ function AlertDialogContent({
   )
 }
 
+/** 头部区域，默认居中排列，default 尺寸下在 sm 断点起左对齐。 */
 function AlertDialogHeader({
   className,
   ...props
@@ -88,6 +98,7 @@ function AlertDialogHeader({
   )
 }
 
+/** 底部操作区，窄屏纵向排列，sm 断点起横向右对齐。 */
 function AlertDialogFooter({
   className,
   ...props
@@ -104,6 +115,7 @@ function AlertDialogFooter({
   )
 }
 
+/** 媒体/图标区域，用于头部左侧的图形元素。 */
 function AlertDialogMedia({
   className,
   ...props
@@ -120,6 +132,7 @@ function AlertDialogMedia({
   )
 }
 
+/** 标题文本，自动与对话框建立无障碍关联。 */
 function AlertDialogTitle({
   className,
   ...props
@@ -136,6 +149,7 @@ function AlertDialogTitle({
   )
 }
 
+/** 描述文本，说明确认操作的后果。 */
 function AlertDialogDescription({
   className,
   ...props
@@ -152,6 +166,7 @@ function AlertDialogDescription({
   )
 }
 
+/** 确认按钮，点击后关闭对话框；variant 与 size 透传给 Button。 */
 function AlertDialogAction({
   className,
   variant = "default",
@@ -170,6 +185,7 @@ function AlertDialogAction({
   )
 }
 
+/** 取消按钮，默认 outline 样式，点击后关闭对话框。 */
 function AlertDialogCancel({
   className,
   variant = "outline",

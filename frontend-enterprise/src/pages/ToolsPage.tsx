@@ -130,6 +130,12 @@ const TRANSPORT_OPTIONS: { value: MCPTransport; label: string; hint: string }[] 
   { value: 'builtin', label: '内置 Demo', hint: '使用内置的 builtin.demo MCP，仅用于演示' },
 ];
 
+/**
+ * 工具广场 / 员工工具列表页。
+ *
+ * 按当前能力范围加载工具与 MCP 服务器，支持搜索、分桶筛选、分页、
+ * 从广场或数字员工复制工具，以及删除/移除工具与工具集。
+ */
 export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {}) {
   const [rows, setRows] = useState<ToolRead[]>([]);
   const [agentId, setAgentId] = useState(readEmployeeScope);
@@ -163,6 +169,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
   const canOpenCreateMenu = canManageCurrentScope;
 
   const agentQuery = agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
+  /** 加载当前范围内的工具与 MCP 服务器列表，失败时弹窗提示。 */
   const load = () => {
     if (!agentScopeLoaded) {
       setRows([]);
@@ -190,6 +197,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
   }, [agentQuery, agentScopeLoaded]);
 
   useEffect(() => {
+    /** 加载员工列表并校正当前能力范围，失败时回退为总览范围。 */
     const loadAgentScope = async () => {
       try {
         const agents = await api.get<AgentProfileRead[]>(`/api/enterprise/agents?tenant_id=${TENANT_ID}`);
@@ -210,6 +218,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
   }, [agentId]);
 
   useEffect(() => {
+    /** 响应员工范围切换事件：忽略团队范围，回退到本地记录的范围。 */
     const onScopeChange = (event: Event) => {
       const next = (event as CustomEvent<{ agentId?: string }>).detail?.agentId || '';
       setAgentId(next && !isTeamScope(next) ? next : readEmployeeScope());
@@ -280,9 +289,15 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     () => (isOverallAgent ? servers : servers.filter((row) => agentServerToolCounts.has(row.id))),
     [agentServerToolCounts, isOverallAgent, servers],
   );
+  /** 返回 MCP 服务器工具数：总览用后端统计，员工范围用已导入数量。 */
   const serverToolCount = (row: MCPServerRead) =>
     isOverallAgent ? row.tool_count : agentServerToolCounts.get(row.id) || 0;
 
+  /**
+   * 删除工具；员工范围内实际是从当前员工移除该工具。
+   *
+   * 成功后广播能力目录变更事件并刷新列表。
+   */
   async function confirmDelete() {
     const row = deleteTarget;
     if (!row) return;
@@ -304,6 +319,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     }
   }
 
+  /** 处理「新增」菜单：跳转到空白工具、MCP 新建页或打开复制弹窗。 */
   function handleCreateAction(key: string) {
     if (key === 'blank') {
       navigate('/enterprise/tools/new');
@@ -322,6 +338,11 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     }
   }
 
+  /**
+   * 删除 MCP 服务器及其导入工具；员工范围内仅从当前员工移除。
+   *
+   * 删除前需要用户确认，成功后刷新列表并广播能力目录变更事件。
+   */
   async function confirmDeleteServer() {
     const row = serverDeleteTarget;
     if (!row || deletingServer) return;
@@ -344,6 +365,11 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     }
   }
 
+  /**
+   * 打开「复制工具」弹窗：加载员工列表，确定目标员工与首个来源并预载来源工具。
+   *
+   * `selectedResourceId` 用于从广场跳转时预选指定工具。
+   */
   async function openImportTools(mode: 'plaza' | 'employee' = 'plaza', selectedResourceId?: string) {
     try {
       const agentRows = agents.length
@@ -380,6 +406,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     }
   }
 
+  /** 加载来源员工的已启用工具作为复制候选，失败时提示并返回空数组。 */
   async function loadImportSourceTools(sourceAgentId: string): Promise<ToolRead[]> {
     setImportSourceTools([]);
     setImportSelectedToolIds([]);
@@ -397,6 +424,11 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     }
   }
 
+  /**
+   * 提交复制请求；目标员工与当前范围不同时切换能力范围，否则原地刷新列表。
+   *
+   * 目标员工、来源与已选工具任一缺失时仅提示，不发起请求。
+   */
   async function submitImportTools() {
     const targetAgentId = importTargetAgentId || (!isOverallAgent ? agentId : '');
     if (!targetAgentId) {
@@ -444,6 +476,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     }
   }
 
+  /** 过滤出可接收复制工具的在职员工：排除总览项与当前用户无权管理的员工。 */
   function importTargetCandidates(agentRows: AgentProfileRead[] = agents): AgentProfileRead[] {
     return agentRows.filter((item) => (
       !item.is_overall
@@ -452,6 +485,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     ));
   }
 
+  /** 切换复制目标：来源与目标相同时自动改选其他可见员工，并重载来源工具。 */
   function handleImportTargetChange(nextTargetAgentId: string) {
     setImportTargetAgentId(nextTargetAgentId);
     if (importMode !== 'employee' || importSourceAgentId !== nextTargetAgentId) return;
@@ -463,6 +497,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     void loadImportSourceTools(nextSource);
   }
 
+  /** 渲染单行工具的「更多」操作菜单：编辑、测试、删除/移除。 */
   function renderActions(row: ToolRead) {
     const isMcpChild = row.tool_type === 'mcp' && Boolean(row.mcp_server_id);
     return (
@@ -672,6 +707,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     },
   ];
 
+  /** 渲染移动端工具卡片：展示名称、创建者、分桶、类型与启用状态。 */
   const renderMobileCard = (row: ToolRead) => (
     <article className={MOBILE_CARD_CLASS} key={row.id}>
       <div className="flex min-w-0 items-start justify-between gap-[10px]">
@@ -974,18 +1010,22 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
   );
 }
 
+/** 新建 HTTP / A2A 工具页入口。 */
 export function ToolNewPage(props: ToolPageProps = {}) {
   return <ToolEditorPage mode="new" {...props} />;
 }
 
+/** 编辑已保存工具页入口。 */
 export function ToolEditPage(props: ToolPageProps = {}) {
   return <ToolEditorPage mode="edit" {...props} />;
 }
 
+/** 新建 MCP 服务器页入口。 */
 export function McpServerNewPage(props: ToolPageProps = {}) {
   return <McpServerEditorPage mode="new" {...props} />;
 }
 
+/** 编辑已保存 MCP 服务器页入口。 */
 export function McpServerEditPage(props: ToolPageProps = {}) {
   return <McpServerEditorPage mode="edit" {...props} />;
 }
@@ -1053,6 +1093,7 @@ function ToolTypeSwitcher({ active, onProtocolChange }: { active: 'http' | 'a2a'
   );
 }
 
+/** 工具新建/编辑页：加载工具详情、维护表单状态并保存。 */
 function ToolEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' } & ToolPageProps) {
   const [values, setValues] = useState<ToolFormValues>({ ...TOOL_FORM_INITIAL_VALUES });
   const [tool, setTool] = useState<ToolRead | null>(null);
@@ -1064,6 +1105,7 @@ function ToolEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' 
   const isEdit = mode === 'edit';
   const requestedToolType = searchParams.get('type') === 'a2a' ? 'a2a' : 'http';
 
+  /** 更新单个工具表单字段，保持其余字段不变。 */
   const setField = <K extends keyof ToolFormValues>(name: K, value: ToolFormValues[K]) =>
     setValues((prev) => ({ ...prev, [name]: value }));
 
@@ -1090,6 +1132,11 @@ function ToolEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' 
       .finally(() => setLoading(false));
   }, [isEdit, requestedToolType, toolId]);
 
+  /**
+   * 校验必填项并构建请求体后保存工具；新建成功后跳转到编辑页。
+   *
+   * 名称/URL 为空或 payload 构建失败时直接返回，不发起请求。
+   */
   async function save() {
     if (!String(values.name || '').trim()) {
       notify.error('请填写工具名称');
@@ -1181,6 +1228,7 @@ const RETURN_BUTTON_CLASS =
 const PRIMARY_BUTTON_CLASS =
   'h-8 gap-1 rounded-[10px] bg-[#18181a] px-5 text-[12px] font-normal text-white hover:bg-[#303030]';
 
+/** 通用卡片容器：可选标题与额外操作区，支持加载态。 */
 function SectionCard({
   title,
   extra,
@@ -1215,6 +1263,7 @@ function SectionCard({
   );
 }
 
+/** 表单字段容器：统一标签、子控件与可选提示文案的间距。 */
 function Field({
   label,
   htmlFor,
@@ -1239,6 +1288,7 @@ function Field({
   );
 }
 
+/** 工具测试页：展示工具信息、Schema，并提供已保存工具的调用测试。 */
 export function ToolTestPage({ currentUser, onLogout }: ToolPageProps = {}) {
   const [tool, setTool] = useState<ToolRead | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1356,6 +1406,7 @@ export function ToolTestPage({ currentUser, onLogout }: ToolPageProps = {}) {
 
 const A2A_TERMINAL_STATES = new Set(['completed', 'failed', 'canceled', 'cancelled', 'rejected']);
 
+/** A2A 持久化任务面板：展示调用记录、事件时间线与取消操作。 */
 function A2ARunsPanel({ tool }: { tool: ToolRead }) {
   const [runs, setRuns] = useState<A2ATaskRunRead[]>([]);
   const [adapter, setAdapter] = useState<CodexA2AAdapterRead | null>(null);
@@ -1363,6 +1414,7 @@ function A2ARunsPanel({ tool }: { tool: ToolRead }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const agentQuery = currentAgentQuery();
 
+  /** 拉取最近 20 条 A2A 任务记录与 Codex Adapter 状态。 */
   const load = async () => {
     setLoading(true);
     try {
@@ -1385,6 +1437,7 @@ function A2ARunsPanel({ tool }: { tool: ToolRead }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool.id]);
 
+  /** 请求取消指定 A2A 任务，提交成功后重新加载任务列表。 */
   async function cancel(run: A2ATaskRunRead) {
     try {
       await api.post(`/api/enterprise/tools/${tool.id}/a2a-runs/${run.id}:cancel?tenant_id=${TENANT_ID}${agentQuery}`, {});
@@ -1446,6 +1499,7 @@ function A2ARunsPanel({ tool }: { tool: ToolRead }) {
   );
 }
 
+/** 将 A2A 任务状态码映射为中文展示文案，未知状态原样返回。 */
 function a2aStatusLabel(status: string): string {
   return ({ submitted: '已提交', working: '执行中', running: '执行中', completed: '已完成', failed: '失败', canceled: '已取消', cancelled: '已取消', rejected: '已拒绝', 'input-required': '等待输入' } as Record<string, string>)[status] || status;
 }
@@ -1486,6 +1540,7 @@ const MCP_FORM_INITIAL_VALUES: McpFormValues = {
 
 type DiscoveredRow = MCPDiscoverResponse['tools'][number] & { selected: boolean };
 
+/** MCP 服务器新建/编辑页：维护连接配置，并发现、导入其工具。 */
 function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' } & ToolPageProps) {
   const [values, setValues] = useState<McpFormValues>({ ...MCP_FORM_INITIAL_VALUES });
   const [server, setServer] = useState<MCPServerRead | null>(null);
@@ -1498,6 +1553,7 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   const { serverId } = useParams();
   const isEdit = mode === 'edit';
 
+  /** 更新单个 MCP 表单字段，保持其余字段不变。 */
   const setField = <K extends keyof McpFormValues>(name: K, value: McpFormValues[K]) =>
     setValues((prev) => ({ ...prev, [name]: value }));
 
@@ -1524,6 +1580,11 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   const isRemote = values.transport === 'streamable_http' || values.transport === 'sse';
   const isStdio = values.transport === 'stdio';
 
+  /**
+   * 根据当前表单构建 MCP 连接配置。
+   *
+   * Headers/Env 不是合法 JSON 时提示并返回 null，由调用方终止提交。
+   */
   function buildConnection(): MCPServerConnection | null {
     let headers: Record<string, string>;
     let env: Record<string, string>;
@@ -1557,6 +1618,7 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
     };
   }
 
+  /** 组装 MCP 服务器保存请求体；连接配置非法时返回 null。 */
   function buildPayload(): { payload: Record<string, unknown>; connection: MCPServerConnection } | null {
     const connection = buildConnection();
     if (!connection) return null;
@@ -1576,6 +1638,11 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
     };
   }
 
+  /**
+   * 校验名称并保存 MCP 服务器；新建成功后跳转到编辑页。
+   *
+   * 保存成功后广播能力目录变更事件。
+   */
   async function save() {
     if (!String(values.name || '').trim()) {
       notify.error('请填写 MCP 服务器名称');
@@ -1605,6 +1672,11 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
     }
   }
 
+  /**
+   * 用当前连接配置调用 tools/list 发现工具。
+   *
+   * 发现结果默认勾选未导入的工具，并提示发现数量。
+   */
   async function discover() {
     const built = buildPayload();
     if (!built) return;
@@ -1635,6 +1707,11 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
     }
   }
 
+  /**
+   * 将勾选的发现结果导入/同步为工具行。
+   *
+   * 需先保存服务器；成功后刷新服务器详情并重新发现。
+   */
   async function sync() {
     if (!server) {
       notify.warning('请先保存 MCP 服务器，再同步工具');
@@ -1974,6 +2051,7 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   );
 }
 
+/** 工具定义表单：名称、请求配置、异步策略、Schema 与能力范围。 */
 function ToolFormFields({
   values,
   setField,
@@ -2272,6 +2350,7 @@ function ToolFormFields({
   );
 }
 
+/** A2A 连接高级配置区：Agent Card、流式/订阅开关与协议 JSON。 */
 function A2AConnectionFields({
   values,
   setField,
@@ -2281,6 +2360,7 @@ function A2AConnectionFields({
 }) {
   const [adapter, setAdapter] = useState<CodexA2AAdapterRead | null>(null);
   const config = safeJsonObject(values.mcp_config);
+  /** 合并写入高级配置 JSON（mcp_config），保持两空格缩进。 */
   const updateConfig = (patch: Record<string, unknown>) => {
     setField('mcp_config', JSON.stringify({ ...config, ...patch }, null, 2));
   };
@@ -2291,6 +2371,7 @@ function A2AConnectionFields({
       .catch(() => setAdapter(null));
   }, []);
 
+  /** 一键填入本机 Codex Adapter 的地址与推荐连接配置。 */
   const useCodex = () => {
     if (!adapter) return;
     setField('url', new URL(adapter.endpoint_url, window.location.origin).toString());
@@ -2329,10 +2410,12 @@ function A2AConnectionFields({
   );
 }
 
+/** 紧凑型开关行：左侧标题与提示，右侧开关控件。 */
 function SwitchRowCompact({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (checked: boolean) => void }) {
   return <label className="flex min-h-[58px] items-center justify-between gap-[12px] rounded-[12px] border border-white bg-white/80 px-[13px] py-[10px]"><span><span className="block text-[12px] font-medium text-[#464c5e]">{label}</span><span className="mt-[2px] block text-[10px] leading-[15px] text-[#858b9c]">{hint}</span></span><Switch checked={checked} onCheckedChange={onChange} /></label>;
 }
 
+/** 配置探测卡片：用未保存的当前配置直接发起一次测试调用。 */
 function ToolProbeCard({ values }: { values: ToolFormValues }) {
   const [sampleJson, setSampleJson] = useState('{}');
   const [result, setResult] = useState('');
@@ -2340,6 +2423,11 @@ function ToolProbeCard({ values }: { values: ToolFormValues }) {
   const method = values.method || 'POST';
   const isGetMethod = method === 'GET';
 
+  /**
+   * 探测当前配置：校验名称/URL 与测试参数 JSON 后调用 probe 接口。
+   *
+   * 结果以格式化 JSON 展示，失败时仅提示错误。
+   */
   async function probe() {
     if (!String(values.name || '').trim()) {
       notify.error('请填写工具名称');
@@ -2429,6 +2517,7 @@ function ToolProbeCard({ values }: { values: ToolFormValues }) {
   );
 }
 
+/** 已保存工具调用测试卡片，支持长任务的提交与状态查询。 */
 export function SavedToolTestCard({ tool, standalone = false }: { tool: ToolRead; standalone?: boolean }) {
   const [testJson, setTestJson] = useState(() => JSON.stringify(exampleFromSchema(tool.input_schema), null, 2));
   const tracking = useToolTest(tool.id, currentAgentQuery(), tool.execution_policy?.poll_interval_seconds);
@@ -2439,6 +2528,7 @@ export function SavedToolTestCard({ tool, standalone = false }: { tool: ToolRead
     setTestJson(JSON.stringify(exampleFromSchema(tool.input_schema), null, 2));
   }, [tool.id, tool.input_schema]);
 
+  /** 解析测试参数 JSON 并提交一次工具调用。 */
   async function test() {
     let argumentsJson: Record<string, unknown>;
     try {
@@ -2506,17 +2596,20 @@ export function SavedToolTestCard({ tool, standalone = false }: { tool: ToolRead
   );
 }
 
+/** 加载全部分桶选项：始终包含「未分桶」，去重后返回 value/label 列表。 */
 async function loadBucketOptions() {
   const rows = await api.get<ToolRead[]>(`/api/enterprise/tools?tenant_id=${TENANT_ID}${currentAgentQuery()}`);
   return Array.from(new Set(['未分桶', ...rows.map((row) => row.bucket || '未分桶')]))
     .map((value) => ({ value, label: value }));
 }
 
+/** 返回当前员工范围的查询串片段，无范围时为空串。 */
 function currentAgentQuery() {
   const agentId = readEmployeeScope();
   return agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
 }
 
+/** 将工具详情转换为表单值：JSON 字段格式化，执行策略字段补默认值。 */
 function toolToFormValues(row: ToolRead): ToolFormValues {
   return {
     ...TOOL_FORM_INITIAL_VALUES,
@@ -2543,6 +2636,11 @@ function toolToFormValues(row: ToolRead): ToolFormValues {
   };
 }
 
+/**
+ * 校验并构建工具保存/探测请求体。
+ *
+ * Provider 异步任务缺少状态查询 URL、或 JSON 字段非法时提示并返回 null。
+ */
 export function buildToolPayload(values: ToolFormValues) {
   try {
     if (
@@ -2596,6 +2694,7 @@ export function buildToolPayload(values: ToolFormValues) {
   }
 }
 
+/** 按分桶聚合工具数量与启用情况，并按总数倒序排列。 */
 function buildBucketStats(rows: ToolRead[]) {
   const map = new Map<string, { bucket: string; total: number; enabled: number; disabled: number }>();
   rows.forEach((row) => {
@@ -2609,11 +2708,13 @@ function buildBucketStats(rows: ToolRead[]) {
   return Array.from(map.values()).sort((a, b) => b.total - a.total || a.bucket.localeCompare(b.bucket));
 }
 
+/** 解析 JSON 字符串；空串返回 fallback，非法 JSON 抛出异常由调用方处理。 */
 function parseJson<T>(value: string, fallback: T): T {
   if (!value) return fallback;
   return JSON.parse(value) as T;
 }
 
+/** 解析 JSON 对象；空值、非法 JSON 或非对象结构统一返回空对象。 */
 function safeJsonObject(value: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(value || '{}');
@@ -2625,10 +2726,12 @@ function safeJsonObject(value: string): Record<string, unknown> {
   }
 }
 
+/** 将任意值格式化为两空格缩进的 JSON 字符串，空值输出 {}。 */
 function formatJson(value: unknown): string {
   return JSON.stringify(value || {}, null, 2);
 }
 
+/** 统计 JSON Schema 顶层 properties 的字段数量，并以字符串返回。 */
 function schemaPropertyCount(schema: Record<string, unknown>): string {
   const properties = schema.properties && typeof schema.properties === 'object'
     ? schema.properties as Record<string, unknown>
@@ -2636,10 +2739,12 @@ function schemaPropertyCount(schema: Record<string, unknown>): string {
   return `${Object.keys(properties).length}`;
 }
 
+/** 将工具类型映射为中文展示名：MCP 服务 / A2A Agent / HTTP 接口。 */
 function toolTypeLabel(tool: ToolRead): string {
   return tool.tool_type === 'mcp' ? 'MCP 服务' : tool.tool_type === 'a2a' ? 'A2A Agent' : 'HTTP 接口';
 }
 
+/** 将 MCP 服务器详情转换为编辑表单值。 */
 function serverToFormValues(row: MCPServerRead): McpFormValues {
   const connection = row.connection;
   return {
@@ -2660,6 +2765,7 @@ function serverToFormValues(row: MCPServerRead): McpFormValues {
   };
 }
 
+/** 将多行 Args 文本按行拆分为参数数组，忽略空行与首尾空格。 */
 export function parseMcpArgs(value: string): string[] {
   return String(value || '')
     .split(/\r?\n/)
@@ -2667,6 +2773,7 @@ export function parseMcpArgs(value: string): string[] {
     .filter(Boolean);
 }
 
+/** 返回 MCP 连接方式的中文标签，未知取值原样返回。 */
 function transportLabel(transport: MCPTransport | string): string {
   return TRANSPORT_OPTIONS.find((item) => item.value === transport)?.label || String(transport);
 }
@@ -2688,12 +2795,14 @@ function sanitizeMcpName(raw: string): string {
   return normalized.slice(0, 15);
 }
 
+/** 返回 MCP 服务器的展示端点：stdio 用命令、内置用固定名、其余用 URL。 */
 function serverEndpoint(connection: MCPServerConnection): string {
   if (connection.transport === 'stdio') return connection.command || '—';
   if (connection.transport === 'builtin') return 'builtin.demo';
   return connection.url || '—';
 }
 
+/** 依据 Input Schema 生成一份示例参数对象，用于测试参数预填。 */
 function exampleFromSchema(schema: Record<string, unknown>): Record<string, unknown> {
   const properties = schema.properties && typeof schema.properties === 'object'
     ? schema.properties as Record<string, Record<string, unknown>>
@@ -2703,6 +2812,7 @@ function exampleFromSchema(schema: Record<string, unknown>): Record<string, unkn
   );
 }
 
+/** 为单个 Schema 字段推导示例值：优先 default/example/enum，其次按类型。 */
 function exampleValue(key: string, schema: Record<string, unknown>): unknown {
   if (schema.default !== undefined) return schema.default;
   if (schema.example !== undefined) return schema.example;

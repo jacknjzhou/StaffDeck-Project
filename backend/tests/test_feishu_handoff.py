@@ -23,14 +23,18 @@ from app.db.models import (
 
 
 class FakeEvents:
+    """记录事件写入的轻量替身,便于断言服务层产生了哪些事件。"""
     def __init__(self) -> None:
+        """初始化空的事件记录列表。"""
         self.records: list[tuple[str, str, str, dict]] = []
 
     def record(self, tenant_id: str, session_id: str, event_type: str, payload: dict) -> None:
+        """按调用顺序记录事件所属租户、会话、类型与载荷。"""
         self.records.append((tenant_id, session_id, event_type, payload))
 
 
 def _test_engine():
+    """创建共享单一内存连接并建表的 SQLite 引擎,保证多个 Session 看到同一份数据。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -41,6 +45,7 @@ def _test_engine():
 
 
 def _seed_tenant(db: Session) -> tuple[Tenant, User, User]:
+    """写入演示租户、管理员与指派处理人,返回三者供测试引用。"""
     tenant = Tenant(id="tenant_demo", name="Demo")
     admin = User(
         id="admin_user",
@@ -69,6 +74,7 @@ def _feishu_binding(
     config: dict | None = None,
     app_id: str = "cli_app",
 ) -> ChannelBinding:
+    """构造一条 active 的飞书绑定,可覆盖 ID、配置与 app_id。"""
     return ChannelBinding(
         id=binding_id,
         tenant_id="tenant_demo",
@@ -90,6 +96,7 @@ def _channel_identity(
     scope: str = "",
     channel: str = "feishu",
 ) -> ChannelIdentity:
+    """构造渠道身份映射,把外部用户 ID 关联到 StaffDeck 用户并按 scope 隔离。"""
     return ChannelIdentity(
         tenant_id="tenant_demo",
         channel=channel,
@@ -107,6 +114,7 @@ def _pending_handoff(
     notify_message_id: str = "",
     metadata: dict | None = None,
 ) -> HumanHandoffRequest:
+    """构造待处理的转人工请求,可覆盖通知消息 ID 与 metadata。"""
     return HumanHandoffRequest(
         id=handoff_id,
         tenant_id="tenant_demo",
@@ -128,6 +136,7 @@ def _inbound(
     text: str = "已处理",
     parent_id: str = "",
 ) -> ChannelInbound:
+    """构造飞书入站消息,可覆盖事件 ID、发送者、文本与引用消息 ID。"""
     return ChannelInbound(
         channel="feishu",
         event_id=event_id,
@@ -148,6 +157,7 @@ def _inbound_event(
     event_id: str = "om_inbound_1",
     binding_id: str = "binding_feishu",
 ) -> object:
+    """构造 processing 状态的入站事件记录,模型在函数内导入。"""
     from app.db.models import ChannelInboundEvent
 
     return ChannelInboundEvent(
@@ -335,6 +345,7 @@ def test_assignee_notify_channel_follows_selected_assignee() -> None:
         service = HumanHandoffService(db, FakeEvents())
 
         def _make_session(session_id: str) -> ChatSession:
+            """创建并提交一条 active 会话,便于在同一数据库连接内复用。"""
             row = ChatSession(
                 id=session_id,
                 tenant_id="tenant_demo",
@@ -430,12 +441,14 @@ def test_handoff_metadata_no_longer_contains_contact_target() -> None:
 
 
 def test_contact_removed_from_concept_types() -> None:
+    """验证 OKF 概念类型中已移除 Contact。"""
     from app.knowledge.okf import CONCEPT_TYPES
 
     assert "Contact" not in CONCEPT_TYPES
 
 
 def test_okf_has_no_extract_contact_target() -> None:
+    """验证 okf 模块不再暴露联系人提取函数与字段常量。"""
     import app.knowledge.okf as okf_mod
 
     assert not hasattr(okf_mod, "extract_contact_target")
@@ -448,6 +461,7 @@ def test_okf_has_no_extract_contact_target() -> None:
 
 
 def test_resolve_open_id_uses_channel_identity_with_binding_scope() -> None:
+    """验证按绑定 scope 解析 open_id 时只命中该范围内的身份。"""
     from app.channels.service_outbox import _resolve_assignee_feishu_open_id
 
     engine = _test_engine()
@@ -467,6 +481,7 @@ def test_resolve_open_id_uses_channel_identity_with_binding_scope() -> None:
         original = external_account_scope
 
         def fake_scope(_db, _binding):
+            """固定返回 scope_a,模拟绑定所属的渠道账号范围。"""
             return "scope_a"
 
         import app.channels.service_outbox as outbox_mod
@@ -480,6 +495,7 @@ def test_resolve_open_id_uses_channel_identity_with_binding_scope() -> None:
 
 
 def test_resolve_open_id_returns_none_when_no_identity() -> None:
+    """验证没有渠道身份时解析 open_id 返回 None。"""
     from app.channels.service_outbox import _resolve_assignee_feishu_open_id
 
     engine = _test_engine()
@@ -513,6 +529,7 @@ def test_resolve_open_id_isolates_across_bindings() -> None:
         scopes = {"binding_a": "scope_a", "binding_b": "scope_b"}
 
         def fake_scope(_db, b):
+            """按绑定 ID 返回各自的 scope,模拟跨绑定隔离。"""
             return scopes.get(b.id, "")
 
         outbox_mod.external_account_scope = fake_scope
@@ -529,6 +546,7 @@ def test_resolve_open_id_isolates_across_bindings() -> None:
 
 
 def test_notify_handoff_assignee_stages_handoff_notice_delivery() -> None:
+    """验证通知处理人时登记一条 handoff_notice 投递,并写入接收人、文案与 handoff ID。"""
     from app.channels.service_outbox import notify_handoff_assignee
 
     engine = _test_engine()
@@ -558,6 +576,7 @@ def test_notify_handoff_assignee_stages_handoff_notice_delivery() -> None:
 
 
 def test_notify_handoff_assignee_deduplicates_existing_notice() -> None:
+    """验证对同一 handoff 重复通知时只保留一条投递。"""
     from app.channels.service_outbox import notify_handoff_assignee
 
     engine = _test_engine()
@@ -580,6 +599,7 @@ def test_notify_handoff_assignee_deduplicates_existing_notice() -> None:
 
 
 def test_notify_handoff_assignee_skips_when_no_open_id() -> None:
+    """验证处理人缺少 open_id 时跳过通知,不登记投递。"""
     from app.channels.service_outbox import notify_handoff_assignee
 
     engine = _test_engine()
@@ -599,6 +619,7 @@ def test_notify_handoff_assignee_skips_when_no_open_id() -> None:
 
 
 def test_write_handoff_notify_message_id_persists_message_id() -> None:
+    """验证投递成功后把 message_id 回写到 handoff 的 notify_message_id。"""
     from app.channels.service_outbox import _write_handoff_notify_message_id
 
     engine = _test_engine()
@@ -631,17 +652,22 @@ def test_delivery_daemon_persists_message_id_for_notice_and_ack() -> None:
     from app.channels.service_outbox import run_delivery_daemon
 
     class ReplyableFakeAdapter:
+        """可返回递增 message_id 的假飞书适配器,用于验证投递回写。"""
         def __init__(self) -> None:
+            """初始化已发送消息 ID 列表。"""
             self.sent: list[str] = []
 
         def send(self, binding, target, text, *, idempotency_key=None):
+            """记录一次发送并返回递增的 message_id。"""
             message_id = f"om_sent_{len(self.sent) + 1}"
             self.sent.append(message_id)
             return message_id
 
-        def start_ingress(self, binding_id: str) -> None: ...
+        def start_ingress(self, binding_id: str) -> None:
+            """空实现:测试不需要启动入站监听。"""
 
-        def stop_ingress(self, binding_id: str) -> None: ...
+        def stop_ingress(self, binding_id: str) -> None:
+            """空实现:测试不需要停止入站监听。"""
 
     import app.channels.adapters.feishu  # noqa: F401  确保真实适配器已注册
 
@@ -717,6 +743,7 @@ def _wecom_binding(
     binding_id: str = "binding_wecom",
     scope: str = "corp_1",
 ) -> ChannelBinding:
+    """构造 active 的企业微信绑定,并按 corp scope 填充身份隔离键。"""
     return ChannelBinding(
         id=binding_id,
         tenant_id="tenant_demo",
@@ -764,6 +791,7 @@ def test_notify_handoff_assignee_stages_wecom_delivery_with_chat_id() -> None:
 
 
 def test_notify_handoff_assignee_retries_old_delivered_wecom_notice() -> None:
+    """验证已投递但已过期的企微通知会重新登记为新投递。"""
     from datetime import timedelta
 
     from app.channels.service_outbox import notify_handoff_assignee
@@ -808,6 +836,7 @@ def test_notify_handoff_assignee_retries_old_delivered_wecom_notice() -> None:
 
 
 def test_run_wecom_handoff_reply_records_wecom_source(monkeypatch) -> None:
+    """验证企微处理人回复时以 wecom 作为来源完成答复并发送回执。"""
     import app.channels.service_intake as intake_mod
     from app.channels.service_intake import _run_handoff_reply_command
     from app.channels.service_routing import ChannelCommand
@@ -847,6 +876,7 @@ def test_run_wecom_handoff_reply_records_wecom_source(monkeypatch) -> None:
         resumed: list[str] = []
 
         def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+            """替身 _apply_handoff_reply:写回答复并记录来源。"""
             row.status = "answered"
             row.human_reply = reply
             row.answered_at = utc_now()
@@ -869,6 +899,7 @@ def test_run_wecom_handoff_reply_records_wecom_source(monkeypatch) -> None:
 
 
 def test_run_wecom_handoff_reply_uses_latest_delivered_notice(monkeypatch) -> None:
+    """验证存在多条已投递通知时,回复关联到最新的待处理 handoff。"""
     from datetime import timedelta
 
     import app.channels.service_intake as intake_mod
@@ -930,6 +961,7 @@ def test_run_wecom_handoff_reply_uses_latest_delivered_notice(monkeypatch) -> No
         resumed: list[str] = []
 
         def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+            """替身 _apply_handoff_reply:写回答复并记录 handoff ID。"""
             row.status = "answered"
             row.human_reply = reply
             db_arg.add(row)
@@ -951,6 +983,7 @@ def test_run_wecom_handoff_reply_uses_latest_delivered_notice(monkeypatch) -> No
 
 
 def test_run_wecom_handoff_reply_accepts_explicit_handoff_id(monkeypatch) -> None:
+    """验证回复文本带 handoff ID 时精确命中该请求,不影响其他请求。"""
     import app.channels.service_intake as intake_mod
     from app.channels.service_intake import _run_handoff_reply_command
     from app.channels.service_routing import ChannelCommand
@@ -1007,6 +1040,7 @@ def test_run_wecom_handoff_reply_accepts_explicit_handoff_id(monkeypatch) -> Non
         resumed: list[str] = []
 
         def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+            """替身 _apply_handoff_reply:写回答复并记录 handoff ID。"""
             row.status = "answered"
             row.human_reply = reply
             db_arg.add(row)
@@ -1028,6 +1062,7 @@ def test_run_wecom_handoff_reply_accepts_explicit_handoff_id(monkeypatch) -> Non
 
 
 def test_run_handoff_reply_rejects_notification_placeholder() -> None:
+    """验证回复内容仍是通知模板占位文本时提示替换为实际内容。"""
     from app.channels.service_intake import _run_handoff_reply_command
     from app.channels.service_routing import ChannelCommand
 
@@ -1113,6 +1148,7 @@ def test_notify_handoff_assignee_skips_unsupported_private_message_channel() -> 
 
 
 def test_resolve_handoff_notify_binding_finds_active_employee_binding() -> None:
+    """验证只解析租户内 active 且非团队的员工绑定,其他渠道返回 None。"""
     from app.channels.service_outbox import resolve_handoff_notify_binding
 
     engine = _test_engine()
@@ -1143,13 +1179,16 @@ class _RecordingOutbox:
     """替身 notify_handoff_assignee:记录被调用的 binding,便于断言路由结果。"""
 
     def __init__(self) -> None:
+        """初始化被调用绑定的记录列表。"""
         self.calls: list[ChannelBinding] = []
 
     def __call__(self, db, binding, handoff, pending_question, context_summary) -> None:
+        """按 notify_handoff_assignee 的签名记录传入的 binding。"""
         self.calls.append(binding)
 
 
 def _loop_with_session(db: Session, chat_session: ChatSession):
+    """返回绑定当前数据库的 AgentLoop 与传入会话,便于调用内部通知方法。"""
     from app.core.agent_loop import AgentLoop
 
     return AgentLoop(db), chat_session
@@ -1312,33 +1351,43 @@ def test_agent_loop_notify_default_uses_session_binding_when_supported() -> None
 
 
 class _FakeClient:
+    """模拟 httpx.Client 上下文管理器的假客户端,请求交由 handler 处理。"""
     def __init__(self, handler):
+        """保存请求处理回调。"""
         self.handler = handler
 
     def __enter__(self):
+        """返回自身以支持 with 语法。"""
         return self
 
     def __exit__(self, *_args):
-        return None
+        """退出上下文时不做清理,也不吞异常。"""
+        return
 
     def post(self, url, **kwargs):
+        """把 POST 请求转交 handler 并返回响应。"""
         return self.handler(url, kwargs)
 
     def get(self, url, **kwargs):
+        """标记 GET 方法后把请求转交 handler。"""
         return self.handler(url, {**kwargs, "_method": "GET"})
 
     def patch(self, url, **kwargs):
+        """标记 PATCH 方法后把请求转交 handler。"""
         return self.handler(url, {**kwargs, "_method": "PATCH"})
 
 
 def _httpx_response(status: int, payload: dict, url: str):
+    """构造带 request 对象的 httpx.Response,满足适配器解析响应所需。"""
     import httpx
 
     return httpx.Response(status, json=payload, request=httpx.Request("POST", url))
 
 
 def test_feishu_send_returns_message_id_for_p2p_message() -> None:
+    """验证飞书单聊发送成功时返回响应中的 message_id。"""
     def handler(url, kwargs):
+        """按 URL 区分鉴权与发消息请求并返回预设响应。"""
         if "/auth/" in url:
             return _httpx_response(
                 200, {"code": 0, "tenant_access_token": "token-a", "expire": 7200}, url
@@ -1348,6 +1397,7 @@ def test_feishu_send_returns_message_id_for_p2p_message() -> None:
         )
 
     def factory():
+        """返回复用同一 handler 的假客户端。"""
         return _FakeClient(handler)
 
     adapter = FeishuAdapter(
@@ -1360,7 +1410,9 @@ def test_feishu_send_returns_message_id_for_p2p_message() -> None:
 
 
 def test_feishu_send_returns_none_when_response_lacks_message_id() -> None:
+    """验证响应缺少 message_id 时发送返回 None。"""
     def handler(url, kwargs):
+        """按 URL 返回鉴权响应与不带 message_id 的发送响应。"""
         if "/auth/" in url:
             return _httpx_response(
                 200, {"code": 0, "tenant_access_token": "token-a", "expire": 7200}, url
@@ -1368,6 +1420,7 @@ def test_feishu_send_returns_none_when_response_lacks_message_id() -> None:
         return _httpx_response(200, {"code": 0, "msg": "success", "data": {}}, url)
 
     def factory():
+        """返回复用同一 handler 的假客户端。"""
         return _FakeClient(handler)
 
     adapter = FeishuAdapter(
@@ -1392,6 +1445,7 @@ def _build_feishu_event(
     text: str = "已处理",
     open_id: str = "ou_assignee",
 ) -> SimpleNamespace:
+    """构造飞书事件对象,可覆盖消息 ID、引用关系、会话类型与发送者。"""
     message = SimpleNamespace(
         message_id=message_id,
         chat_id="oc_chat1" if chat_type != "p2p" else "",
@@ -1413,6 +1467,7 @@ def _build_feishu_event(
 
 
 def test_normalize_event_captures_parent_id_for_reply() -> None:
+    """验证回复消息的 parent_id 会被归一化到入站消息。"""
     event = _build_feishu_event(parent_id="om_notify_999")
     result = _normalize_event(event, bot_open_id="ou_bot")
     assert result is not None
@@ -1421,6 +1476,7 @@ def test_normalize_event_captures_parent_id_for_reply() -> None:
 
 
 def test_normalize_event_falls_back_to_root_id_when_parent_id_absent() -> None:
+    """验证缺少 parent_id 时回退使用 root_id。"""
     event = _build_feishu_event(root_id="om_root_999")
     result = _normalize_event(event, bot_open_id="ou_bot")
     assert result is not None
@@ -1429,6 +1485,7 @@ def test_normalize_event_falls_back_to_root_id_when_parent_id_absent() -> None:
 
 
 def test_normalize_event_leaves_parent_id_empty_for_non_reply() -> None:
+    """验证非回复消息的 parent_id 保持为空。"""
     event = _build_feishu_event()
     result = _normalize_event(event, bot_open_id="ou_bot")
     assert result is not None
@@ -1437,6 +1494,7 @@ def test_normalize_event_leaves_parent_id_empty_for_non_reply() -> None:
 
 
 def test_channel_inbound_has_parent_id_field() -> None:
+    """验证 ChannelInbound 支持 parent_id,缺省为空字符串。"""
     inbound = ChannelInbound(
         channel="feishu",
         event_id="e1",
@@ -1480,6 +1538,7 @@ def _seed_handoff_reply_scenario(
     sender_open_id: str = "ou_assignee",
     sender_staffdeck_user_id: str = "assignee_user",
 ) -> tuple[ChannelBinding, HumanHandoffRequest, ChannelInbound, object]:
+    """搭建已投递通知的 handoff 回复场景,返回绑定、请求、入站消息与事件记录。"""
     binding = _feishu_binding()
     db.add(binding)
     db.add(_channel_identity(
@@ -1528,6 +1587,7 @@ def _seed_handoff_reply_scenario(
 
 
 def test_try_handle_feishu_handoff_reply_matches_and_answers_handoff(monkeypatch) -> None:
+    """验证发送者与通知接收人一致时完成答复、标记事件完成并发送回执。"""
     import app.channels.service_intake as intake_mod
     from app.channels.service_intake import _try_handle_feishu_handoff_reply
 
@@ -1542,6 +1602,7 @@ def test_try_handle_feishu_handoff_reply_matches_and_answers_handoff(monkeypatch
             resumed: list[str] = []
 
             def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+                """替身 _apply_handoff_reply:写回答复并记录 handoff ID 与来源。"""
                 row.status = "answered"
                 row.human_reply = reply
                 row.answered_at = utc_now()
@@ -1597,6 +1658,7 @@ def test_try_handle_feishu_handoff_reply_rejects_non_assignee_sender(monkeypatch
 
 
 def test_try_handle_feishu_handoff_reply_returns_false_without_parent_id() -> None:
+    """验证入站消息缺少 parent_id 时不按引用回复处理。"""
     from app.channels.service_intake import _try_handle_feishu_handoff_reply
 
     engine = _test_engine()
@@ -1667,6 +1729,7 @@ def test_try_handle_feishu_handoff_reply_consumes_already_answered_notice(monkey
             applied: list[tuple] = []
 
             def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+                """替身 _apply_handoff_reply:只记录调用,用于证明未被触发。"""
                 applied.append((row.id, reply))
 
             import app.api.chat as chat_api
@@ -1733,6 +1796,7 @@ def test_try_handle_feishu_handoff_reply_consumes_reply_to_ack_message(monkeypat
             applied: list[tuple] = []
 
             def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+                """替身 _apply_handoff_reply:只记录调用,用于证明未被触发。"""
                 applied.append((row.id, reply))
 
             import app.api.chat as chat_api
@@ -1800,6 +1864,7 @@ def test_process_inbound_quote_reply_without_prefix_answers_handoff(monkeypatch)
             applied: list[tuple] = []
 
             def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+                """替身 _apply_handoff_reply:写回答复并记录 handoff、内容与来源。"""
                 row.status = "answered"
                 row.human_reply = reply
                 row.answered_at = utc_now()
@@ -1903,6 +1968,7 @@ def test_process_inbound_quote_reply_to_answered_notice_consumes_without_new_ses
             applied: list[tuple] = []
 
             def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+                """替身 _apply_handoff_reply:只记录调用,用于证明未被触发。"""
                 applied.append((row.id, reply))
 
             import app.api.chat as chat_api
@@ -1945,6 +2011,7 @@ def test_process_inbound_quote_reply_to_answered_notice_consumes_without_new_ses
 
 
 def test_parse_command_recognizes_handoff_reply_chinese() -> None:
+    """验证中文指令 /回复反馈 被解析为 handoff_reply 并提取回复内容。"""
     from app.channels.service_routing import parse_command
 
     cmd = parse_command("/回复反馈 已修复网络故障")
@@ -1954,6 +2021,7 @@ def test_parse_command_recognizes_handoff_reply_chinese() -> None:
 
 
 def test_parse_command_recognizes_handoff_reply_english() -> None:
+    """验证英文指令 /handoff_reply 被解析为 handoff_reply 并提取回复内容。"""
     from app.channels.service_routing import parse_command
 
     cmd = parse_command("/handoff_reply fixed the router")
@@ -1963,6 +2031,7 @@ def test_parse_command_recognizes_handoff_reply_english() -> None:
 
 
 def test_parse_command_handoff_reply_empty_query() -> None:
+    """验证不带参数的 /回复反馈 解析成功且内容为空。"""
     from app.channels.service_routing import parse_command
 
     cmd = parse_command("/回复反馈")
@@ -1972,6 +2041,7 @@ def test_parse_command_handoff_reply_empty_query() -> None:
 
 
 def test_parse_command_handoff_reply_with_leading_spaces() -> None:
+    """验证指令前后多余空格会被裁剪,回复内容保留。"""
     from app.channels.service_routing import parse_command
 
     cmd = parse_command("  /回复反馈   重启了服务器  ")
@@ -1981,6 +2051,7 @@ def test_parse_command_handoff_reply_with_leading_spaces() -> None:
 
 
 def test_run_handoff_reply_command_matches_by_identity(monkeypatch) -> None:
+    """验证按渠道身份匹配处理人的待处理 handoff,写回答复并发送回执。"""
     import app.channels.service_intake as intake_mod
     from app.channels.service_intake import _run_handoff_reply_command
     from app.channels.service_routing import ChannelCommand
@@ -2008,6 +2079,7 @@ def test_run_handoff_reply_command_matches_by_identity(monkeypatch) -> None:
         resumed: list[tuple[str, str]] = []
 
         def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+            """替身 _apply_handoff_reply:写回答复并记录 handoff ID 与来源。"""
             row.status = "answered"
             row.human_reply = reply
             row.answered_at = utc_now()
@@ -2076,6 +2148,7 @@ def test_run_handoff_reply_command_rejects_without_identity() -> None:
 
 
 def test_run_handoff_reply_command_no_pending_handoff_returns_error() -> None:
+    """验证没有待处理 handoff 时返回未找到提示。"""
     import app.channels.service_intake as intake_mod
     from app.channels.service_intake import _run_handoff_reply_command
     from app.channels.service_routing import ChannelCommand
@@ -2101,6 +2174,7 @@ def test_run_handoff_reply_command_no_pending_handoff_returns_error() -> None:
 
 
 def test_run_handoff_reply_command_empty_query_returns_usage() -> None:
+    """验证回复内容为空时返回用法提示。"""
     from app.channels.service_intake import _run_handoff_reply_command
     from app.channels.service_routing import ChannelCommand
 
@@ -2177,6 +2251,7 @@ def test_run_handoff_reply_command_rejects_multiple_pending(monkeypatch) -> None
         resumed: list[str] = []
 
         def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+            """替身 _apply_handoff_reply:写回答复并记录 handoff ID。"""
             row.status = "answered"
             row.human_reply = reply
             db_arg.add(row)
@@ -2198,6 +2273,7 @@ def test_run_handoff_reply_command_rejects_multiple_pending(monkeypatch) -> None
 
 
 def test_run_handoff_reply_command_rejects_unknown_parent_id() -> None:
+    """验证引用的消息与任何通知都不匹配时返回未找到且保持待处理。"""
     import app.channels.service_intake as intake_mod
     from app.channels.service_intake import _run_handoff_reply_command
     from app.channels.service_routing import ChannelCommand
@@ -2304,6 +2380,7 @@ def test_run_handoff_reply_command_matches_by_parent_id(monkeypatch) -> None:
         resumed: list[str] = []
 
         def fake_apply(db_arg, row, reply, *, answered_by_user_id, source="web"):
+            """替身 _apply_handoff_reply:写回答复并记录 handoff ID。"""
             row.status = "answered"
             row.human_reply = reply
             db_arg.add(row)
@@ -2330,6 +2407,7 @@ def test_run_handoff_reply_command_matches_by_parent_id(monkeypatch) -> None:
 
 
 def test_apply_handoff_reply_records_source_feishu() -> None:
+    """验证显式传入 feishu 来源时,答复事件载荷记录该来源。"""
     from app.api.chat import _apply_handoff_reply
     from app.db.models import AgentEvent
 
@@ -2360,6 +2438,7 @@ def test_apply_handoff_reply_records_source_feishu() -> None:
 
 
 def test_apply_handoff_reply_records_source_web_by_default() -> None:
+    """验证未传来源时默认按 web 写入答复事件载荷。"""
     from app.api.chat import _apply_handoff_reply
     from app.db.models import AgentEvent
 

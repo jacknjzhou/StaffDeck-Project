@@ -9,14 +9,18 @@ from sqlmodel import Field, SQLModel
 
 
 def utc_now() -> datetime:
+    """返回不带时区的 UTC 当前时间，供各表默认时间戳统一取值。"""
     return datetime.now(UTC).replace(tzinfo=None)
 
 
 def new_id(prefix: str) -> str:
+    """按前缀生成 16 位十六进制随机主键，降低跨表 ID 碰撞。"""
     return f"{prefix}_{uuid4().hex[:16]}"
 
 
 class Tenant(SQLModel, table=True):
+    """租户：多租户隔离的根实体，业务数据均按 tenant_id 归属。"""
+
     __tablename__ = "tenants"
 
     id: str = Field(primary_key=True)
@@ -26,6 +30,8 @@ class Tenant(SQLModel, table=True):
 
 
 class User(SQLModel, table=True):
+    """平台用户账号：租户内用户名唯一，含角色与口令摘要。"""
+
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "username", name="uq_user_tenant_username"),
@@ -58,7 +64,7 @@ class UserAvatar(SQLModel, table=True):
 
 
 class APIClient(SQLModel, table=True):
-    """Server-to-server identity for the versioned public API."""
+    """版本化公共 API 的服务端调用方身份：一个 client 可持有多个凭证。"""
 
     __tablename__ = "api_clients"
     __table_args__ = (
@@ -78,7 +84,7 @@ class APIClient(SQLModel, table=True):
 
 
 class APICredential(SQLModel, table=True):
-    """Hashed tenant or agent credential. Plaintext is returned exactly once."""
+    """租户或员工 API 凭证的哈希记录；明文仅在创建时返回一次。"""
 
     __tablename__ = "api_credentials"
     __table_args__ = (
@@ -102,6 +108,8 @@ class APICredential(SQLModel, table=True):
 
 
 class APIIdempotencyRecord(SQLModel, table=True):
+    """幂等记录：同一 (credential_id, method, path, idempotency_key) 复用首次响应。"""
+
     __tablename__ = "api_idempotency_records"
     __table_args__ = (
         UniqueConstraint(
@@ -126,6 +134,8 @@ class APIIdempotencyRecord(SQLModel, table=True):
 
 
 class APIJob(SQLModel, table=True):
+    """异步 API 作业：记录排队状态、进度、结果与执行租约。"""
+
     __tablename__ = "api_jobs"
 
     id: str = Field(default_factory=lambda: new_id("apijob"), primary_key=True)
@@ -152,6 +162,8 @@ class APIJob(SQLModel, table=True):
 
 
 class APIJobEvent(SQLModel, table=True):
+    """作业事件流水：job 内 sequence 唯一，供增量拉取与回放。"""
+
     __tablename__ = "api_job_events"
     __table_args__ = (
         UniqueConstraint("job_id", "sequence", name="uq_api_job_event_sequence"),
@@ -168,7 +180,7 @@ class APIJobEvent(SQLModel, table=True):
 
 
 class A2ATaskRun(SQLModel, table=True):
-    """Durable state for outbound A2A calls and locally served A2A tasks."""
+    """A2A 任务持久化状态，覆盖出站调用与本地承接的 A2A 任务。"""
 
     __tablename__ = "a2a_task_runs"
 
@@ -202,6 +214,8 @@ class A2ATaskRun(SQLModel, table=True):
 
 
 class A2ATaskEvent(SQLModel, table=True):
+    """A2A 任务事件流水：run 内 sequence 唯一，供回放与断点续拉。"""
+
     __tablename__ = "a2a_task_events"
     __table_args__ = (
         UniqueConstraint("run_id", "sequence", name="uq_a2a_task_event_sequence"),
@@ -218,7 +232,7 @@ class A2ATaskEvent(SQLModel, table=True):
 
 
 class ExternalBusinessTask(SQLModel, table=True):
-    """Durable state for an HTTP tool whose business work finishes asynchronously."""
+    """业务异步完成的 HTTP 工具调用状态：含回调、轮询与租约字段。"""
 
     __tablename__ = "external_business_tasks"
     __table_args__ = (
@@ -262,6 +276,8 @@ class ExternalBusinessTask(SQLModel, table=True):
 
 
 class ExternalBusinessTaskEvent(SQLModel, table=True):
+    """外部业务任务事件：task 内 event_id 唯一，用于回调幂等去重。"""
+
     __tablename__ = "external_business_task_events"
     __table_args__ = (
         UniqueConstraint("task_id", "event_id", name="uq_external_business_task_event"),
@@ -277,6 +293,8 @@ class ExternalBusinessTaskEvent(SQLModel, table=True):
 
 
 class WebhookEndpoint(SQLModel, table=True):
+    """Webhook 接收端配置：目标 URL、加密签名密钥与订阅事件。"""
+
     __tablename__ = "webhook_endpoints"
 
     id: str = Field(default_factory=lambda: new_id("webhook"), primary_key=True)
@@ -292,6 +310,8 @@ class WebhookEndpoint(SQLModel, table=True):
 
 
 class WebhookDelivery(SQLModel, table=True):
+    """Webhook 单次投递：endpoint 与 event 唯一，含重试计划与投递租约。"""
+
     __tablename__ = "webhook_deliveries"
     __table_args__ = (
         UniqueConstraint("endpoint_id", "event_id", name="uq_webhook_delivery_event"),
@@ -316,6 +336,8 @@ class WebhookDelivery(SQLModel, table=True):
 
 
 class ExternalSessionBinding(SQLModel, table=True):
+    """外部 API 会话映射：把 (credential_id, 外部会话) 固定到内部 ChatSession。"""
+
     __tablename__ = "external_session_bindings"
     __table_args__ = (
         UniqueConstraint(
@@ -337,6 +359,8 @@ class ExternalSessionBinding(SQLModel, table=True):
 
 
 class APISOPDraft(SQLModel, table=True):
+    """API 创建的 SOP 草稿：带版本与 etag，发布后转为正式版本。"""
+
     __tablename__ = "api_sop_drafts"
 
     id: str = Field(default_factory=lambda: new_id("sopdraft"), primary_key=True)
@@ -358,6 +382,8 @@ class APISOPDraft(SQLModel, table=True):
 
 
 class APIAuditLog(SQLModel, table=True):
+    """公共 API 审计日志：记录调用方、路径、状态码与耗时。"""
+
     __tablename__ = "api_audit_logs"
 
     id: str = Field(default_factory=lambda: new_id("apiaudit"), primary_key=True)
@@ -374,6 +400,8 @@ class APIAuditLog(SQLModel, table=True):
 
 
 class Skill(SQLModel, table=True):
+    """租户级技能定义：以 (tenant_id, skill_id) 唯一，content_json 存技能正文。"""
+
     __tablename__ = "skills"
     __table_args__ = (UniqueConstraint("tenant_id", "skill_id", name="uq_skill_tenant_skill_id"),)
 
@@ -391,6 +419,8 @@ class Skill(SQLModel, table=True):
 
 
 class SkillVersion(SQLModel, table=True):
+    """技能版本快照：同一技能每个 version 一行，供回滚与对比。"""
+
     __tablename__ = "skill_versions"
     __table_args__ = (UniqueConstraint("tenant_id", "skill_id", "version", name="uq_skill_version"),)
 
@@ -408,6 +438,8 @@ class SkillVersion(SQLModel, table=True):
 
 
 class AgentSkillBranch(SQLModel, table=True):
+    """员工技能分支：员工在源技能上的可编辑副本及同步状态。"""
+
     __tablename__ = "agent_skill_branches"
     __table_args__ = (
         UniqueConstraint("tenant_id", "agent_id", "skill_id", name="uq_agent_skill_branch"),
@@ -429,6 +461,8 @@ class AgentSkillBranch(SQLModel, table=True):
 
 
 class AgentSkillBranchVersion(SQLModel, table=True):
+    """员工技能分支版本：记录分支内每次改动的内容与摘要。"""
+
     __tablename__ = "agent_skill_branch_versions"
     __table_args__ = (
         UniqueConstraint("tenant_id", "agent_id", "skill_id", "version", name="uq_agent_skill_branch_version"),
@@ -450,6 +484,8 @@ class AgentSkillBranchVersion(SQLModel, table=True):
 
 
 class GeneralSkill(SQLModel, table=True):
+    """通用技能：租户内以 slug 唯一，含 SKILL.md 正文与运行配置。"""
+
     __tablename__ = "general_skills"
     __table_args__ = (UniqueConstraint("tenant_id", "slug", name="uq_general_skill_tenant_slug"),)
 
@@ -471,6 +507,8 @@ class GeneralSkill(SQLModel, table=True):
 
 
 class KnowledgeBase(SQLModel, table=True):
+    """知识库：租户内按名称唯一，是文档与概念的上层容器。"""
+
     __tablename__ = "knowledge_bases"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_knowledge_base_tenant_name"),)
 
@@ -486,6 +524,8 @@ class KnowledgeBase(SQLModel, table=True):
 
 
 class KnowledgeBaseVersion(SQLModel, table=True):
+    """知识库版本快照：同一知识库每个 version 一行。"""
+
     __tablename__ = "knowledge_base_versions"
     __table_args__ = (
         UniqueConstraint("tenant_id", "knowledge_base_id", "version", name="uq_knowledge_base_version"),
@@ -505,6 +545,8 @@ class KnowledgeBaseVersion(SQLModel, table=True):
 
 
 class AgentKnowledgeBranch(SQLModel, table=True):
+    """员工知识库分支：记录员工引用的知识库及其版本同步状态。"""
+
     __tablename__ = "agent_knowledge_branches"
     __table_args__ = (
         UniqueConstraint("tenant_id", "agent_id", "knowledge_base_id", name="uq_agent_knowledge_branch"),
@@ -524,6 +566,8 @@ class AgentKnowledgeBranch(SQLModel, table=True):
 
 
 class KnowledgeDocument(SQLModel, table=True):
+    """知识库文档：记录解析状态、分桶数与分块数等入库结果。"""
+
     __tablename__ = "knowledge_documents"
 
     id: str = Field(default_factory=lambda: new_id("kdoc"), primary_key=True)
@@ -543,6 +587,8 @@ class KnowledgeDocument(SQLModel, table=True):
 
 
 class KnowledgeBucket(SQLModel, table=True):
+    """知识桶：文档内的语义段落聚合，作为检索与分块的上层单位。"""
+
     __tablename__ = "knowledge_buckets"
 
     id: str = Field(default_factory=lambda: new_id("kbucket"), primary_key=True)
@@ -560,6 +606,8 @@ class KnowledgeBucket(SQLModel, table=True):
 
 
 class KnowledgeChunk(SQLModel, table=True):
+    """知识分块：最小检索单元，chunk_index 标识其在桶内的序号。"""
+
     __tablename__ = "knowledge_chunks"
 
     id: str = Field(default_factory=lambda: new_id("kchunk"), primary_key=True)
@@ -578,6 +626,8 @@ class KnowledgeChunk(SQLModel, table=True):
 
 
 class KnowledgeConcept(SQLModel, table=True):
+    """知识概念：由文档抽取的结构化条目，含正文、链接与引用。"""
+
     __tablename__ = "knowledge_concepts"
     __table_args__ = (
         UniqueConstraint(
@@ -608,6 +658,8 @@ class KnowledgeConcept(SQLModel, table=True):
 
 
 class KnowledgeDiscoverySuggestion(SQLModel, table=True):
+    """知识发现建议：入库后生成、待人工确认的概念或分桶候选。"""
+
     __tablename__ = "knowledge_discovery_suggestions"
 
     id: str = Field(default_factory=lambda: new_id("kdisc"), primary_key=True)
@@ -627,6 +679,8 @@ class KnowledgeDiscoverySuggestion(SQLModel, table=True):
 
 
 class KnowledgeIngestJob(SQLModel, table=True):
+    """知识入库作业：跟踪解析各阶段的 status、stage 与进度。"""
+
     __tablename__ = "knowledge_ingest_jobs"
 
     id: str = Field(default_factory=lambda: new_id("kjob"), primary_key=True)
@@ -647,6 +701,8 @@ class KnowledgeIngestJob(SQLModel, table=True):
 
 
 class ModelConfig(SQLModel, table=True):
+    """模型配置：供应商、协议、密钥密文与校验状态，供员工按角色绑定。"""
+
     __tablename__ = "model_configs"
 
     id: str = Field(default_factory=lambda: new_id("model"), primary_key=True)
@@ -681,6 +737,8 @@ class ModelConfig(SQLModel, table=True):
 
 
 class PersonaConfig(SQLModel, table=True):
+    """租户级人设配置：以 tenant_id 为主键，保存全局系统提示词。"""
+
     __tablename__ = "persona_configs"
 
     tenant_id: str = Field(primary_key=True)
@@ -690,6 +748,8 @@ class PersonaConfig(SQLModel, table=True):
 
 
 class UIConfig(SQLModel, table=True):
+    """租户级界面与上下文配置：轨迹开关、反思轮数、上下文预算与沙箱策略。"""
+
     __tablename__ = "ui_configs"
 
     tenant_id: str = Field(primary_key=True)
@@ -718,6 +778,8 @@ class UIConfig(SQLModel, table=True):
 
 
 class AgentProfile(SQLModel, table=True):
+    """数字员工档案：租户内名称唯一，含人设提示词与动作上限。"""
+
     __tablename__ = "agent_profiles"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_agent_profile_tenant_name"),)
 
@@ -735,6 +797,8 @@ class AgentProfile(SQLModel, table=True):
 
 
 class AgentUsage(SQLModel, table=True):
+    """员工使用关系：按 (tenant_id, user_id, agent_id) 唯一，记录用户常用员工。"""
+
     __tablename__ = "agent_usages"
     __table_args__ = (
         UniqueConstraint("tenant_id", "user_id", "agent_id", name="uq_agent_usage_user_agent"),
@@ -750,6 +814,8 @@ class AgentUsage(SQLModel, table=True):
 
 
 class AgentModelBinding(SQLModel, table=True):
+    """员工模型绑定：按 role 为员工指定不同用途的模型配置。"""
+
     __tablename__ = "agent_model_bindings"
     __table_args__ = (
         UniqueConstraint("tenant_id", "agent_id", "role", name="uq_agent_model_binding"),
@@ -765,6 +831,8 @@ class AgentModelBinding(SQLModel, table=True):
 
 
 class AgentResourceBinding(SQLModel, table=True):
+    """员工资源挂载：以 (资源类型, 资源 ID) 唯一，记录挂载状态。"""
+
     __tablename__ = "agent_resource_bindings"
     __table_args__ = (
         UniqueConstraint("tenant_id", "agent_id", "resource_type", "resource_id", name="uq_agent_resource"),
@@ -782,6 +850,8 @@ class AgentResourceBinding(SQLModel, table=True):
 
 
 class Tool(SQLModel, table=True):
+    """HTTP 工具定义：方法、URL、鉴权、输入输出 schema 与能力范围。"""
+
     __tablename__ = "tools"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_tool_tenant_name"),)
 
@@ -809,6 +879,8 @@ class Tool(SQLModel, table=True):
 
 
 class MCPServer(SQLModel, table=True):
+    """MCP 服务器配置：连接方式为 stdio/streamable_http/sse/builtin 之一。"""
+
     __tablename__ = "mcp_servers"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_mcp_server_tenant_name"),)
 
@@ -844,6 +916,8 @@ class MCPServer(SQLModel, table=True):
 
 
 class MockOrder(SQLModel, table=True):
+    """演示用订单数据：模拟退款、签收等业务字段，供示例工具查询。"""
+
     __tablename__ = "mock_orders"
 
     order_id: str = Field(primary_key=True)
@@ -864,6 +938,8 @@ class MockOrder(SQLModel, table=True):
 
 
 class ChatSession(SQLModel, table=True):
+    """会话：保存槽位、技能栈、待办与渠道/团队挂接等运行状态。"""
+
     __tablename__ = "sessions"
 
     id: str = Field(primary_key=True)
@@ -897,6 +973,8 @@ class ChatSession(SQLModel, table=True):
 
 
 class ChannelBinding(SQLModel, table=True):
+    """渠道接入绑定：凭证密文、账号稳定键与配置代次，供入站分发使用。"""
+
     __tablename__ = "channel_bindings"
 
     id: str = Field(default_factory=lambda: new_id("chan"), primary_key=True)
@@ -1037,6 +1115,8 @@ class ChannelBindCode(SQLModel, table=True):
 
 
 class ChannelIdentity(SQLModel, table=True):
+    """渠道身份映射：把 (渠道, 账号作用域, 外部用户) 绑定到平台用户。"""
+
     __tablename__ = "channel_identities"
     __table_args__ = (
         UniqueConstraint(
@@ -1061,6 +1141,8 @@ class ChannelIdentity(SQLModel, table=True):
 
 
 class ChannelInboundEvent(SQLModel, table=True):
+    """渠道入站事件：按 (binding_id, event_id) 去重，带处理状态与处理器租约。"""
+
     __tablename__ = "channel_inbound_events"
     __table_args__ = (
         UniqueConstraint("binding_id", "event_id", name="uq_channel_inbound_event_binding"),
@@ -1103,6 +1185,8 @@ class ChannelInboundEvent(SQLModel, table=True):
 
 
 class ChannelDelivery(SQLModel, table=True):
+    """渠道出站投递：按 idempotency_key 唯一，含重试计划、代次与投递状态。"""
+
     __tablename__ = "channel_deliveries"
 
     id: str = Field(default_factory=lambda: new_id("chdlv"), primary_key=True)
@@ -1138,6 +1222,8 @@ class ChannelDelivery(SQLModel, table=True):
 
 
 class HumanHandoffRequest(SQLModel, table=True):
+    """人工接管请求：转人工后记录提问、上下文摘要与处理人回复。"""
+
     __tablename__ = "human_handoff_requests"
 
     id: str = Field(default_factory=lambda: new_id("handoff"), primary_key=True)
@@ -1163,6 +1249,8 @@ class HumanHandoffRequest(SQLModel, table=True):
 
 
 class ScheduledTask(SQLModel, table=True):
+    """定时任务：保存调度规则、触发与并发策略及下次运行时间。"""
+
     __tablename__ = "scheduled_tasks"
 
     id: str = Field(default_factory=lambda: new_id("sched"), primary_key=True)
@@ -1194,6 +1282,8 @@ class ScheduledTask(SQLModel, table=True):
 
 
 class ScheduledTaskRun(SQLModel, table=True):
+    """定时任务单次运行：按 (任务, 计划时间) 唯一，记录状态与结果摘要。"""
+
     __tablename__ = "scheduled_task_runs"
     __table_args__ = (
         UniqueConstraint("scheduled_task_id", "scheduled_for", name="uq_scheduled_task_run_due_time"),
@@ -1217,7 +1307,7 @@ class ScheduledTaskRun(SQLModel, table=True):
 
 
 class HarnessAgentLoopRecord(SQLModel, table=True):
-    """Durable logical AgentLoop shared across Harness activations."""
+    """跨 Harness 激活复用的逻辑 AgentLoop 持久状态。"""
 
     __tablename__ = "harness_agent_loops"
     __table_args__ = (
@@ -1244,7 +1334,7 @@ class HarnessAgentLoopRecord(SQLModel, table=True):
 
 
 class HarnessTaskFrameRecord(SQLModel, table=True):
-    """Durable TaskFrame state for the isolated Harness v2 execution path."""
+    """Harness v2 隔离执行路径的 TaskFrame 持久状态。"""
 
     __tablename__ = "harness_task_frames"
     __table_args__ = (
@@ -1283,6 +1373,8 @@ class HarnessTaskFrameRecord(SQLModel, table=True):
 
 
 class HarnessRunRecord(SQLModel, table=True):
+    """单次 Harness 执行：绑定 TaskFrame，记录尝试序号、租约与结果。"""
+
     __tablename__ = "harness_runs"
 
     id: str = Field(default_factory=lambda: new_id("hrun"), primary_key=True)
@@ -1311,7 +1403,7 @@ class HarnessRunRecord(SQLModel, table=True):
 
 
 class HarnessTurnRecord(SQLModel, table=True):
-    """Exactly-once receipt for one client-addressable Harness turn."""
+    """单个可寻址 Harness 轮次的幂等回执，保证 exactly-once。"""
 
     __tablename__ = "harness_turns"
     __table_args__ = (
@@ -1347,7 +1439,7 @@ class HarnessTurnRecord(SQLModel, table=True):
 
 
 class HarnessSessionLeaseRecord(SQLModel, table=True):
-    """Cross-process execution fence for one Harness chat session."""
+    """单个 Harness 会话的跨进程执行租约，互斥同一会话的并发执行。"""
 
     __tablename__ = "harness_session_leases"
     __table_args__ = (
@@ -1368,6 +1460,8 @@ class HarnessSessionLeaseRecord(SQLModel, table=True):
 
 
 class HarnessInvocationRecord(SQLModel, table=True):
+    """工具调用记录：按 (run_id, call_id) 唯一，支持重放与审批缓存。"""
+
     __tablename__ = "harness_invocations"
     __table_args__ = (
         UniqueConstraint(
@@ -1404,6 +1498,8 @@ class HarnessInvocationRecord(SQLModel, table=True):
 
 
 class Message(SQLModel, table=True):
+    """会话消息：角色、正文与元数据，按创建时间排序。"""
+
     __tablename__ = "messages"
 
     id: str = Field(default_factory=lambda: new_id("msg"), primary_key=True)
@@ -1416,6 +1512,8 @@ class Message(SQLModel, table=True):
 
 
 class MessageFeedback(SQLModel, table=True):
+    """消息评价：按 (tenant, message, user) 唯一，含自动分析结论。"""
+
     __tablename__ = "message_feedback"
     __table_args__ = (UniqueConstraint("tenant_id", "message_id", "user_id", name="uq_feedback_message_user"),)
 
@@ -1437,6 +1535,8 @@ class MessageFeedback(SQLModel, table=True):
 
 
 class SkillFeedback(SQLModel, table=True):
+    """技能评价：按消息与用户唯一，关联到具体技能版本与步骤。"""
+
     __tablename__ = "skill_feedback"
     __table_args__ = (UniqueConstraint("tenant_id", "message_id", "user_id", name="uq_skill_feedback_message_user"),)
 
@@ -1454,6 +1554,8 @@ class SkillFeedback(SQLModel, table=True):
 
 
 class EvolutionProposal(SQLModel, table=True):
+    """进化提案：基于反馈或事件的改动假设、候选内容与评测结论。"""
+
     __tablename__ = "evolution_proposals"
 
     id: str = Field(default_factory=lambda: new_id("evo"), primary_key=True)
@@ -1487,6 +1589,8 @@ class EvolutionProposal(SQLModel, table=True):
 
 
 class AgentEvent(SQLModel, table=True):
+    """员工事件流水：记录会话内的思考、技能与工具轨迹载荷。"""
+
     __tablename__ = "agent_events"
 
     id: str = Field(default_factory=lambda: new_id("evt"), primary_key=True)
@@ -1498,6 +1602,8 @@ class AgentEvent(SQLModel, table=True):
 
 
 class MemoryRecord(SQLModel, table=True):
+    """长期记忆：按用户落库的对话或事实片段，含重要度。"""
+
     __tablename__ = "memories"
 
     id: str = Field(default_factory=lambda: new_id("mem"), primary_key=True)
@@ -1532,6 +1638,8 @@ class Team(SQLModel, table=True):
 
 
 class TeamMember(SQLModel, table=True):
+    """团队成员：role 为 leader 或 member，每团队至多一名 TL。"""
+
     __tablename__ = "team_members"
     __table_args__ = (UniqueConstraint("team_id", "agent_id", name="uq_team_member_agent"),)
 
@@ -1544,7 +1652,7 @@ class TeamMember(SQLModel, table=True):
 
 
 class TeamRun(SQLModel, table=True):
-    """One durable TL plan from delegation through final team synthesis."""
+    """一次完整的团队运行：从 TL 拆解派工到最终汇总的持久状态。"""
 
     __tablename__ = "team_runs"
     __table_args__ = (

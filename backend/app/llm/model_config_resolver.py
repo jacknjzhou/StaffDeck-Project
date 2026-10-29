@@ -18,6 +18,8 @@ from app.llm.model_protocols import (
 
 @dataclass(frozen=True)
 class ResolvedModelConfig:
+    """一次调用使用的模型配置快照：协议、密钥、采样参数与修订号均已固定。"""
+
     id: str
     tenant_id: str
     api_protocol: ModelApiProtocol
@@ -37,6 +39,11 @@ class ResolvedModelConfig:
 def resolve_model_config_for_runtime(
     db: Session, tenant_id: str, config_id: str
 ) -> ResolvedModelConfig:
+    """解析可用于运行时推理的模型配置，并校验启用状态与信任状态。
+
+    未启用返回 409 MODEL_CONFIG_DISABLED；未验证或指纹不一致返回
+    409 MODEL_CONFIG_VERIFICATION_REQUIRED。
+    """
     row = _current_model_config(db, tenant_id, config_id)
     if not row.enabled:
         raise HTTPException(status_code=409, detail="MODEL_CONFIG_DISABLED")
@@ -52,6 +59,10 @@ def resolve_model_config_for_runtime(
 def resolve_model_config_for_verification(
     db: Session, tenant_id: str, config_id: str, attempt_id: str
 ) -> ResolvedModelConfig:
+    """解析验证流程使用的模型配置，要求尝试 id 与进行中的验证一致。
+
+    不一致时返回 409 MODEL_VERIFICATION_STALE，防止旧验证结果被复用。
+    """
     row = _current_model_config(db, tenant_id, config_id)
     if (
         row.verification_attempt_id != attempt_id
@@ -63,6 +74,7 @@ def resolve_model_config_for_verification(
 
 
 def _current_model_config(db: Session, tenant_id: str, config_id: str) -> ModelConfig:
+    """按租户读取并刷新模型配置；不存在或跨租户时返回 404 MODEL_CONFIG_NOT_FOUND。"""
     row = db.get(ModelConfig, config_id)
     if row is None or row.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="MODEL_CONFIG_NOT_FOUND")
@@ -71,6 +83,7 @@ def _current_model_config(db: Session, tenant_id: str, config_id: str) -> ModelC
 
 
 def _protocol(row: ModelConfig) -> ModelApiProtocol:
+    """把库中存储的协议字符串转为枚举；不支持时返回 422 MODEL_PROTOCOL_UNSUPPORTED。"""
     try:
         return ModelApiProtocol(row.api_protocol)
     except ValueError as exc:
@@ -83,6 +96,7 @@ def _snapshot(
     *,
     purpose: Literal["runtime", "verification"],
 ) -> ResolvedModelConfig:
+    """按已解析协议生成不可变配置快照，冻结协议选项与 legacy extra_body。"""
     options = current_protocol_options(row.protocol_options_json, protocol)
     legacy_extra_body = copy.deepcopy(row.extra_body_json or {})
     return ResolvedModelConfig(
@@ -104,6 +118,7 @@ def _snapshot(
 
 
 def _fingerprint(row: ModelConfig) -> str:
+    """计算与安全修订相关的配置指纹，用于判断验证结果是否已过期。"""
     protocol = _protocol(row)
     return model_config_fingerprint(
         api_protocol=row.api_protocol,
@@ -116,7 +131,7 @@ def _fingerprint(row: ModelConfig) -> str:
 
 
 def _is_implicit_legacy_openai(row: ModelConfig, protocol: ModelApiProtocol) -> bool:
-    """Keep pre-protocol ORM/fixture rows runnable during the migration window."""
+    """识别迁移窗口内的旧版 OpenAI 配置行，使其无需重新验证仍可运行。"""
     return (
         protocol is ModelApiProtocol.OPENAI_CHAT_COMPLETIONS
         and row.trust_status == "unverified"
@@ -128,10 +143,12 @@ def _is_implicit_legacy_openai(row: ModelConfig, protocol: ModelApiProtocol) -> 
 
 
 def _freeze(value: dict[str, Any]) -> Mapping[str, Any]:
+    """深拷贝并冻结字典为只读映射，嵌套字典与列表同样不可变。"""
     return MappingProxyType({key: _freeze_value(item) for key, item in copy.deepcopy(value).items()})
 
 
 def _freeze_value(value: Any) -> Any:
+    """递归冻结字典与列表：字典转只读映射，列表转元组。"""
     if isinstance(value, dict):
         return _freeze(value)
     if isinstance(value, list):
@@ -142,6 +159,10 @@ def _freeze_value(value: Any) -> Any:
 def snapshot_model_config(
     model_config: Any, *, min_output_tokens: int = 0
 ) -> ResolvedModelConfig:
+    """把 ORM 行或配置对象转换为运行时快照，已是快照则原样返回。
+
+    min_output_tokens 仅为兼容旧调用方保留，实际被忽略：token 预算只由模型配置决定。
+    """
     # ``min_output_tokens`` is retained only for source compatibility with
     # older callers.  Model configuration is the sole token-budget authority.
     del min_output_tokens
@@ -178,6 +199,7 @@ def snapshot_model_config(
 
 
 def _snapshot_protocol_options(model_config: Any, protocol: ModelApiProtocol) -> dict[str, Any]:
+    """优先使用对象上的 protocol_options，否则从 protocol_options_json 归一化。"""
     direct = getattr(model_config, "protocol_options", {})
     if isinstance(direct, dict) and direct:
         return copy.deepcopy(direct)

@@ -16,6 +16,7 @@ from app.security.auth import create_access_token
 
 
 def _client(monkeypatch) -> tuple[TestClient, object, str]:
+    """建内存库并写入种子数据，覆盖 get_session 依赖与 public_api 的 engine，返回客户端、engine 与 admin 令牌。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -29,6 +30,7 @@ def _client(monkeypatch) -> tuple[TestClient, object, str]:
     app = create_public_api_app()
 
     def session_override():
+        """把应用的 get_session 依赖换成同一内存引擎上的会话，让测试复用数据。"""
         with Session(engine) as db:
             yield db
 
@@ -38,6 +40,7 @@ def _client(monkeypatch) -> tuple[TestClient, object, str]:
 
 
 def _key(client: TestClient, token: str, scopes: list[str]) -> str:
+    """通过公开 API 创建 api-client 及其凭据，返回带指定 scopes 的 api_key。"""
     created = client.post(
         "/api-clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -54,7 +57,7 @@ def _key(client: TestClient, token: str, scopes: list[str]) -> str:
 
 
 def _employee_with_kb(engine) -> tuple[str, str]:
-    """Return (agent_id, kb_id) for an employee that already sees a knowledge base."""
+    """返回种子数据中第一个能看见知识库的员工，结果为由 (agent_id, kb_id) 组成的元组。"""
     with Session(engine) as db:
         admin = db.exec(select(User).where(User.username == "admin")).first()
         for agent in db.exec(select(AgentProfile)).all():
@@ -67,10 +70,9 @@ def _employee_with_kb(engine) -> tuple[str, str]:
 
 
 def _agent_with_kb(engine) -> tuple[str, str]:
-    """Same as above, but pins the version's sync flag to True.
+    """在 _employee_with_kb 基础上把该版本显式标为 deepchat_sync_enabled=True。
 
-    Sync is opt-out now, so this changes nothing about listing; it merely
-    documents that an explicit True keeps the base listed.
+    同步是 opt-out，这不改变可见性，只是确认显式 True 仍可见。
     """
     agent_id, kb_id = _employee_with_kb(engine)
     with Session(engine) as db:
@@ -83,7 +85,7 @@ def _agent_with_kb(engine) -> tuple[str, str]:
 
 
 def _opt_out(engine, agent_id: str, kb_id: str) -> None:
-    """Explicitly exclude one knowledge base from deepchat sync."""
+    """把指定知识库版本显式标为 deepchat_sync_enabled=False，使其退出 deepchat 同步。"""
     with Session(engine) as db:
         admin = db.exec(select(User).where(User.username == "admin")).first()
         version = visible_knowledge_base_versions(db, admin.tenant_id, agent_id)[kb_id]
@@ -93,10 +95,12 @@ def _opt_out(engine, agent_id: str, kb_id: str) -> None:
 
 
 def _package_for(body: dict, kb_id: str) -> dict:
+    """从列表响应中取出指定 knowledgeBaseId 的知识包。"""
     return next(row for row in body["packages"] if row["knowledgeBaseId"] == kb_id)
 
 
 def test_packages_are_listed_without_an_opt_in(monkeypatch):
+    """验证未做任何显式开关操作时知识包同样可见，即同步默认开启。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -107,6 +111,7 @@ def test_packages_are_listed_without_an_opt_in(monkeypatch):
 
 
 def test_packages_list_and_export_round_trip(monkeypatch):
+    """验证列表、bundle 导出（zip 内含 index.md 与 log.md）与单概念下载三者一致可用。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -145,6 +150,7 @@ def test_packages_list_and_export_round_trip(monkeypatch):
 
 
 def test_packages_etag_returns_304(monkeypatch):
+    """验证带 If-None-Match 的重复请求返回 304，ETag 不变且响应体为空。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -161,6 +167,7 @@ def test_packages_etag_returns_304(monkeypatch):
 
 
 def test_concept_download_supports_conditional_requests(monkeypatch):
+    """验证单概念下载同样支持 If-None-Match 条件请求并返回 304。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -176,6 +183,7 @@ def test_concept_download_supports_conditional_requests(monkeypatch):
 
 
 def test_concept_metadata_lists_graph_fields(monkeypatch):
+    """验证概念元数据返回与列表清单一致的 type/title/links 字段，且不泄露 contentMd。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -202,6 +210,7 @@ def test_concept_metadata_lists_graph_fields(monkeypatch):
 
 
 def test_concept_metadata_respects_opt_out(monkeypatch):
+    """验证显式 opt-out 后概念元数据接口返回 404 KNOWLEDGE_PACKAGE_NOT_FOUND。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -216,6 +225,7 @@ def test_concept_metadata_respects_opt_out(monkeypatch):
 
 
 def test_concept_metadata_unknown_package_is_404(monkeypatch):
+    """验证知识库 id 不存在时概念元数据接口返回 404 KNOWLEDGE_PACKAGE_NOT_FOUND。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -229,6 +239,7 @@ def test_concept_metadata_unknown_package_is_404(monkeypatch):
 
 
 def test_explicit_opt_out_hides_the_package(monkeypatch):
+    """验证显式 opt-out 后该知识库从包列表消失，bundle 导出返回 404。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -246,6 +257,7 @@ def test_explicit_opt_out_hides_the_package(monkeypatch):
 
 
 def test_unknown_agent_is_404(monkeypatch):
+    """验证未知员工的知识包与知识库目录接口都返回 404 AGENT_NOT_FOUND。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -258,6 +270,7 @@ def test_unknown_agent_is_404(monkeypatch):
 
 
 def test_unknown_concept_is_404(monkeypatch):
+    """验证不存在的概念下载返回 404 CONCEPT_NOT_FOUND。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -272,6 +285,7 @@ def test_unknown_concept_is_404(monkeypatch):
 
 
 def test_downloads_are_audited(monkeypatch):
+    """验证概念下载会写入 resource_type 为 knowledge_concept、路径含 :download 的审计日志。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -295,6 +309,7 @@ def test_downloads_are_audited(monkeypatch):
 
 
 def test_bundle_export_is_audited(monkeypatch):
+    """验证 bundle 导出会写入 resource_type 为 knowledge_base、resource_id 为知识库 id 的审计日志。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -314,6 +329,7 @@ def test_bundle_export_is_audited(monkeypatch):
 
 
 def test_knowledge_base_catalog_lists_the_console_stats(monkeypatch):
+    """验证知识库目录返回 name/version/documentCount/chunkCount/description 等控制台统计字段。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -332,6 +348,7 @@ def test_knowledge_base_catalog_lists_the_console_stats(monkeypatch):
 
 
 def test_catalog_ignores_the_sync_opt_out_flag(monkeypatch):
+    """验证知识库目录不受 opt-out 影响，而知识包列表会排除被 opt-out 的库。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["agents:read"])
     auth = {"Authorization": f"Bearer {key}"}
@@ -346,6 +363,7 @@ def test_catalog_ignores_the_sync_opt_out_flag(monkeypatch):
 
 
 def test_requires_agents_read_scope(monkeypatch):
+    """验证缺少 agents:read scope 时知识包与知识库目录接口都返回 403 INSUFFICIENT_SCOPE。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["runs:read"])
     response = client.get(

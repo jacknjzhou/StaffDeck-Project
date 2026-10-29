@@ -49,7 +49,12 @@ SYNC_FLAG = "deepchat_sync_enabled"
 def build_employee(
     principal: PublicPrincipal, agent: AgentProfile, db: Session
 ) -> dict[str, Any]:
-    """Build one deepchat-compatible employee, clamped to the contract limits."""
+    """把 AgentProfile 组装成 DeepChat 可消费的员工对象。
+
+    各字段按 contract 中的长度与数量上限裁剪，超限项汇总进 warnings；执行模式非法时
+    回落 local；知识库仅排除 deepchat_sync_enabled 显式为 False 的版本。最后计算
+    configHash 并校验 id/name/role/systemPrompt 非空。
+    """
     warnings: list[str] = []
     metadata = dict(agent.metadata_json or {})
     mode = _mode(metadata.get("execution_mode"), warnings)
@@ -140,6 +145,10 @@ def build_employee_list(
     agents: list[AgentProfile],
     db: Session,
 ) -> dict[str, Any]:
+    """批量构建员工对象，按名称与 id 排序后汇总为列表。
+
+    同时基于各员工 id 与 configHash 生成形如 v1:<12 位摘要> 的 configVersion。
+    """
     employees = [build_employee(principal, agent, db) for agent in agents]
     employees.sort(key=lambda item: (item["name"], item["id"]))
     version_seed = json.dumps(
@@ -151,7 +160,11 @@ def build_employee_list(
 
 
 def config_hash(employee: dict[str, Any]) -> str:
-    """Digest of contract content only: warnings and updatedAt must not churn it."""
+    """计算员工配置的稳定摘要，带 sha256: 前缀并截取 16 位。
+
+    只对契约内容取摘要，排除 configHash、warnings 与 updatedAt，避免提示信息或
+    时间戳变化引起摘要抖动。
+    """
     content = {
         key: value
         for key, value in employee.items()
@@ -162,13 +175,21 @@ def config_hash(employee: dict[str, Any]) -> str:
 
 
 def validate_required_fields(employee: dict[str, Any]) -> None:
-    """Fail loudly on an empty required string instead of shipping an unparseable set."""
+    """校验 id、name、role、systemPrompt 均非空，为空时抛 ValueError。
+
+    这样在构建阶段即报错，而不是下发一份客户端无法解析的配置。
+    """
     for key in ("id", "name", "role", "systemPrompt"):
         if not str(employee.get(key) or "").strip():
             raise ValueError(f"digital employee {employee.get('id')!r} has an empty {key}")
 
 
 def _mode(raw: Any, warnings: list[str]) -> str:
+    """归一化执行模式。
+
+    空值取默认 local，命中 local/remote/hybrid 原样返回，未知取值则追加警告并
+    回落 local。
+    """
     value = str(raw or "").strip().lower()
     if not value:
         return DEFAULT_MODE
@@ -179,6 +200,10 @@ def _mode(raw: Any, warnings: list[str]) -> str:
 
 
 def _text(value: Any, *, fallback: str, limit: int, allow_empty: bool = False) -> str:
+    """去除首尾空白后按上限裁剪文本。
+
+    文本为空时：allow_empty 为真返回空串，否则返回裁剪后的 fallback。
+    """
     text = str(value or "").strip()
     if not text:
         return "" if allow_empty else clamp_text(fallback, limit)[0]
@@ -187,11 +212,16 @@ def _text(value: Any, *, fallback: str, limit: int, allow_empty: bool = False) -
 
 
 def _slug(row: Any) -> str:
+    """取行对象的 slug，缺失时回退到其 id。"""
     slug = str(getattr(row, "slug", "") or "").strip()
     return slug or str(getattr(row, "id", "") or "")
 
 
 def _capabilities(metadata: dict[str, Any]) -> list[str]:
+    """按 expertise_tags、work_modes、work_styles 顺序合并能力标签并去重。
+
+    空串与超出单标签长度上限的取值会被丢弃，结果按出现顺序保留。
+    """
     seen: list[str] = []
     for key in ("expertise_tags", "work_modes", "work_styles"):
         for item in metadata.get(key) or []:
@@ -203,7 +233,10 @@ def _capabilities(metadata: dict[str, Any]) -> list[str]:
 
 
 def _avatar(metadata: dict[str, Any]) -> str | None:
-    """Only a real URL is distributable; preset keys are an admin-side detail."""
+    """读取 metadata 中的 avatar_url 并按上限裁剪后下发。
+
+    仅真实 URL 对外分发，预设头像 key 属于管理端细节，不在此返回。
+    """
     url = str(metadata.get("avatar_url") or "").strip()
     if not url:
         return None
@@ -212,6 +245,7 @@ def _avatar(metadata: dict[str, Any]) -> str | None:
 
 
 def _greeting(metadata: dict[str, Any]) -> str | None:
+    """读取 metadata 中的 greeting，为空或裁剪后为空时返回 None。"""
     text = str(metadata.get("greeting") or "").strip()
     if not text:
         return None
@@ -226,6 +260,11 @@ def _system_prompt(
     description: str,
     warnings: list[str],
 ) -> str:
+    """确定下发给 DeepChat 的系统提示词。
+
+    优先使用 agent 的人设提示词；为空时按角色、名称与描述生成默认文案。超出契约上限
+    会截断并追加警告，裁剪后仍为空则退回最小角色说明。
+    """
     prompt = str(agent.persona_prompt or "").strip()
     if not prompt:
         prompt = f"# 角色：{role}\n你是「{name}」，一名专业的{role}数字员工。"
@@ -238,7 +277,10 @@ def _system_prompt(
 
 
 def _tool_names(db: Session, principal: PublicPrincipal, agent: AgentProfile) -> list[str]:
-    """Only namespaced names leave the server; tool URLs and credentials never do."""
+    """返回该员工可见且已启用工具的命名空间名称，去重后排序。
+
+    只有名称会离开服务端，工具 URL 与凭据一律不下发。
+    """
     names = [
         namespaced_tool_name(row.name)
         for row in visible_tool_rows(db, principal.tenant_id, agent.id, include_inactive=False)
@@ -250,7 +292,11 @@ def _tool_names(db: Session, principal: PublicPrincipal, agent: AgentProfile) ->
 def _knowledge_base_ids(
     db: Session, principal: PublicPrincipal, agent: AgentProfile
 ) -> list[str]:
-    """Sync is opt-out per knowledge base version; only explicit False is excluded."""
+    """列出可同步给该员工的知识库 id 并去重排序。
+
+    同步默认开启（opt-out）：只有版本 metadata 中 deepchat_sync_enabled 显式为 False
+    的知识库才会被排除。
+    """
     ids: list[str] = []
     for kb_id, version in visible_knowledge_base_versions(
         db, principal.tenant_id, agent.id
@@ -263,6 +309,7 @@ def _knowledge_base_ids(
 
 
 def _latest_update(agent: AgentProfile, general_skills: list[Any]) -> datetime:
+    """取员工自身与全部通用技能中最近的 updated_at；均无有效时间时回退员工时间。"""
     stamps = [agent.updated_at]
     stamps.extend(getattr(row, "updated_at", None) for row in general_skills)
     present = [stamp for stamp in stamps if isinstance(stamp, datetime)]
@@ -270,4 +317,5 @@ def _latest_update(agent: AgentProfile, general_skills: list[Any]) -> datetime:
 
 
 def _iso(value: datetime) -> str:
+    """把时间转成秒级精度、以 Z 结尾的 ISO 8601 字符串。"""
     return value.replace(microsecond=0).isoformat() + "Z"

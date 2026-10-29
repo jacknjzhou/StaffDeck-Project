@@ -13,6 +13,7 @@ from app.security.auth import create_access_token
 
 
 def _engine():
+    """创建建好全部表的 SQLite 内存引擎,让渠道接口测试互不干扰。"""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -23,10 +24,12 @@ def _engine():
 
 
 def _client(engine) -> TestClient:
+    """挂载渠道路由并用测试引擎覆盖 get_session,返回可发请求的客户端。"""
     app = FastAPI()
     app.include_router(channels_api.router)
 
     def override_session():
+        """按请求提供绑定到测试引擎的会话,避免使用生产数据库。"""
         with Session(engine) as db:
             yield db
 
@@ -35,6 +38,7 @@ def _client(engine) -> TestClient:
 
 
 def _seed(engine) -> User:
+    """写入租户、所有者与员工基础数据,返回已脱离会话的属主用户用于签发令牌。"""
     with Session(engine) as db:
         db.add(Tenant(id="tenant_a", name="A"))
         owner = User(
@@ -59,10 +63,12 @@ def _seed(engine) -> User:
 
 
 def _auth(user: User) -> dict[str, str]:
+    """为该用户签发访问令牌并组装成 Authorization 请求头。"""
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
 def test_feishu_binding_credentials_activate_without_exposing_secret(monkeypatch) -> None:
+    """验证提交飞书凭据后绑定被激活且仅落密文,响应中不回显 app_secret。"""
     engine = _engine()
     owner = _seed(engine)
     client = _client(engine)
@@ -102,6 +108,7 @@ def test_feishu_binding_credentials_activate_without_exposing_secret(monkeypatch
 
 
 def test_feishu_app_id_is_immutable_after_activation(monkeypatch) -> None:
+    """验证绑定激活后更换 app_id 会被拒绝,且不会触发凭据校验调用。"""
     engine = _engine()
     owner = _seed(engine)
     with Session(engine) as db:
@@ -120,6 +127,7 @@ def test_feishu_app_id_is_immutable_after_activation(monkeypatch) -> None:
     called = False
 
     def validate(_app_id, _secret):
+        """记录校验函数是否被调用,用于断言早退拒绝发生在校验之前。"""
         nonlocal called
         called = True
         return {"bot_open_id": "ou_bot", "bot_name": "Bot"}
@@ -135,6 +143,7 @@ def test_feishu_app_id_is_immutable_after_activation(monkeypatch) -> None:
 
 
 def test_channel_meta_exposes_feishu_secret_field() -> None:
+    """验证渠道元数据把 app_secret 标记为敏感字段,app_id 保持明文展示。"""
     engine = _engine()
     owner = _seed(engine)
     response = _client(engine).get(

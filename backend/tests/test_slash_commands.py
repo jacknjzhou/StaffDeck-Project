@@ -20,6 +20,7 @@ from app.db.models import ChatSession, Skill
 
 
 def _sop(skill_id: str = "refund_v1", name: str = "退款流程") -> Skill:
+    """构造已发布的 SOP 技能，为斜杠命令用例提供可解析的目标。"""
     return Skill(
         tenant_id="tenant-demo",
         skill_id=skill_id,
@@ -33,6 +34,7 @@ def _sop(skill_id: str = "refund_v1", name: str = "退款流程") -> Skill:
 
 
 def test_parse_slash_command_supports_all_resource_kinds() -> None:
+    """验证 /skill、/工具、/sop 三种写法都能解析出类型、目标与提示词，普通文本返回 None。"""
     skill = parse_slash_command("/skill weather 查询北京天气")
     tool = parse_slash_command("/工具:price_query 查询 A3")
     sop = parse_slash_command("/sop refund_v1")
@@ -45,6 +47,7 @@ def test_parse_slash_command_supports_all_resource_kinds() -> None:
 
 
 def test_parse_slash_command_rejects_missing_target() -> None:
+    """验证缺少目标资源时抛出 SLASH_COMMAND_TARGET_REQUIRED。"""
     with pytest.raises(SlashCommandError) as exc_info:
         parse_slash_command("/skill")
 
@@ -52,6 +55,7 @@ def test_parse_slash_command_rejects_missing_target() -> None:
 
 
 def test_build_slash_turn_plan_bypasses_intent_matching_for_sop() -> None:
+    """验证显式 /sop 计划置信度为 1，直接锁定技能起始节点并携带需求文本。"""
     session = ChatSession(
         id="session-1",
         tenant_id="tenant-demo",
@@ -71,6 +75,7 @@ def test_build_slash_turn_plan_bypasses_intent_matching_for_sop() -> None:
 
 
 def test_build_slash_turn_plan_resumes_matching_pending_sop() -> None:
+    """验证存在同技能待处理任务时切换到该任务，并沿用其当前步骤。"""
     session = ChatSession(
         id="session-1",
         tenant_id="tenant-demo",
@@ -94,6 +99,7 @@ def test_build_slash_turn_plan_resumes_matching_pending_sop() -> None:
 
 
 def test_forced_skill_is_expanded_and_required() -> None:
+    """验证强制技能被展开为必选能力，同时清空投影目录以限制可选范围。"""
     descriptor = CapabilityDescriptor(
         capability_id="genskill-weather",
         name="general_skill.weather",
@@ -132,6 +138,7 @@ def test_forced_skill_is_expanded_and_required() -> None:
 
 
 def test_slash_catalog_only_exposes_authorized_manifest_capabilities() -> None:
+    """验证斜杠目录只暴露已授权能力：SOP 在前、工具随后，且使用展示名。"""
     manifest = CapabilityManifest(
         available=[
             CapabilityDescriptor(

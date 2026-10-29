@@ -60,10 +60,11 @@ SOP_SNAPSHOT_METADATA_KEY = "_sop_snapshot"
 
 
 class ScheduledTaskAgentUnavailable(RuntimeError):
-    pass
+    """绑定员工下线或不可用时抛出,调用方据此暂停任务而非无限重试。"""
 
 
 class _LLMScheduledTaskDraft(BaseModel):
+    """LLM 解析自动任务草案的结构化输出契约。"""
     should_create: bool = False
     title: str = ""
     prompt: str = ""
@@ -107,6 +108,7 @@ SCHEDULE_DRAFT_PROMPT = """
 
 
 def scheduled_task_read(row: ScheduledTask) -> ScheduledTaskRead:
+    """把 ScheduledTask 行转成对外响应模型,并隐藏服务端内部 SOP 快照。"""
     metadata = dict(row.metadata_json or {})
     metadata.pop(SOP_SNAPSHOT_METADATA_KEY, None)
     return ScheduledTaskRead(
@@ -138,6 +140,7 @@ def scheduled_task_read(row: ScheduledTask) -> ScheduledTaskRead:
 
 
 def scheduled_task_run_read(row: ScheduledTaskRun, task: ScheduledTask | None = None) -> ScheduledTaskRunRead:
+    """把执行记录转成响应模型;传入任务时补充标题与状态便于列表展示。"""
     return ScheduledTaskRunRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -164,6 +167,10 @@ def create_scheduled_task(
     request: ScheduledTaskCreateRequest,
     current_user: User,
 ) -> ScheduledTask:
+    """校验租户与员工权限后创建自动任务,并算出首次执行时间。
+
+    调度配置统一经 normalize_schedule 归一化;非 active 状态不排下一次执行。
+    """
     ensure_tenant(db, request.tenant_id)
     _ensure_agent_access(db, request.tenant_id, request.agent_id, current_user)
     schedule = normalize_schedule(request.schedule_type, request.schedule, request.timezone)
@@ -210,6 +217,10 @@ def update_scheduled_task(
     request: ScheduledTaskUpdateRequest,
     current_user: User,
 ) -> ScheduledTask:
+    """按请求增量更新任务字段,并重算下一次执行时间。
+
+    改员工或改 SOP 时重建版本快照;状态不是 active 时清空 next_run_at。
+    """
     _ensure_task_access(row, current_user)
     agent_changed = False
     if request.agent_id is not None and request.agent_id != row.agent_id:
@@ -273,6 +284,10 @@ def detect_scheduled_task_draft(
     source_session_id: str | None = None,
     timezone: str | None = None,
 ) -> ScheduledTaskDraftRead | None:
+    """用 LLM 判断用户消息是否要建自动任务,返回可编辑草案;不适用时返回 None。
+
+    员工须为本租户下启用中的非总控员工,否则直接判定不适用。
+    """
     ensure_tenant(db, tenant_id)
     agent = db.get(AgentProfile, agent_id)
     if not agent or agent.tenant_id != tenant_id or agent.is_overall or agent.status != "active":
@@ -310,6 +325,10 @@ def detect_scheduled_task_draft(
 
 
 def due_scheduled_tasks(db: Session, now: datetime | None = None, limit: int = 10) -> list[ScheduledTask]:
+    """领取本轮到期任务:先收尾已过 end_at 的,再按租约抢占到期的 active 任务。
+
+    返回成功加上租约的任务;多 worker 靠 lease_until 条件更新互斥。
+    """
     now = now or utc_now()
     db.exec(
         update(ScheduledTask)
@@ -375,6 +394,7 @@ def execute_scheduled_task(
     scheduled_for: datetime | None = None,
     manual: bool = False,
 ) -> ScheduledTaskRun:
+    """同步执行一次任务:先按 misfire 策略判断跳过,再准备 run 并跑完整回合。"""
     scheduled_for = scheduled_for or task.next_run_at or utc_now()
     skipped = _skip_misfired_run(db, task, scheduled_for, manual)
     if skipped is not None:
@@ -392,6 +412,7 @@ def start_scheduled_task_async(
     scheduled_for: datetime | None = None,
     manual: bool = False,
 ) -> ScheduledTaskRun:
+    """异步执行入口:准备好 run 后交给后台线程,立即返回执行记录供前端轮询。"""
     scheduled_for = scheduled_for or task.next_run_at or utc_now()
     skipped = _skip_misfired_run(db, task, scheduled_for, manual)
     if skipped is not None:
@@ -412,6 +433,10 @@ def _prepare_scheduled_task_run(
     scheduled_for: datetime,
     manual: bool,
 ) -> ScheduledTaskRun:
+    """为本次计划时间准备执行记录与独立会话,返回可执行的 run。
+
+    同一计划时刻的 run 唯一,重复触发复用既有记录;forbid 策略下已有运行时记为 skipped。
+    """
     existing = db.exec(
         select(ScheduledTaskRun).where(
             ScheduledTaskRun.scheduled_task_id == task.id,
@@ -486,6 +511,10 @@ def _skip_misfired_run(
     scheduled_for: datetime,
     manual: bool,
 ) -> ScheduledTaskRun | None:
+    """按 misfire_policy=skip 判定迟到执行:超出补偿窗口则记 skipped 并推进计划。
+
+    手动触发不跳过;同一计划时刻已有 run 时直接返回它。
+    """
     if manual or task.misfire_policy != "skip":
         return None
     if scheduled_for >= utc_now() - timedelta(seconds=MISFIRE_GRACE_SECONDS):
@@ -512,6 +541,7 @@ def _skip_misfired_run(
 
 
 def _execute_prepared_scheduled_task_in_background(task_id: str, run_id: str, manual: bool) -> None:
+    """后台线程入口:自建 Session 重载任务与 run 后执行,避免跨线程复用会话。"""
     with Session(engine) as db:
         task = db.get(ScheduledTask, task_id)
         run = db.get(ScheduledTaskRun, run_id)
@@ -527,6 +557,10 @@ def _execute_prepared_scheduled_task(
     *,
     manual: bool,
 ) -> ScheduledTaskRun:
+    """跑一次自动任务回合,并把 Harness 终态写回 run 与任务的调度计划。
+
+    HarnessTurnConflict 记为 retrying 并稍后重试;其他异常记 failed;员工不可用时把任务置为 paused。
+    """
     try:
         if not run.session_id:
             raise RuntimeError("自动任务缺少独立会话")
@@ -593,6 +627,7 @@ def _execute_prepared_scheduled_task(
 
 
 def _ensure_scheduled_execution_agent(db: Session, task: ScheduledTask) -> AgentProfile:
+    """确认任务绑定员工仍可用,否则抛 ScheduledTaskAgentUnavailable。"""
     agent = db.get(AgentProfile, task.agent_id)
     if (
         agent is None
@@ -611,7 +646,11 @@ def _scheduled_harness_outcome(
     run: ScheduledTaskRun,
     result: ChatTurnResponse,
 ) -> dict[str, Any]:
-    """Resolve one scheduled run from durable Harness state, never reply text."""
+    """依据 Harness v2 持久化状态判定本次执行结果,不采信回复文本。
+
+    TaskFrame 全完成才算 succeeded;需补充输入、失败与未完成分别映射为
+    needs_input、failed、incomplete,并附可选轨迹。
+    """
 
     receipt = db.exec(
         select(HarnessTurnRecord).where(
@@ -741,6 +780,7 @@ def _scheduled_harness_outcome(
 
 
 def _scheduled_frame_payload(frame: HarnessTaskFrameRecord) -> dict[str, Any]:
+    """把 TaskFrame 记录裁剪成轨迹用字典,结果状态优先取 result_json 中的值。"""
     result = frame.result_json if isinstance(frame.result_json, dict) else {}
     result_status = str(result.get("status") or "").strip()
     effective_status = result_status or frame.status
@@ -759,6 +799,7 @@ def _scheduled_frame_payload(frame: HarnessTaskFrameRecord) -> dict[str, Any]:
 def _scheduled_sop_specific_capabilities(
     runs: list[HarnessRunRecord],
 ) -> list[dict[str, str]]:
+    """从各 Harness run 的能力快照收集 SOP 专属能力,含按知识库粒度授权的条目。"""
     capabilities: dict[tuple[str, str, str], dict[str, str]] = {}
     for harness_run in runs:
         snapshot = (
@@ -801,6 +842,7 @@ def _record_scheduled_task_stream_event(
     seq: int,
     item: dict[str, Any],
 ) -> None:
+    """把一条流式事件补全 turn 标识后落库,便于前端按自动任务回放执行过程。"""
     event = str(item.get("event") or "")
     data = item.get("data")
     if not isinstance(data, dict):
@@ -847,16 +889,19 @@ def _record_scheduled_task_stream_event(
 
 
 def automatic_task_message(task: ScheduledTask) -> str:
+    """返回发给员工的正文:优先任务描述,为空时退化为标题。"""
     return task.prompt.strip() or task.title
 
 
 def _scheduled_task_sop_id(task: ScheduledTask) -> str | None:
+    """取任务元数据里绑定的 SOP ID;未配置时返回 None。"""
     metadata = task.metadata_json if isinstance(task.metadata_json, dict) else {}
     value = str(metadata.get("sop_id") or "").strip()
     return value or None
 
 
 def _scheduled_task_sop_snapshot(task: ScheduledTask) -> dict[str, Any] | None:
+    """仅在 pinned 版本策略下返回服务端保存的 SOP 快照。"""
     metadata = task.metadata_json if isinstance(task.metadata_json, dict) else {}
     if str(metadata.get("sop_version_policy") or "latest") != "pinned":
         return None
@@ -872,6 +917,10 @@ def _prepare_scheduled_task_sop_metadata(
     *,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """整理任务元数据里的 SOP 绑定,并在 pinned 策略下生成或复用版本快照。
+
+    快照只由服务端产出,入参中的同名键一律丢弃;SOP 不可用或嵌套展开失败时抛 400。
+    """
     metadata = dict(incoming or {})
     # Internal snapshots are always produced by the server, never trusted from
     # an API payload.
@@ -929,6 +978,10 @@ def _prepare_scheduled_task_sop_metadata(
 
 
 def compute_next_run_at(task: ScheduledTask, after: datetime | None = None) -> datetime | None:
+    """按调度类型算 after 之后的下一个执行时刻(UTC naive),无后续时间返回 None。
+
+    once 只返回仍晚于 after 的固定时刻;daily/weekly/monthly 都在任务时区里推算。
+    """
     if task.schedule_type == "once":
         run_at = parse_user_datetime(str((task.schedule_json or {}).get("run_at") or ""), task.timezone)
         return run_at if run_at and run_at > (after or utc_now()) else None
@@ -972,6 +1025,10 @@ def compute_next_run_at(task: ScheduledTask, after: datetime | None = None) -> d
 
 
 def normalize_schedule(schedule_type: str, schedule: dict[str, Any], timezone: str) -> dict[str, Any]:
+    """校验并归一化调度配置,返回可直接展示与落库的标准字段。
+
+    缺省时间补 09:00;一次性任务缺执行时间或调度类型不支持时抛 400。
+    """
     schedule_type = _normalize_schedule_type(schedule_type)
     _tz(timezone)
     raw = schedule or {}
@@ -997,6 +1054,7 @@ def normalize_schedule(schedule_type: str, schedule: dict[str, Any], timezone: s
 
 
 def build_rrule(schedule_type: str, schedule: dict[str, Any]) -> str | None:
+    """按调度配置生成等价 RRULE 字符串;一次性任务返回 None。"""
     time_text = str(schedule.get("time") or DEFAULT_TASK_TIME)
     hour, minute = time_text.split(":", 1)
     if schedule_type == "once":
@@ -1015,6 +1073,7 @@ def build_rrule(schedule_type: str, schedule: dict[str, Any]) -> str | None:
 
 
 def parse_user_datetime(value: str, timezone: str = DEFAULT_TIMEZONE) -> datetime | None:
+    """解析 ISO 时间串,无时区时按给定时区解释并统一返回 UTC naive;非法输入返回 None。"""
     text = (value or "").strip()
     if not text:
         return None
@@ -1029,6 +1088,7 @@ def parse_user_datetime(value: str, timezone: str = DEFAULT_TIMEZONE) -> datetim
 
 
 def _create_run(db: Session, task: ScheduledTask, scheduled_for: datetime, status: str) -> ScheduledTaskRun:
+    """构造执行记录并加入会话,由调用方负责提交。"""
     run = ScheduledTaskRun(
         tenant_id=task.tenant_id,
         scheduled_task_id=task.id,
@@ -1043,6 +1103,10 @@ def _create_run(db: Session, task: ScheduledTask, scheduled_for: datetime, statu
 
 
 def _finish_task_schedule(db: Session, task: ScheduledTask, scheduled_for: datetime, status: str, manual: bool) -> None:
+    """收尾调度:记录本轮结果并算出下一次执行时间,必要时把任务置为 completed。
+
+    手动触发不推进计划;一次性任务未成功时改为 paused 以便继续重试。
+    """
     now = utc_now()
     task.last_run_at = now
     task.last_status = status
@@ -1074,6 +1138,7 @@ def _detect_with_llm(
     message: str,
     timezone: str,
 ) -> _LLMScheduledTaskDraft | None:
+    """调用 LLM 把用户消息解析成任务草案;无可用模型或解析失败时返回 None。"""
     model_config = model_for_agent(db, tenant_id, agent_id, "router") or model_for_agent(db, tenant_id, agent_id)
     if not model_config:
         return None
@@ -1093,22 +1158,26 @@ def _detect_with_llm(
 
 
 def _execution_goal_from_message(message: str) -> str:
+    """取去空白后的用户消息,作为未指定描述时的兜底执行目标。"""
     return message.strip()
 
 
 def _compact_title(message: str) -> str:
+    """把消息压成一行短标题:折叠空白、去尾部标点并截断到 28 字,为空时兜底。"""
     text = _execution_goal_from_message(message)
     text = re.sub(r"\s+", " ", text).strip(" ，,。")
     return (text[:28] or "自动任务").strip()
 
 
 def _normalize_schedule_type(value: str) -> str:
+    """校验调度类型属于支持集合,否则抛 400。"""
     if value not in SCHEDULE_TYPES:
         raise HTTPException(status_code=400, detail="不支持的自动任务调度类型")
     return value
 
 
 def _normalize_weekdays(value: Any) -> list[int]:
+    """去重排序星期集合,校验取值在 0-6(0 为周一),非法时抛 400。"""
     if not isinstance(value, list):
         value = [value]
     days = sorted({int(item) for item in value if str(item).strip() != ""})
@@ -1118,6 +1187,7 @@ def _normalize_weekdays(value: Any) -> list[int]:
 
 
 def _normalize_day_of_month(value: Any) -> int:
+    """校验每月执行日落在 1 到 31 之间。"""
     day = int(value)
     if day < 1 or day > 31:
         raise HTTPException(status_code=400, detail="每月执行日需要在 1 到 31 之间")
@@ -1125,6 +1195,7 @@ def _normalize_day_of_month(value: Any) -> int:
 
 
 def _parse_time(value: str) -> time:
+    """把 HH:mm 或 H 格式解析成 time,格式错误或越界时抛 400。"""
     text = value.strip()
     match = re.fullmatch(r"(\d{1,2})(?::(\d{1,2}))?", text)
     if not match:
@@ -1137,10 +1208,12 @@ def _parse_time(value: str) -> time:
 
 
 def _format_time(value: time) -> str:
+    """把 time 格式化为 HH:mm 文本。"""
     return f"{value.hour:02d}:{value.minute:02d}"
 
 
 def _tz(value: str) -> ZoneInfo:
+    """解析 IANA 时区,未知时区抛 400。"""
     try:
         return ZoneInfo(value or DEFAULT_TIMEZONE)
     except ZoneInfoNotFoundError as exc:
@@ -1148,6 +1221,7 @@ def _tz(value: str) -> ZoneInfo:
 
 
 def _safe_timezone(value: str | None, fallback: str = DEFAULT_TIMEZONE) -> str:
+    """返回可用时区名,非法或为空时回退到 fallback。"""
     candidate = (value or "").strip() or fallback
     try:
         _tz(candidate)
@@ -1158,15 +1232,18 @@ def _safe_timezone(value: str | None, fallback: str = DEFAULT_TIMEZONE) -> str:
 
 
 def _to_local(value: datetime, timezone: str) -> datetime:
+    """把 naive 视为 UTC 的时间转成目标时区的 aware 时间。"""
     source = value.replace(tzinfo=UTC) if value.tzinfo is None else value
     return source.astimezone(_tz(timezone))
 
 
 def _to_utc_naive(value: datetime) -> datetime:
+    """转成 UTC 并去掉 tzinfo,统一入库表示。"""
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _nonempty(value: str, message: str, max_length: int) -> str:
+    """去空白后校验非空并截断到 max_length,为空时以给定 message 抛 400。"""
     text = (value or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail=message)
@@ -1174,10 +1251,12 @@ def _nonempty(value: str, message: str, max_length: int) -> str:
 
 
 def _dt(value: datetime | None) -> str | None:
+    """把可选时间转成 ISO 字符串,None 原样返回。"""
     return value.isoformat() if value else None
 
 
 def _ensure_agent_access(db: Session, tenant_id: str, agent_id: str, current_user: User) -> AgentProfile:
+    """校验用户可为该员工建任务:员工需启用且非总控,非管理员须为所有者或已上架。"""
     agent = db.get(AgentProfile, agent_id)
     if not agent or agent.tenant_id != tenant_id or agent.is_overall or agent.status != "active":
         raise HTTPException(status_code=404, detail="员工不可用")
@@ -1192,6 +1271,7 @@ def _ensure_agent_access(db: Session, tenant_id: str, agent_id: str, current_use
 
 
 def _ensure_task_access(row: ScheduledTask, current_user: User) -> None:
+    """非管理员只能访问自己创建的自动任务,否则抛 403。"""
     if _is_admin_user(current_user):
         return
     if row.created_by_user_id != current_user.id:

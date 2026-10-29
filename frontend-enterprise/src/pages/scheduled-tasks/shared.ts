@@ -78,14 +78,17 @@ const RUN_FILTERS: Record<RunListFilter, (row: ScheduledTaskRunRead) => boolean>
   completed: (row) => row.status === 'succeeded',
 };
 
+/** 判断定时任务行是否命中任务状态筛选条件。 */
 export function matchesTaskFilter(row: ScheduledTaskRead, filter: TaskListFilter): boolean {
   return TASK_FILTERS[filter](row);
 }
 
+/** 判断运行记录行是否命中运行状态筛选条件。 */
 export function matchesRunFilter(row: ScheduledTaskRunRead, filter: RunListFilter): boolean {
   return RUN_FILTERS[filter](row);
 }
 
+/** 过滤出已发布的 SOP，未发布条目不参与定时任务选择。 */
 export function scheduledTaskSopOptions<T extends { status: string }>(rows: T[]): T[] {
   // Explicitly selecting an SOP authorizes SOP-specific resources for this
   // scheduled task; only unpublished entries must stay unavailable.
@@ -149,10 +152,16 @@ const SCHEDULE_FORMATTERS: Record<
   daily: (_row, schedule) => `每天 ${schedule.time || '09:00'}`,
 };
 
+/** 按表单所选调度类型构建提交给后端的 schedule 配置对象。 */
 export function buildSchedule(values: TaskFormValues): Record<string, unknown> {
   return SCHEDULE_BUILDERS[values.schedule_type](values);
 }
 
+/**
+ * 将后端定时任务行转换为可编辑的表单值。
+ *
+ * 调度类型非法时按 daily 回退，schedule 字段缺失时使用默认时间与工作日。
+ */
 export function taskToFormValues(row: ScheduledTaskRead): TaskFormValues {
   const schedule = row.schedule || {};
   return {
@@ -171,11 +180,17 @@ export function taskToFormValues(row: ScheduledTaskRead): TaskFormValues {
   };
 }
 
+/** 将任意字符串归一化为合法调度类型，非法值回退为 daily。 */
 export function normalizeScheduleType(value: string): TaskFormValues['schedule_type'] {
   const scheduleType = value as TaskFormValues['schedule_type'];
   return SCHEDULE_TYPES.has(scheduleType) ? scheduleType : 'daily';
 }
 
+/**
+ * 将后端时间字符串转换为 datetime-local 输入框所需的本地时间。
+ *
+ * 空值或无法解析的时间返回空串，避免输入框出现非法值。
+ */
 export function toDatetimeLocal(value: string): string {
   if (!value) return '';
   const date = parseBackendDateTime(value);
@@ -185,11 +200,13 @@ export function toDatetimeLocal(value: string): string {
   return local.toISOString().slice(0, 16);
 }
 
+/** 根据调度类型与 schedule 配置生成面向用户的调度描述文本。 */
 export function formatSchedule(row: ScheduledTaskRead): string {
   const schedule = row.schedule || {};
   return SCHEDULE_FORMATTERS[normalizeScheduleType(row.schedule_type)](row, schedule);
 }
 
+/** 按客户端时区格式化时间，空值或非法值返回“暂无”。 */
 export function formatTime(value?: string): string {
   return formatClientDateTime(value, '暂无');
 }

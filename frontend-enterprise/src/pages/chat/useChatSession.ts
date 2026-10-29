@@ -157,6 +157,7 @@ const MODEL_CONFIGS_UPDATED_EVENT = 'ultrarag-enterprise-model-configs-updated';
 const ONBOARDING_SEEN_KEY = 'staffdeck_onboarding_guide_seen';
 const QUICK_START_SEEN_KEY = 'staffdeck_quick_start_guide_seen';
 
+/** 判断错误对象、字符串或响应体是否表示缺少可用模型配置。 */
 function isMissingModelConfigurationError(value: unknown): boolean {
   if (value instanceof ApiError) {
     return MISSING_MODEL_CONFIG_PATTERN.test(`${value.message}\n${value.body}`);
@@ -172,10 +173,12 @@ function isMissingModelConfigurationError(value: unknown): boolean {
   }
 }
 
+/** 拼接会话在对话端的路由路径。 */
 function chatSessionPath(id: string): string {
   return `${CHAT_BASE_PATH}/${id}`;
 }
 
+/** 把排队中的待发送轮次转换为用户消息预览，用于消息列表占位。 */
 function queuedTurnPreview(turn: PreparedChatTurn): ChatMessage {
   return {
     id: `queued_${turn.turnId}`,
@@ -201,15 +204,18 @@ const DRAFT_SCHEDULE_FORMATTERS: Record<DraftScheduleType, DraftScheduleFormatte
   daily: (schedule) => `每天 ${scheduleTime(schedule)}`,
 };
 
+/** 读取定时计划的执行时刻，缺失或类型不符时回退到默认时间 09:00。 */
 function scheduleTime(schedule: Record<string, unknown>): string {
   return typeof schedule.time === 'string' ? schedule.time : DEFAULT_SCHEDULE_TIME;
 }
 
+/** 归一化草案调度类型，非法值统一回退为 daily。 */
 function normalizeDraftScheduleType(value: unknown): DraftScheduleType {
   if (typeof value !== 'string') return 'daily';
   return value in DRAFT_SCHEDULE_FORMATTERS ? (value as DraftScheduleType) : 'daily';
 }
 
+/** 把星期序号数组格式化为“周一、周二”式文案，非法输入回退到周一。 */
 function formatScheduleWeekdays(value: unknown): string {
   if (!Array.isArray(value)) return SCHEDULE_WEEKDAY_LABELS[0];
   const labels = value
@@ -219,6 +225,7 @@ function formatScheduleWeekdays(value: unknown): string {
   return labels.length ? labels.join('、') : SCHEDULE_WEEKDAY_LABELS[0];
 }
 
+/** 把定时任务草案的调度配置格式化为可读文本（一次性/每天/每周/每月）。 */
 function formatScheduledTaskDraftSchedule(draft?: Partial<ScheduledTaskDraftRead> | Record<string, unknown>): string {
   const schedule = draft?.schedule && typeof draft.schedule === 'object' && !Array.isArray(draft.schedule)
     ? draft.schedule as Record<string, unknown>
@@ -227,11 +234,13 @@ function formatScheduledTaskDraftSchedule(draft?: Partial<ScheduledTaskDraftRead
   return DRAFT_SCHEDULE_FORMATTERS[scheduleType](schedule);
 }
 
+/** 生成定时任务草案的轨迹详情：标题 · 调度计划 · 等待确认后启用。 */
 function scheduledTaskDraftTraceDetail(draft?: Partial<ScheduledTaskDraftRead> | Record<string, unknown>): string | undefined {
   const title = typeof draft?.title === 'string' ? draft.title.trim() : '';
   return [title, formatScheduledTaskDraftSchedule(draft), '等待确认后启用'].filter(Boolean).join(' · ');
 }
 
+/** 构造定时任务草案的三条已完成轨迹：识别需求、解析计划、生成草案。 */
 function scheduledTaskTraceLines(draft?: Partial<ScheduledTaskDraftRead> | Record<string, unknown>): TraceLine[] {
   return [
     {
@@ -261,6 +270,7 @@ function scheduledTaskTraceLines(draft?: Partial<ScheduledTaskDraftRead> | Recor
   ];
 }
 
+/** 按定时任务阶段生成进行中或已完成的轨迹行，未知阶段返回 null。 */
 function scheduledTaskStatusTraceLine(phase: string, data: Record<string, unknown>): TraceLine | null {
   if (phase === 'scheduled_task_intent') {
     return {
@@ -294,22 +304,30 @@ function scheduledTaskStatusTraceLine(phase: string, data: Record<string, unknow
   return null;
 }
 
+/** 对话会话 Hook 的返回类型。 */
 export type UseChatSession = ReturnType<typeof useChatSession>;
 
+/** useChatSession 的可选配置。 */
 export type UseChatSessionOptions = {
   /**
-   * Anonymous mode for the public site embed: never redirect to login on a
-   * missing/expired session (auth-only data simply stays empty). Without this
-   * the hook bounces unauthenticated visitors off the page via
-   * `window.location.href = '/'`.
+   * 匿名模式（用于官网嵌入式场景）：会话缺失或过期时不跳转登录页，
+   * 仅让需要鉴权的数据保持为空。否则本 Hook 会通过
+   * `window.location.href = '/'` 把未登录访客踢出页面。
    */
   anonymous?: boolean;
-  /** Use a concrete session outside the workspace chat route (for example a team room). */
+  /** 使用工作区对话路由之外的具体会话（例如团队房间）。 */
   sessionId?: string;
-  /** Keep navigation and shared employee scope owned by the embedding page. */
+  /** 导航与共享员工作用域交由嵌入页面管理。 */
   embedded?: boolean;
 };
 
+/**
+ * 对话端核心 Hook：聚合会话列表、消息与流式响应、轨迹、附件上传与排队发送。
+ *
+ * - 按路由或草案员工加载会话、消息与轨迹，并轮询运行中的会话。
+ * - 返回侧栏、输入框、轨迹与各对话框所需的状态与处理函数。
+ * - anonymous 为真时鉴权失败不跳转登录；embedded 为真时不接管导航与共享作用域。
+ */
 export function useChatSession(options: UseChatSessionOptions = {}) {
   const { anonymous = false, embedded = false } = options;
   const { t } = useI18n();
@@ -363,6 +381,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   const [scheduledDrafts, setScheduledDrafts] = useState<Record<string, ScheduledTaskDraftRead>>({});
   const [createdScheduledTasks, setCreatedScheduledTasks] = useState<Record<string, ScheduledTaskRead>>({});
   const [dismissedDraftMessageIds, setDismissedDraftMessageIds] = useState<string[]>([]);
+  /** 更新会话列表的员工过滤条件并写入本地存储，空值归一为 all。 */
   const persistChatSessionAgentFilter = useCallback((value: string) => {
     const next = value || 'all';
     setSessionAgentFilter(next);
@@ -424,15 +443,22 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   const loadErrorNoticeRef = useRef<Record<string, number>>({});
   const uploadControllersRef = useRef(new Map<string, AbortController>());
 
+  /** 触发消息容器的重渲染（storeRef 为普通 Map，需手动通知）。 */
   const notifyStore = useCallback(() => setStoreTick((value) => value + 1), []);
+  /** 触发流式状态的重渲染。 */
   const notifyStream = useCallback(() => setStreamTick((value) => value + 1), []);
+  /** 触发轨迹视图的重渲染。 */
   const notifyTrace = useCallback(() => setTraceTick((value) => value + 1), []);
+  /** 触发消息反馈状态的重渲染。 */
   const notifyFeedback = useCallback(() => setFeedbackTick((value) => value + 1), []);
+  /** 触发排队轮次列表的重渲染。 */
   const notifyQueue = useCallback(() => setQueuedTurnsTick((value) => value + 1), []);
+  /** 把内存中的排队轮次持久化到 sessionStorage，返回是否写入成功。 */
   const persistQueuedTurns = useCallback(() => (
     writeQueuedChatTurns(window.sessionStorage, queueStorageKey, queuedTurnsRef.current)
   ), [queueStorageKey]);
 
+  /** 清理登录态并跳回首页；匿名模式下不跳转。 */
   const redirectToLogin = useCallback(() => {
     if (anonymous) return;
     clearEnterpriseAuthSession();
@@ -444,6 +470,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     uploadControllersRef.current.clear();
   }, []);
 
+  /** 按距底部剩余滚动距离更新“是否吸底”标记。 */
   const updateChatStickiness = useCallback(() => {
     const element = chatMessagesRef.current;
     if (!element) return;
@@ -451,6 +478,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     isChatStickyToBottomRef.current = remainingScroll <= 96;
   }, []);
 
+  /** 结束程序化滚动：下一帧恢复吸底判定并清除程序化滚动标记。 */
   const finishProgrammaticChatScroll = useCallback(() => {
     window.requestAnimationFrame(() => {
       updateChatStickiness();
@@ -458,11 +486,18 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     });
   }, [updateChatStickiness]);
 
+  /** 用户手动滚动时更新吸底标记（程序化滚动期间忽略）。 */
   const handleChatMessagesScroll = useCallback(() => {
     if (isChatProgrammaticScrollRef.current) return;
     updateChatStickiness();
   }, [updateChatStickiness]);
 
+  /**
+   * 统一的请求失败提示：鉴权错误转登录，其余按 scope 去重后 toast。
+   *
+   * - 返回 true 表示已按鉴权失败处理，调用方无需再提示。
+   * - 同一提示键 12 秒内只弹一次，网络错误使用独立提示键。
+   */
   const notifyRequestError = useCallback((scope: string, error: unknown, fallback: string) => {
     if (isAuthError(error)) {
       redirectToLogin();
@@ -482,6 +517,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     return false;
   }, [redirectToLogin]);
 
+  /**
+   * 把消息列表滚动到底部；非吸底状态且未强制时直接跳过。
+   *
+   * - preserveShortContentTop：内容不足一屏时保持顶部对齐，避免短会话跳动。
+   * - 连续两帧设置 scrollTop，兼容图片或轨迹展开造成的二次撑高。
+   */
   const scrollChatToBottom = useCallback((options?: { preserveShortContentTop?: boolean; force?: boolean }) => {
     const element = chatMessagesRef.current;
     if (!element) return;
@@ -503,6 +544,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     });
   }, [finishProgrammaticChatScroll]);
 
+  /** 切换侧栏折叠状态并写入本地存储（0 折叠 / 1 展开）。 */
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((current) => {
       const next = !current;
@@ -511,6 +553,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     });
   }, []);
 
+  /** 记录会话已读时间戳，仅在新时间更晚时更新并持久化。 */
   const markSessionRead = useCallback((id: string, timestamp?: string) => {
     if (!id) return;
     const value = timestamp || new Date().toISOString();
@@ -574,9 +617,11 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       { label: '技能', value: 0 },
       { label: 'SOP', value: 0 },
     ];
+  /** 侧栏员工过滤项：由可见员工、会话与当前草案员工构建。 */
   const sessionFilterOptions = useMemo(() => {
     return buildSessionFilterOptions(availableAgents, sessions, activeDraftAgentId);
   }, [activeDraftAgentId, availableAgents, sessions]);
+  /** 按当前过滤条件筛选侧栏可见会话，团队作用域与员工分别处理。 */
   const visibleSidebarSessions = useMemo(() => {
     const filterTeamId = teamIdFromScope(sessionAgentFilter);
     if (filterTeamId) {
@@ -586,6 +631,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       ? sessions
       : sessions.filter((session) => !session.team_id && session.agent_id === sessionAgentFilter);
   }, [sessionAgentFilter, sessions]);
+  /** 仅保留已启用的模型配置。 */
   const enabledModelConfigs = useMemo(() => modelConfigs.filter((item) => item.enabled), [modelConfigs]);
   const selectedModelConfig = (
     enabledModelConfigs.find((item) => item.id === selectedModelConfigId)
@@ -620,6 +666,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     };
   }, [auth, displayedAgent?.id, tenantId]);
 
+  /** 切换当前模型配置并同步写入或清除本地存储。 */
   const changeModelConfig = useCallback((value: string) => {
     setSelectedModelConfigId(value);
     if (value) {
@@ -629,6 +676,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [tenantId]);
 
+  /** 模型配置完成后的回填：更新列表、广播事件并选中该模型。 */
   const completeModelSetup = useCallback((model: ModelConfigRead) => {
     const next = [...modelConfigs.filter((item) => item.id !== model.id), model];
     setModelConfigs(next);
@@ -637,6 +685,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     changeModelConfig(model.id);
   }, [changeModelConfig, modelConfigs]);
 
+  /** 模型失效时移除对应模型（未指定则清空）、清空选中并打开配置引导。 */
   const invalidateModelSelection = useCallback((modelId?: string) => {
     if (modelId) {
       setModelConfigs((current) => current.filter((item) => item.id !== modelId));
@@ -647,6 +696,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     setModelSetupOpen(true);
   }, [changeModelConfig]);
 
+  /**
+   * 发送前的模型可用性校验，返回 false 时调用方应中止发送。
+   *
+   * - 加载中或加载失败分别给出提示。
+   * - 无可用模型时：管理员打开配置弹窗，普通成员提示联系管理员。
+   */
   const ensureModelAvailable = useCallback(() => {
     if (modelConfigsLoading) {
       notify.warning(t('模型配置正在加载，请稍后再发送'));
@@ -667,6 +722,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     return true;
   }, [canConfigureModels, modelConfigsLoadError, modelConfigsLoading, selectedModelConfig, t]);
 
+  /**
+   * 拉取数字员工列表并校正当前选中的员工。
+   *
+   * - preferredAgentId 优先，其次保留仍可见的当前员工，最后回退到首个可见员工。
+   * - 团队作用域不属于员工花名册，保持原值不变。
+   */
   const loadAgents = useCallback(async (preferredAgentId?: string) => {
     setAgentsLoaded(false);
     try {
@@ -716,6 +777,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       return;
     }
     let cancelled = false;
+    /** 统计指定集合接口返回的条目数，失败时返回 0。 */
     const fetchCount = async (path: string) => {
       try {
         const rows = await api.get<unknown[]>(`${path}?tenant_id=${tenantId}`);
@@ -736,6 +798,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   }, [displayedTeamId, tenantId]);
 
   useEffect(() => {
+    /** 员工作用域刷新事件：重新拉取员工列表。 */
     const onAgentRefresh = () => {
       void loadAgents();
     };
@@ -763,6 +826,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   }, [activeDraftAgentId, draftAgentId, persistChatSessionAgentFilter, userId]);
 
   useEffect(() => {
+    /** 共享作用域变更事件：同步选中的员工与会话过滤条件。 */
     const onScopeChange = (event: Event) => {
       const nextAgentId = (
         (event as CustomEvent<{ agentId?: string }>).detail?.agentId
@@ -837,6 +901,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   }, [auth, redirectToLogin, tenantId]);
 
   useEffect(() => {
+    /** 模型配置变更事件：刷新列表并校正当前选中项。 */
     const onModelConfigsUpdated = (event: Event) => {
       const rows = (event as CustomEvent<{ models?: ModelConfigRead[] }>).detail?.models;
       if (!rows) return;
@@ -867,6 +932,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     setModelSetupOpen(true);
   }, [auth, modelConfigsLoadError, modelConfigsLoading, selectedModelConfig]);
 
+  /** 展开或收起指定轮次的思考轨迹，并同步两个 id 列表。 */
   const toggleTrace = useCallback((turnId: string, isExpanded = false) => {
     if (isExpanded) {
       setCollapsedTraceIds((current) => (current.includes(turnId) ? current : [...current, turnId]));
@@ -879,24 +945,33 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     ));
   }, []);
 
+  /** 取（或惰性创建）会话的消息槽。 */
   const getSlot = useCallback((id: string): SessionSlot => {
     const store = storeRef.current;
     if (!store.has(id)) store.set(id, createEmptySlot());
     return store.get(id)!;
   }, []);
 
+  /** 取（或惰性创建）会话的流式状态槽。 */
   const getStreamSlot = useCallback((id: string): StreamSlot => {
     const store = streamRef.current;
     if (!store.has(id)) store.set(id, createStreamSlot());
     return store.get(id)!;
   }, []);
 
+  /** 取（或惰性创建）轮次的轨迹记录。 */
   const getTurnTrace = useCallback((id: string): TurnTrace => {
     const store = turnTraceRef.current;
     if (!store.has(id)) store.set(id, createTurnTrace());
     return store.get(id)!;
   }, []);
 
+  /**
+   * 彻底遗忘一个已不存在的会话：清理内存与持久化缓存并触发重渲染。
+   *
+   * - 同时移除该会话的排队轮次、定时任务草案与创建结果。
+   * - 不发网络请求，由调用方决定是否刷新会话列表。
+   */
   const forgetMissingSession = useCallback((id: string) => {
     knownSessionIdsRef.current.delete(id);
     optimisticSessionIdsRef.current.delete(id);
@@ -926,6 +1001,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notifyStream();
   }, [notifyQueue, notifyStore, notifyStream, persistQueuedTurns]);
 
+  /** 以乐观方式插入或合并本地会话，并标记为尚未被服务端确认。 */
   const upsertOptimisticSession = useCallback((session: ChatSession) => {
     optimisticSessionIdsRef.current.add(session.id);
     knownSessionIdsRef.current.add(session.id);
@@ -938,12 +1014,14 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     });
   }, []);
 
+  /** 把服务端摘要出的标题写回指定会话，空标题直接忽略。 */
   const applySessionTitleSummary = useCallback((targetSessionId: string, rawTitle: unknown) => {
     const title = typeof rawTitle === 'string' ? rawTitle.trim() : '';
     if (!targetSessionId || !title) return;
     setSessions((current) => current.map((item) => (item.id === targetSessionId ? { ...item, title } : item)));
   }, []);
 
+  /** 合并一条轨迹行（同 id 合并，新增最多保留 80 条）并触发重渲染。 */
   const upsertTraceLine = useCallback((turnId: string, line: TraceLine) => {
     const trace = getTurnTrace(turnId);
     const nextLine = trace.completedAt && line.state === 'running'
@@ -959,6 +1037,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notifyTrace();
   }, [getTurnTrace, notifyTrace]);
 
+  /** 标记轮次轨迹结束：记录完成时间，running 行按 failed 收为失败或完成。 */
   const finishTrace = useCallback((turnId: string, failed = false) => {
     const trace = getTurnTrace(turnId);
     trace.completedAt = Date.now();
@@ -969,6 +1048,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notifyTrace();
   }, [getTurnTrace, notifyTrace]);
 
+  /** 清理实时消息：去掉已落库的重复项与过期消息。 */
   const pruneRealtime = useCallback((id: string) => {
     const slot = getSlot(id);
     const stream = getStreamSlot(id);
@@ -979,6 +1059,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     });
   }, [getSlot, getStreamSlot]);
 
+  /**
+   * 清空会话的流式状态，必要时连同流式占位消息一并移除。
+   *
+   * - 关闭计时器、终止符与中继恢复状态，避免残留 loading。
+   * - removeStreamingMessage 为真时按轮次别名映射精确删除流式消息。
+   */
   const clearStreamSlot = useCallback((id: string, removeStreamingMessage = false) => {
     const stream = getStreamSlot(id);
     const clearingTurnId = stream.turnId || stream.cancelledTurnId || undefined;
@@ -1021,6 +1107,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     if (streamChanged) notifyStream();
   }, [getSlot, getStreamSlot, notifyStore, notifyStream]);
 
+  /**
+   * 把轨迹从临时 turnId 迁移到服务端 turnId，并同步展开/折叠记录。
+   *
+   * - 目标已存在时按行 id 合并，保留更早的开始时间与已有完成时间。
+   * - 迁移后删除源记录，避免同一轮次出现两份轨迹。
+   */
   const rekeyTurnTrace = useCallback((fromTurnId: string, toTurnId: string) => {
     if (!fromTurnId || !toTurnId || fromTurnId === toTurnId) return;
     const source = turnTraceRef.current.get(fromTurnId);
@@ -1054,6 +1146,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notifyTrace();
   }, [notifyTrace]);
 
+  /**
+   * 用服务端消息 id 绑定本地乐观消息，使前后端轮次 id 对齐。
+   *
+   * - 同步改写实时消息、服务端消息、流状态与运行中轮次。
+   * - 同时迁移轨迹到服务端 id，避免重复渲染。
+   */
   const bindRealtimeUserToServerMessage = useCallback((id: string, turnId: string, serverMessageId: string) => {
     if (!turnId || !serverMessageId) return;
     const slot = getSlot(id);
@@ -1091,6 +1189,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     if (changed) notifyStore();
   }, [getSlot, getStreamSlot, notifyStore, rekeyTurnTrace]);
 
+  /** 当前会话展示用的消息列表：服务端消息、实时消息与排队预览。 */
   const displayedMessages = useMemo(() => {
     if (!activeConversationId) return [];
     void feedbackTick;
@@ -1112,6 +1211,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConversationId, feedbackTick, getSlot, getStreamSlot, queuedTurnsTick, storeTick, streamTick, traceTick]);
 
+  /** 当前会话的流式状态槽（无活动会话时返回空槽）。 */
   const currentStream = useMemo(() => {
     void streamTick;
     return activeConversationId ? getStreamSlot(activeConversationId) : createStreamSlot();
@@ -1130,6 +1230,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
   const activeRunningTraceId = currentTraceRunning
     ? (currentStream.turnId || (runningTurn?.sessionId === activeConversationId ? runningTurn.turnId : '') || '')
     : '';
+  /** 判断当前展示的流式消息里是否还有 running 状态的轨迹行。 */
   const hasRunningDisplayedTrace = useMemo(() => {
     void traceTick;
     return displayedMessages.some((item) => {
@@ -1144,6 +1245,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     || hasRunningDisplayedTrace
     || activeSessionReportsRunning,
   );
+  /** 已完成上传、可随消息发送的附件。 */
   const readyComposerAttachments = useMemo(
     () => composerAttachments.filter((item) => item.uploadStatus === 'ready'),
     [composerAttachments],
@@ -1156,6 +1258,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     || currentSessionRunning,
   );
   const showComposerAvatar = Boolean(activeConversationId && displayedProfile);
+  /** 判断某条轨迹是否属于当前正在流式输出的轮次。 */
   const isCurrentStreamingTrace = useCallback((traceTurnId: string, item?: ChatMessage) => Boolean(
     currentTraceRunning
     && traceTurnId
@@ -1187,6 +1290,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     && Boolean(scheduledDraftForMessage(item))
   ));
 
+  /**
+   * 拉取会话列表（必要时补拉当前会话），并维护已读时间与新定时会话。
+   *
+   * - 首次加载时按会话更新时间初始化已读时间戳。
+   * - 保留尚未落库的乐观会话；新出现的定时会话在输入框为空时自动打开。
+   */
   const loadSessions = useCallback(() => {
     const listed = api.get<ChatSession[]>(`/api/chat/sessions?tenant_id=${tenantId}`);
     const selected = sessionId
@@ -1243,6 +1352,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       });
   }, [embedded, getSlot, input, navigate, notifyRequestError, sessionId, tenantId, userId]);
 
+  /** 会话已被删除时的统一处理：清理本地状态并回到入口页。 */
   const handleMissingSession = useCallback((id: string) => {
     forgetMissingSession(id);
     loadSessions();
@@ -1252,6 +1362,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [embedded, forgetMissingSession, loadSessions, navigate, sessionId]);
 
+  /**
+   * 加载指定会话的服务端消息，并与本地实时消息合并。
+   *
+   * - 若消息已包含当前流式轮次的完整回复，则清理流式占位。
+   * - 会话不存在时走 handleMissingSession，其余错误提示后返回空数组。
+   */
   const loadMessages = useCallback((id: string) => {
     return api
       .get<ChatMessage[]>(`/api/chat/sessions/${id}/messages?tenant_id=${tenantId}`)
@@ -1279,6 +1395,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       });
   }, [clearStreamSlot, getSlot, getStreamSlot, handleMissingSession, notifyRequestError, notifyStore, pruneRealtime, tenantId]);
 
+  /**
+   * 加载指定会话的服务端轨迹，恢复运行中轮次与历史占位消息。
+   *
+   * - 可恢复的进行中轨迹会重新置为流式状态。
+   * - 已完成但缺少助手消息时补轨迹占位，过期未收尾的轨迹会被收口。
+   */
   const loadTraces = useCallback((id: string) => {
     return api
       .get<TurnTraceRead[]>(`/api/chat/sessions/${id}/trace?tenant_id=${tenantId}`)
@@ -1404,6 +1526,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       });
   }, [getSlot, getStreamSlot, handleMissingSession, notifyRequestError, notifyStore, notifyStream, notifyTrace, tenantId]);
 
+  /** 停止某个轮次的终态同步轮询并清除计时器。 */
   const stopTerminalTurnSync = useCallback((sessionIdToStop: string, turnIdToStop: string) => {
     const key = `${sessionIdToStop}:${turnIdToStop}`;
     const existing = terminalTurnSyncRef.current.get(key);
@@ -1413,6 +1536,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     terminalTurnSyncRef.current.delete(key);
   }, []);
 
+  /**
+   * 轮询消息、轨迹与会话列表，直到目标轮次出现助手回复或超时。
+   *
+   * - 拿到最终助手消息后停止，并顺带清理对应流式槽。
+   * - 超过空闲超时上限后自动停止，避免无限轮询。
+   */
   const syncTurnUntilAssistant = useCallback((targetSessionId: string, targetTurnId: string) => {
     if (!targetSessionId || !targetTurnId || isDraftConversationKey(targetSessionId)) return;
     const key = `${targetSessionId}:${targetTurnId}`;
@@ -1421,6 +1550,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     if (existing?.timer) {
       window.clearTimeout(existing.timer);
     }
+    /** 执行一轮同步：拉取消息与轨迹，未完成则继续排期。 */
     const run = () => {
       Promise.all([
         loadMessages(targetSessionId),
@@ -1456,6 +1586,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     stopTerminalTurnSync,
   ]);
 
+  /** 加载待人工回答的交给列表；未登录时直接返回。 */
   const loadHandoffs = useCallback(() => {
     if (!auth) return Promise.resolve();
     setHandoffsLoading(true);
@@ -1468,6 +1599,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       .finally(() => setHandoffsLoading(false));
   }, [auth, notifyRequestError, tenantId]);
 
+  /**
+   * 提交人工回复并让原会话继续执行，成功返回 true。
+   *
+   * - 成功后从列表移除该条、清空输入并刷新会话消息与轨迹。
+   * - 鉴权失败会跳转登录，其余错误直接提示。
+   */
   const replyToHandoff = useCallback(async (handoff: HumanHandoffRead, reply: string): Promise<boolean> => {
     try {
       await api.post<HumanHandoffRead>(`/api/chat/handoffs/${handoff.id}/reply`, { tenant_id: tenantId, reply });
@@ -1493,6 +1630,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [getSlot, loadMessages, loadSessions, loadTraces, redirectToLogin, tenantId]);
 
+  /** 校验并提交待回答列表中的回复内容。 */
   const submitHandoffReply = useCallback((handoff: HumanHandoffRead) => {
     const reply = (handoffReplies[handoff.id] || '').trim();
     if (!reply) {
@@ -1503,11 +1641,13 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     void replyToHandoff(handoff, reply);
   }, [ensureModelAvailable, handoffReplies, replyToHandoff]);
 
+  /** 打开待回答收件箱并拉取最新列表。 */
   const openHandoffInbox = useCallback(() => {
     setShowHandoffInbox(true);
     void loadHandoffs();
   }, [loadHandoffs]);
 
+  /** 追加或合并一条实时消息（最多保留 200 条）并触发重渲染。 */
   const appendRealtime = useCallback((id: string, messageItem: ChatMessage) => {
     const slot = getSlot(id);
     const existingIndex = messageItem.role === 'assistant'
@@ -1528,10 +1668,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notifyStore();
   }, [getSlot, notifyStore]);
 
+  /** 为排队轮次追加一条用户消息预览。 */
   const appendQueuedTurnPreview = useCallback((turn: PreparedChatTurn) => {
     appendRealtime(turn.conversationId, queuedTurnPreview(turn));
   }, [appendRealtime]);
 
+  /** 移除排队轮次对应的预览消息。 */
   const removeQueuedTurnPreview = useCallback((turn: PreparedChatTurn) => {
     const slot = getSlot(turn.conversationId);
     const nextMessages = slot.realtimeMessages.filter((item) => item.id !== `queued_${turn.turnId}`);
@@ -1540,6 +1682,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notifyStore();
   }, [getSlot, notifyStore]);
 
+  /** 把待发送轮次加入队列并持久化，同时提示持久化失败的风险。 */
   const enqueuePreparedTurn = useCallback((turn: PreparedChatTurn) => {
     queuedTurnsRef.current = [...queuedTurnsRef.current, turn];
     const persisted = persistQueuedTurns();
@@ -1551,6 +1694,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [appendQueuedTurnPreview, notifyQueue, persistQueuedTurns]);
 
+  /** 从队列中移除指定轮次及其预览。 */
   const removeQueuedTurn = useCallback((turnId: string) => {
     if (!turnId) return;
     const queuedTurn = queuedTurnsRef.current.find((turn) => turn.turnId === turnId);
@@ -1568,18 +1712,26 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     if (queuedTurnsRef.current.length > 0) notifyQueue();
   }, [appendQueuedTurnPreview, notifyQueue]);
 
+  /** 仅更新本地消息的点赞/点踩状态并触发反馈重渲染。 */
   const updateMessageFeedback = useCallback((
     id: string,
     messageId: string,
     rating: ChatMessage['feedback_rating'],
   ) => {
     const slot = getSlot(id);
+    /** 对指定消息 id 应用新的反馈评分。 */
     const update = (item: ChatMessage) => (item.id === messageId ? { ...item, feedback_rating: rating } : item);
     slot.serverMessages = slot.serverMessages.map(update);
     slot.realtimeMessages = slot.realtimeMessages.map(update);
     notifyFeedback();
   }, [getSlot, notifyFeedback]);
 
+  /**
+   * 写入或更新流式助手消息，包含节流合并与去重逻辑。
+   *
+   * - 无可渲染文本时清空占位内容，避免出现空消息。
+   * - 按轮次别名映射复用同一条流式消息，防止重复气泡。
+   */
   const updateStreaming = useCallback((id: string, text: string, turnId?: string, force = false) => {
     const slot = getSlot(id);
     const stream = getStreamSlot(id);
@@ -1654,6 +1806,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notifyStore();
   }, [getSlot, getStreamSlot, notifyStore]);
 
+  /** 确保流式轮次有可见承载：优先用累积文本，其次用轨迹占位消息。 */
   const ensureStreamingTraceMessage = useCallback((id: string, turnId?: string | null) => {
     if (!turnId) return;
     const stream = getStreamSlot(id);
@@ -1672,6 +1825,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [getSlot, getStreamSlot, notifyStore, updateStreaming]);
 
+  /** 立即冲刷累积的流式文本并取消待触发的节流计时器。 */
   const flushStreaming = useCallback((id: string) => {
     const stream = getStreamSlot(id);
     if (stream.timer) {
@@ -1683,6 +1837,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [getStreamSlot, updateStreaming]);
 
+  /**
+   * 收尾流式输出：把流式消息转为最终消息或按需删除。
+   *
+   * - 服务端已有同轮次消息或内容为空时，移除本地流式消息。
+   * - 否则落为普通助手消息，并清空流式累积与轮次。
+   */
   const finalizeStreaming = useCallback((id: string) => {
     flushStreaming(id);
     const slot = getSlot(id);
@@ -1834,11 +1994,13 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     terminalTurnSyncRef.current.clear();
   }, []);
 
+  /** 打开重命名对话框并预填当前标题。 */
   const openRename = useCallback((session: ChatSession) => {
     setRenameSession(session);
     setRenameTitle(session.title || session.summary || session.last_agent_question || '');
   }, []);
 
+  /** 保存会话重命名结果，标题为空时提示并中止。 */
   const saveRename = useCallback(async () => {
     if (!renameSession) return;
     const title = renameTitle.trim();
@@ -1856,10 +2018,17 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     notify.success('已重命名');
   }, [renameSession, renameTitle, tenantId]);
 
+  /** 记录待删除会话，等待用户确认。 */
   const requestDelete = useCallback((session: ChatSession) => {
     setPendingDelete(session);
   }, []);
 
+  /**
+   * 确认删除会话：中止流、清理本地槽并调用删除接口。
+   *
+   * - 删除的是当前会话时跳回对话入口。
+   * - 鉴权失败跳转登录，其余错误提示后保留页面状态。
+   */
   const confirmDeleteSession = useCallback(async () => {
     const target = pendingDelete;
     if (!target) return;
@@ -1884,6 +2053,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [forgetMissingSession, getStreamSlot, navigate, pendingDelete, redirectToLogin, sessionId, tenantId]);
 
+  /**
+   * 用户主动停止生成：通知服务端取消、收口轨迹并保留已生成内容。
+   *
+   * - 本地先标记取消，避免轮询把该轮次再次恢复为运行中。
+   * - 取消请求与 300ms 超时竞速后中止 SSE，再延迟恢复数据同步。
+   */
   const abortStream = useCallback(() => {
     if (!activeConversationId) return;
     const stream = getStreamSlot(activeConversationId);
@@ -1893,6 +2068,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     );
     const controller = stream.abortController;
     locallyCancelledSessionIdsRef.current.add(activeConversationId);
+    /** 清除本地取消标记并重新同步消息、轨迹与会话列表。 */
     const releaseLocalCancellation = () => {
       locallyCancelledSessionIdsRef.current.delete(activeConversationId);
       if (isDraftConversationKey(activeConversationId)) return;
@@ -1924,6 +2100,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     stoppedStream.cancelledTurnId = cancelledTurnId;
     setRunningTurn((current) => (current?.sessionId === activeConversationId ? null : current));
     notifyStream();
+    /** 取消请求返回或超时后中止底层 SSE 连接。 */
     const abortAfterCancel = () => {
       controller?.abort();
     };
@@ -1952,6 +2129,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     upsertTraceLine,
   ]);
 
+  /** 切换消息的点赞/点踩状态，失败时回滚本地状态。 */
   const rateMessage = useCallback(async (item: ChatMessage, rating: 'up' | 'down') => {
     if (!sessionId) return;
     const previous = item.feedback_rating || null;
@@ -1973,6 +2151,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [redirectToLogin, sessionId, tenantId, updateMessageFeedback]);
 
+  /**
+   * 确认定时任务草案并创建正式任务，成功后替换为已创建卡片。
+   *
+   * - 自动补全时区与来源会话，状态置为 active。
+   * - 创建成功后清除该会话的草案，避免重复确认。
+   */
   const confirmScheduledTask = useCallback(async (draft: ScheduledTaskDraftRead, draftKey?: string) => {
     if (!sessionId) return;
     try {
@@ -2013,6 +2197,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [redirectToLogin, sessionId, tenantId]);
 
+  /** 关闭当前会话的定时任务草案卡片，可同时屏蔽指定消息。 */
   const dismissScheduledTaskDraft = useCallback((messageId?: string) => {
     if (!sessionId) return;
     setScheduledDrafts((prev) => {
@@ -2025,6 +2210,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     }
   }, [sessionId]);
 
+  /**
+   * 处理单条流式事件：维护流状态、轨迹行与运行中轮次。
+   *
+   * - 覆盖状态、思考轨迹、流式文本增量与各类终态事件。
+   * - preserveExistingStreamTurn 为真时不抢占其他轮次正在使用的流。
+   */
   const handleStreamEvent = useCallback((
     item: StreamEvent,
     baseSessionId: string,
@@ -2037,6 +2228,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     const ownsStreamTurn = Boolean(eventStream.turnId)
       && (eventStream.turnId === traceTurnId || eventStream.turnId === turnId);
     const shouldTouchStream = !options?.preserveExistingStreamTurn || ownsStreamTurn;
+    /** 写入轨迹行，并在需要时确保流式轮次仍有可见承载。 */
     const upsertVisibleTraceLine = (line: TraceLine) => {
       upsertTraceLine(traceTurnId, line);
       if (shouldTouchStream && traceTurnId) {
@@ -2507,6 +2699,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     upsertTraceLine,
   ]);
 
+  /** 从会话事件中取出文本载荷，content 优先，其次 text。 */
   const eventTextPayload = useCallback((event: ChatSessionEventRead): string => {
     const data = event.data || {};
     if (typeof data.content === 'string') return data.content;
@@ -2514,6 +2707,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     return '';
   }, []);
 
+  /** 判断会话事件是否为终态事件。 */
   const isTerminalEvent = useCallback((event: ChatSessionEventRead) => (
     event.event === 'complete'
     || event.event === 'done'
@@ -2524,8 +2718,15 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     || event.event === 'error'
   ), []);
 
+  /** 取会话事件的毫秒时间戳，无法解析时返回 0。 */
   const eventTime = useCallback((event: ChatSessionEventRead) => parseMessageTime(event.created_at) || 0, []);
 
+  /**
+   * 从服务端事件日志恢复运行中的轮次，作为 SSE 中断后的兜底。
+   *
+   * - 仅在该会话未本地取消、已加载消息且事件仍在恢复窗口内时生效。
+   * - 重建累积文本、流状态与运行中轮次，并回放未见过的轨迹事件。
+   */
   const hydrateRunningSessionFromEvents = useCallback((id: string, events: ChatSessionEventRead[]) => {
     if (locallyCancelledSessionIdsRef.current.has(id)) return false;
     const traceEvents = events.filter((event) => Boolean(eventTraceTurnId(event)));
@@ -2627,6 +2828,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     updateStreaming,
   ]);
 
+  /**
+   * 轮询会话事件日志，补偿 SSE 中断或跨端产生的进度。
+   *
+   * - 同一会话的并发轮询复用同一个 Promise。
+   * - 负责中继恢复文本、超时收口与未见事件的回放。
+   */
   const pollScheduledSessionEvents = useCallback((id: string) => {
     if (locallyCancelledSessionIdsRef.current.has(id)) return Promise.resolve();
     const inFlight = scheduledEventPollsRef.current.get(id);
@@ -2795,6 +3002,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     upsertTraceLine,
   ]);
 
+  /**
+   * 上传输入框附件：先插入 uploading 占位，再逐个替换为解析结果。
+   *
+   * - 每个文件使用独立 AbortController，组件卸载时统一中断。
+   * - 单文件失败只标记该附件为 error，不阻塞其他文件。
+   */
   const uploadComposerFiles = useCallback((files: File[]) => {
     const validFiles = files.filter((file) => file.size > 0);
     if (!validFiles.length) return;
@@ -2838,36 +3051,42 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     });
   }, [tenantId]);
 
+  /** 取消上传并移除指定附件。 */
   const removeComposerAttachment = useCallback((uploadKey: string) => {
     uploadControllersRef.current.get(uploadKey)?.abort();
     uploadControllersRef.current.delete(uploadKey);
     setComposerAttachments((current) => current.filter((item) => item.uploadKey !== uploadKey));
   }, []);
 
+  /** 处理文件选择框变更：上传所选文件并清空 input 值。 */
   const handleComposerFileChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     uploadComposerFiles(files);
     event.target.value = '';
   }, [uploadComposerFiles]);
 
+  /** 拖入文件时阻止默认行为并展示拖拽态。 */
   const handleComposerDragEnter = useCallback((event: DragEvent<HTMLFormElement>) => {
     if (!event.dataTransfer.types.includes('Files')) return;
     event.preventDefault();
     setComposerDragActive(true);
   }, []);
 
+  /** 文件拖拽悬停时维持拖拽态。 */
   const handleComposerDragOver = useCallback((event: DragEvent<HTMLFormElement>) => {
     if (!event.dataTransfer.types.includes('Files')) return;
     event.preventDefault();
     setComposerDragActive(true);
   }, []);
 
+  /** 指针离开整个表单区域时取消拖拽态。 */
   const handleComposerDragLeave = useCallback((event: DragEvent<HTMLFormElement>) => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
       setComposerDragActive(false);
     }
   }, []);
 
+  /** 放下文件时上传并退出拖拽态。 */
   const handleComposerDrop = useCallback((event: DragEvent<HTMLFormElement>) => {
     const files = Array.from(event.dataTransfer.files || []);
     if (!files.length) return;
@@ -2878,6 +3097,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
 
   useEffect(() => {
     if (!auth || !sessionId || isDraftConversationKey(sessionId)) return;
+    /** 轮询当前会话的事件日志。 */
     const pollCurrentSessionEvents = () => {
       void pollScheduledSessionEvents(sessionId);
     };
@@ -2888,8 +3108,10 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
 
   useEffect(() => {
     if (!auth) return;
+    /** 找出可能仍在运行的后台会话并逐个轮询事件日志。 */
     const pollBackgroundSessions = () => {
       const ids = new Set<string>();
+      /** 判断该会话是否仍由本地 SSE 连接驱动。 */
       const isLiveSseSession = (id: string) => Boolean(streamRef.current.get(id)?.abortController);
       sessions.forEach((session) => {
         const looksRunning = session.status === 'running' || session.status === 'executing';
@@ -2909,6 +3131,13 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     return () => window.clearInterval(timer);
   }, [auth, pollScheduledSessionEvents, sessionId, sessions]);
 
+  /**
+   * 执行一次已准备好的轮次：发送请求、消费 SSE 并维护本地状态。
+   *
+   * - 草案会话在收到 session_created 后提升为真实会话并迁移本地缓存。
+   * - 内置心跳看门狗，空闲超时后转入事件日志中继恢复。
+   * - 终态、错误与中断都会收口流式槽、运行中轮次与轨迹。
+   */
   const executePreparedTurn = useCallback(async (
     prepared: PreparedChatTurn,
     options: { queued?: boolean } = {},
@@ -2955,6 +3184,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     let streamWatchdog: number | null = null;
     let lastStreamEventAt = Date.now();
 
+    /** 清除与当前轮次匹配的运行中标记。 */
     const clearRunningTurn = (targetId = liveConversationId) => {
       setRunningTurn((current) => (
         current?.turnId === turnId && (current.sessionId === targetId || current.sessionId === currentConversationId)
@@ -2963,6 +3193,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       ));
     };
 
+    /** 关闭心跳看门狗计时器。 */
     const clearStreamWatchdog = () => {
       if (streamWatchdog !== null) {
         window.clearTimeout(streamWatchdog);
@@ -2970,6 +3201,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       }
     };
 
+    /** 追加一条中断错误消息，并收口轨迹与运行状态。 */
     const appendInterruptedResponse = (reason: string) => {
       const activeTurnId = getStreamSlot(liveConversationId).turnId || turnId;
       clearStreamSlot(liveConversationId, true);
@@ -2991,6 +3223,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       }, 250);
     };
 
+    /** 心跳看门狗回调：空闲超过宽限期则中止连接并转入中继恢复。 */
     const checkStreamHealth = () => {
       if (receivedTerminalEvent || controller.signal.aborted) return;
       const activeStream = getStreamSlot(liveConversationId);
@@ -3009,17 +3242,25 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       beginRelayRecovery();
     };
 
+    /** 重置心跳时间并重新布防看门狗。 */
     const armStreamWatchdog = () => {
       lastStreamEventAt = Date.now();
       clearStreamWatchdog();
       streamWatchdog = window.setTimeout(checkStreamHealth, CHAT_STREAM_IDLE_CHECK_INTERVAL_MS);
     };
 
+    /** 标记已收到终态事件并停止看门狗。 */
     const markStreamTerminal = () => {
       receivedTerminalEvent = true;
       clearStreamWatchdog();
     };
 
+    /**
+     * 把草案会话提升为真实会话：迁移消息、流、排队与定时任务缓存并改写路由。
+     *
+     * - 迁移期间用 pendingPromotedSessionIdRef 兜住路由参数未更新的过渡帧。
+     * - 本地先插入乐观会话，随后由 loadSessions 与服务端结果对齐。
+     */
     const promoteDraftConversation = (nextSessionId: string) => {
       if (!startedAsDraftConversation || !nextSessionId || nextSessionId === liveConversationId) return;
       // Keep the active conversation resolvable to the real session until the route
@@ -3087,6 +3328,11 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       loadSessions();
     };
 
+    /**
+     * 进入中继恢复：放弃 SSE，改为轮询事件日志继续同步该轮次。
+     *
+     * - 草案会话先提升为真实会话；无法定位会话时直接给出中断提示。
+     */
     function beginRelayRecovery() {
       if (receivedTerminalEvent) return;
       clearStreamWatchdog();
@@ -3246,6 +3492,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     userId,
   ]);
 
+  /**
+   * 发送当前输入：校验模型、附件与待回答状态，然后直接执行或排队。
+   *
+   * - 待回答会话只允许发送纯文本人工回复。
+   * - 会话正在运行或已有排队轮次时改为入队；返回前已清空输入框。
+   */
   const send = useCallback(async (interactionMode?: ComposerInteractionMode) => {
     const resolvedInteractionMode = interactionMode || composerIntent || 'normal';
     if (!activeConversationId) return;
@@ -3349,6 +3601,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     uploadingComposerAttachment,
   ]);
 
+  /**
+   * 依次出队执行排队轮次，条件不满足时保持不动等待下次触发。
+   *
+   * - 同一时刻只处理一个轮次，执行结束后再触发下一轮。
+   * - 会话仍在运行、模型不可用或数据未加载完成时直接返回。
+   */
   const drainQueuedTurns = useCallback(() => {
     if (queuedTurnProcessingRef.current) return;
     const nextTurn = queuedTurnsRef.current[0];
@@ -3402,6 +3660,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     drainQueuedTurns();
   }, [drainQueuedTurns, queuedTurnsTick, streamTick]);
 
+  /** 粘贴图片时阻止默认行为并转为附件上传。 */
   const handleComposerPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const clipboardData = event.clipboardData;
     if (!clipboardData || !clipboardContainsComposerImage(clipboardData)) return;
@@ -3411,6 +3670,7 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     });
   }, [uploadComposerFiles]);
 
+  /** 处理输入框加号菜单动作：上传文件或切换为定时任务模式。 */
   const handleComposerPlusAction = useCallback((action: 'upload' | 'scheduled_task') => {
     setComposerPlusOpen(false);
     if (action === 'upload') {
@@ -3420,10 +3680,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     setComposerIntent('scheduled_task');
   }, []);
 
+  /** 跳转到指定会话。 */
   const openSession = useCallback((id: string) => {
     navigate(chatSessionPath(id));
   }, [navigate]);
 
+  /** 打开某位员工的草案会话，并同步选中员工与共享作用域。 */
   const openDraftForAgent = useCallback((agentId: string) => {
     if (!agentId) return;
     setSelectedAgentId(agentId);
@@ -3433,10 +3695,12 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
     navigate(`${CHAT_BASE_PATH}/draft/${encodeURIComponent(agentId)}`);
   }, [navigate, persistChatSessionAgentFilter, userId]);
 
+  /** 跳转到数字员工画廊。 */
   const openGallery = useCallback(() => {
     navigate('/workspace/gallery');
   }, [navigate]);
 
+  /** 切换侧栏员工过滤条件，并同步共享员工作用域。 */
   const changeSessionAgentFilter = useCallback((value: string) => {
     const next = value || 'all';
     persistChatSessionAgentFilter(next);

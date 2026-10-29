@@ -16,6 +16,7 @@ FINANCE_AGENT = "agent_f2828efc2a2a476d"
 
 
 def _client(monkeypatch):
+    """构建带演示数据的内存库公共 API 客户端,返回客户端、引擎与管理员令牌。"""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -28,6 +29,7 @@ def _client(monkeypatch):
     app = create_public_api_app()
 
     def override():
+        """用内存引擎开新会话替换请求期数据库依赖。"""
         with Session(engine) as db:
             yield db
 
@@ -36,6 +38,7 @@ def _client(monkeypatch):
 
 
 def _key(client, token, scopes):
+    """创建名称唯一的 API 客户端并为它签发凭据,返回 api_key。"""
     admin = {"Authorization": f"Bearer {token}"}
     # Names must be unique per call: the test that proves two credentials do not
     # collide needs to actually create two of them.
@@ -51,15 +54,15 @@ def _key(client, token, scopes):
 
 
 def _headers(key):
+    """把 API key 包装成 Bearer 认证头。"""
     return {"Authorization": f"Bearer {key}"}
 
 
 def _create(client, key, *, external_session_id="local-abc", agent_id=FINANCE_AGENT, **extra):
-    """Session creation goes through the existing public sessions endpoint.
+    """会话创建复用现有公共会话接口。
 
-    There is deliberately no separate create endpoint for external sessions: it
-    already accepts `external_session_id`, and a second path would let the same
-    rule drift in two places.
+    外部会话没有独立的创建端点:该接口本就接受 `external_session_id`,
+    另开一条路径只会让同一规则在两处漂移。
     """
     body = {"external_session_id": external_session_id, **extra}
     return client.post(
@@ -68,6 +71,7 @@ def _create(client, key, *, external_session_id="local-abc", agent_id=FINANCE_AG
 
 
 def test_creates_a_session_and_binding(monkeypatch):
+    """验证创建外部会话时会同时落库会话行与会话绑定。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write", "sessions:read"])
 
@@ -89,10 +93,9 @@ def test_creates_a_session_and_binding(monkeypatch):
 
 
 def test_repeated_external_session_id_reuses_the_same_session(monkeypatch):
-    """One local conversation must not become two rows on the server.
+    """验证重复上报同一 external_session_id 时只会复用同一个会话。
 
-    deepchat reconnects and retries; treating every POST as a create would fill
-    the console with ghost sessions that share a title and nothing else.
+    deepchat 会重连重试,若每次 POST 都当作新建,控制台会堆满同名的幽灵会话。
     """
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
@@ -113,10 +116,9 @@ def test_repeated_external_session_id_reuses_the_same_session(monkeypatch):
 
 
 def test_binding_is_scoped_to_the_credential(monkeypatch):
-    """Two credentials may use the same local id without colliding.
+    """验证两个凭据可以使用相同本地会话 id 而不冲突。
 
-    A local session id is generated on a device, not by us: two machines can
-    legitimately produce the same string.
+    本地会话 id 由设备生成而非服务端,两台机器完全可能产生同一字符串。
     """
     client, _engine, token = _client(monkeypatch)
     first_key = _key(client, token, ["sessions:write"])
@@ -131,6 +133,7 @@ def test_binding_is_scoped_to_the_credential(monkeypatch):
 
 
 def test_requires_the_sessions_write_scope(monkeypatch):
+    """验证缺少 sessions:write 作用域的凭据无法创建会话。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:read"])
 
@@ -140,6 +143,7 @@ def test_requires_the_sessions_write_scope(monkeypatch):
 
 
 def test_rejects_an_unknown_agent(monkeypatch):
+    """验证向不存在的 agent 创建会话时返回 404 与 AGENT_NOT_FOUND。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
 
@@ -150,6 +154,7 @@ def test_rejects_an_unknown_agent(monkeypatch):
 
 
 def _events(client, key, session_id, events):
+    """向指定会话批量投递事件,返回接口响应。"""
     return client.post(
         f"/agents/{FINANCE_AGENT}/sessions/{session_id}/events:batch",
         headers=_headers(key),
@@ -158,10 +163,12 @@ def _events(client, key, session_id, events):
 
 
 def _message(event_id, content="hi", role="user"):
+    """构造一条 message 类型的事件载荷。"""
     return {"type": "message", "event_id": event_id, "role": role, "content": content}
 
 
 def test_appends_messages_as_ordinary_session_messages(monkeypatch):
+    """验证事件落库后成为普通会话消息,内容与角色保持不变。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
     session_id = _create(client, key).json()["id"]
@@ -177,10 +184,10 @@ def test_appends_messages_as_ordinary_session_messages(monkeypatch):
 
 
 def test_a_resent_event_is_skipped_not_rejected(monkeypatch):
-    """The whole batch is resent on retry, so duplicates must be filtered per event.
+    """验证重复投递同一事件时只会跳过该条,而不是整批拒绝。
 
-    A batch-level key would reject the retry outright the moment one event was
-    already stored, losing every new event travelling with it.
+    重试会重发整批事件,若用批量级幂等键,只要有一条已存就会拒绝整批,
+    连带丢掉随行携带的新事件。
     """
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
@@ -194,6 +201,7 @@ def test_a_resent_event_is_skipped_not_rejected(monkeypatch):
 
 
 def test_an_identical_resend_of_a_full_batch_is_a_no_op(monkeypatch):
+    """验证整批原样重发时不再新增消息,只统计重复数。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
     session_id = _create(client, key).json()["id"]
@@ -208,6 +216,7 @@ def test_an_identical_resend_of_a_full_batch_is_a_no_op(monkeypatch):
 
 
 def test_records_tool_calls_and_usage(monkeypatch):
+    """验证 tool_call 与 usage 事件分别落为 tool、system 消息并保留元数据。"""
     client, engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
     session_id = _create(client, key).json()["id"]
@@ -246,6 +255,7 @@ def test_records_tool_calls_and_usage(monkeypatch):
 
 
 def test_rejects_an_unknown_session(monkeypatch):
+    """验证向不存在的会话投递事件时返回 404。"""
     client, _engine, token = _client(monkeypatch)
     key = _key(client, token, ["sessions:write"])
 
@@ -255,10 +265,10 @@ def test_rejects_an_unknown_session(monkeypatch):
 
 
 def test_a_second_credential_cannot_append_to_the_first_credential_session(monkeypatch):
-    """Same tenant is not enough: ownership must run through the binding.
+    """验证同租户的另一个凭据不能写入首个凭据的会话。
 
-    Otherwise any key in the tenant could write into any conversation it can
-    name, which turns a leaked read scope into a write capability.
+    归属校验必须经过绑定表,否则租户内任意 key 都能写进它叫得出名字的会话,
+    一个泄露的读作用域就会变成写能力。
     """
     client, _engine, token = _client(monkeypatch)
     owner = _key(client, token, ["sessions:write"])
@@ -271,6 +281,7 @@ def test_a_second_credential_cannot_append_to_the_first_credential_session(monke
 
 
 def test_requires_the_sessions_write_scope_for_events(monkeypatch):
+    """验证缺少 sessions:write 作用域的凭据无法投递事件。"""
     client, _engine, token = _client(monkeypatch)
     writer = _key(client, token, ["sessions:write"])
     reader = _key(client, token, ["sessions:read"])

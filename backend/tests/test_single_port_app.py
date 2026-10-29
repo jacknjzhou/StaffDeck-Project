@@ -17,9 +17,11 @@ def _request(
     headers: list[tuple[bytes, bytes]] | None = None,
     query_string: bytes = b"",
 ) -> Request:
+    """构造一个只发送一次请求体的 ASGI Request，供中转端点测试使用。"""
     sent = False
 
     async def receive():
+        """首次返回完整请求体，之后返回断开事件模拟流已结束。"""
         nonlocal sent
         if sent:
             return {"type": "http.disconnect"}
@@ -44,6 +46,7 @@ def _request(
 
 
 def test_javascript_assets_override_broken_windows_mime_mapping(tmp_path: Path) -> None:
+    """验证 .js 被系统错误映射为 text/plain 时仍返回正确的 JS 类型。"""
     original_media_type = mimetypes.guess_type("bundle.js")[0]
     mimetypes.add_type("text/plain", ".js", strict=True)
 
@@ -67,6 +70,7 @@ def test_valid_application_javascript_mapping_is_not_reported_as_correction(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """验证合法的 application/javascript 映射不会被误记为 MIME 纠正。"""
     monkeypatch.setitem(mimetypes.types_map, ".js", "application/javascript")
     asset_dir = tmp_path / "assets"
     asset_dir.mkdir()
@@ -87,6 +91,7 @@ def test_mime_diagnostic_does_not_record_requested_asset_name(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """验证 MIME 纠正日志不记录具体资源名，避免泄露敏感文件名。"""
     monkeypatch.setitem(mimetypes.types_map, ".js", "text/plain")
     asset_dir = tmp_path / "assets"
     asset_dir.mkdir()
@@ -108,6 +113,7 @@ def test_mime_diagnostic_does_not_record_requested_asset_name(
 
 
 def test_pilotdeck_host_routing_requires_enabled_exact_host(monkeypatch) -> None:
+    """验证仅精确匹配已启用的 Host 才判定为 PilotDeck 请求。"""
     monkeypatch.setattr(single_port_app, "PILOTDECK_UPSTREAM", "http://127.0.0.1:13001")
     monkeypatch.setattr(
         single_port_app,
@@ -125,6 +131,7 @@ def test_pilotdeck_host_routing_requires_enabled_exact_host(monkeypatch) -> None
 
 
 def test_pilotdeck_path_routing_strips_only_the_dedicated_prefix(monkeypatch) -> None:
+    """验证路径路由只剥掉专用前缀，其他路径不归 PilotDeck 处理。"""
     monkeypatch.setattr(single_port_app, "PILOTDECK_UPSTREAM", "http://127.0.0.1:13001")
     monkeypatch.setattr(single_port_app, "PILOTDECK_PUBLIC_HOSTS", set())
 
@@ -137,6 +144,7 @@ def test_pilotdeck_path_routing_strips_only_the_dedicated_prefix(monkeypatch) ->
 
 
 def test_pilotdeck_target_url_preserves_path_query_and_websocket_scheme(monkeypatch) -> None:
+    """验证目标 URL 保留路径与查询串，并正确切换 WebSocket 协议。"""
     monkeypatch.setattr(single_port_app, "PILOTDECK_UPSTREAM", "http://127.0.0.1:13001")
 
     assert single_port_app._pilotdeck_target_url("/api/groups", "limit=10") == (
@@ -148,6 +156,7 @@ def test_pilotdeck_target_url_preserves_path_query_and_websocket_scheme(monkeypa
 
 
 def test_pilotdeck_proxy_timeout_configures_every_httpx_phase() -> None:
+    """验证代理超时对连接、读、写、连接池各阶段都做了配置。"""
     timeout = single_port_app._pilotdeck_proxy_timeout()
 
     assert timeout.connect == 10.0
@@ -158,6 +167,7 @@ def test_pilotdeck_proxy_timeout_configures_every_httpx_phase() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_relay_is_disabled_without_upstream(monkeypatch) -> None:
+    """验证未配置上游时 LLM 中转直接返回 404。"""
     monkeypatch.setattr(single_port_app, "LLM_RELAY_UPSTREAM", "")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -168,18 +178,24 @@ async def test_llm_relay_is_disabled_without_upstream(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_llm_relay_forwards_auth_body_query_and_stream(monkeypatch) -> None:
+    """验证 LLM 中转透传鉴权、请求体与查询串，并以流式响应返回。"""
     captured: dict[str, object] = {}
 
     class ChunkStream(httpx.AsyncByteStream):
+        """按块产出 SSE 数据的流式响应体，避免真实网络依赖。"""
         async def __aiter__(self):
+            """依次产出两个 SSE 数据块。"""
             yield b"data: first\n\n"
             yield b"data: [DONE]\n\n"
 
     class FakeAsyncClient:
+        """记录中转调用参数的 httpx.AsyncClient 替身。"""
         def __init__(self, **kwargs) -> None:
+            """保存客户端构造参数，供断言超时等配置。"""
             captured["client_kwargs"] = kwargs
 
         def build_request(self, method, url, *, headers, content):  # noqa: ANN001
+            """记录并构造请求，便于校验转发的方法、URL 与请求体。"""
             captured.update(
                 method=method,
                 url=url,
@@ -189,6 +205,7 @@ async def test_llm_relay_forwards_auth_body_query_and_stream(monkeypatch) -> Non
             return httpx.Request(method, url, headers=headers, content=content)
 
         async def send(self, request, *, stream):  # noqa: ANN001
+            """返回带 SSE 头和自定义流的假响应，并记录是否流式发送。"""
             captured["stream"] = stream
             return httpx.Response(
                 200,
@@ -202,6 +219,7 @@ async def test_llm_relay_forwards_auth_body_query_and_stream(monkeypatch) -> Non
             )
 
         async def aclose(self) -> None:
+            """标记客户端已关闭，验证中转结束后会释放连接。"""
             captured["client_closed"] = True
 
     monkeypatch.setattr(single_port_app, "LLM_RELAY_UPSTREAM", "https://llm.example")
@@ -242,6 +260,7 @@ async def test_llm_relay_forwards_auth_body_query_and_stream(monkeypatch) -> Non
 
 @pytest.mark.asyncio
 async def test_llm_relay_rejects_oversized_body_before_upstream(monkeypatch) -> None:
+    """验证请求体超过上限时在访问上游前就返回 413。"""
     monkeypatch.setattr(single_port_app, "LLM_RELAY_UPSTREAM", "https://llm.example")
     monkeypatch.setattr(single_port_app, "LLM_RELAY_MAX_BODY_BYTES", 3)
 
@@ -255,10 +274,12 @@ async def test_llm_relay_rejects_oversized_body_before_upstream(monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_relay_uses_dedicated_upstream(monkeypatch) -> None:
+    """验证 Anthropic 消息中转使用专用上游地址与消息路径。"""
     captured: dict[str, object] = {}
     expected = single_port_app.StreamingResponse(iter([b"ok"]))
 
     async def fake_relay(request, *, upstream, upstream_path):  # noqa: ANN001
+        """记录中转参数并返回预置响应，替代真实上游调用。"""
         captured.update(
             request=request,
             upstream=upstream,

@@ -37,6 +37,7 @@ def _audit(
     resource_id: str,
     status_code: int = 200,
 ) -> None:
+    """为一次 MCP 调用写入 APIAuditLog 并立即提交，使审计与响应同步落库。"""
     db.add(
         APIAuditLog(
             tenant_id=principal.tenant_id,
@@ -58,12 +59,10 @@ def _resolve_agent(
     params: dict[str, Any],
     path_agent_id: str | None,
 ) -> str:
-    """Work out which employee a request is about, then prove the caller may use it.
+    """确定请求指向的员工，并校验调用方有权使用该员工。
 
-    Three sources, in order: the ``/mcp/agents/{id}`` path segment, the MCP
-    ``_meta.agentId`` field, and finally a credential bound to one employee. The
-    path form exists because a standard MCP client cannot inject ``_meta`` into
-    ``tools/list`` — it only ever sends ``{}`` or ``{"cursor": ...}``.
+    来源按优先级取：/mcp/agents/{id} 路径段、MCP 的 _meta.agentId、绑定单一员工的
+    凭证。提供路径形式是因为标准 MCP 客户端无法在 tools/list 中注入 _meta。
     """
     agent_id = path_agent_id or extract_agent_id(params, principal.agent_id)
     if not agent_id:
@@ -85,6 +84,11 @@ def _dispatch(
     db: Session,
     path_agent_id: str | None,
 ):
+    """解析 JSON-RPC 请求并按 method 分发，把各类错误统一转成 JSON-RPC 错误响应。
+
+    通知（notification）直接返回 202；PublicAPIError 原样抛出以保留 HTTP 状态码，
+    避免把 403 伪装成 200 的工具级错误。
+    """
     try:
         request_id, method, params, is_notification = parse_request(payload)
     except RpcError as error:
@@ -149,10 +153,9 @@ def mcp_endpoint(
     principal: PublicPrincipal = Depends(require_scopes("mcp:invoke")),
     db: Session = Depends(get_session),
 ):
-    """Serve the streamable-HTTP half of MCP.
+    """处理 MCP streamable HTTP 的通用入口。
 
-    JSON-RPC has a single endpoint, so every method is dispatched here rather
-    than mapped onto its own FastAPI route.
+    JSON-RPC 只有单一端点，因此所有方法都在这里分发，而不是各占一条 FastAPI 路由。
     """
     return _dispatch(
         payload=payload,
@@ -173,10 +176,10 @@ def mcp_agent_endpoint(
     principal: PublicPrincipal = Depends(require_scopes("mcp:invoke")),
     db: Session = Depends(get_session),
 ):
-    """Employee-addressed variant, for clients that cannot set ``_meta`` per request.
+    """按员工寻址的路由变体，供无法逐请求设置 _meta 的客户端使用。
 
-    deepchat's ``MCPServerConfig`` carries static ``customHeaders`` only, so the
-    employee has to be part of the URL the operator pastes into the settings page.
+    deepchat 的 MCPServerConfig 只支持静态 customHeaders，员工必须写进运营人员粘贴
+    到设置页的 URL 里。
     """
     return _dispatch(
         payload=payload,
@@ -192,7 +195,7 @@ def mcp_agent_endpoint(
 def mcp_get_not_supported(
     principal: PublicPrincipal = Depends(require_scopes("mcp:invoke")),
 ) -> Response:
-    """Streamable HTTP without server-initiated streams: GET has nothing to serve."""
+    """不支持服务端主动推送流，GET 无可返回内容，固定回 405。"""
     return Response(status_code=405, headers={"Allow": "POST"})
 
 
@@ -201,4 +204,5 @@ def mcp_agent_get_not_supported(
     agent_id: str,
     principal: PublicPrincipal = Depends(require_scopes("mcp:invoke")),
 ) -> Response:
+    """员工寻址路由的 GET 同样无内容可返回，固定回 405 并仅允许 POST。"""
     return Response(status_code=405, headers={"Allow": "POST"})

@@ -25,6 +25,8 @@ _cache_lock = threading.Lock()
 
 
 class AppVersionRead(BaseModel):
+    """版本检查接口的响应体:当前版本、最新版本、是否可更新及检查状态。"""
+
     current_version: str
     latest_version: str | None = None
     update_available: bool = False
@@ -40,6 +42,8 @@ _cached_result: tuple[float, AppVersionRead] | None = None
 
 @dataclass(frozen=True)
 class ReleaseEntry:
+    """从 releases atom feed 解析出的一条已发布版本记录。"""
+
     version: str
     parsed_version: Version
     name: str
@@ -48,6 +52,7 @@ class ReleaseEntry:
 
 
 def _parse_version(value: str) -> Version | None:
+    """解析版本串:去掉前导 v/V 与 +build 后缀,无法解析时返回 None。"""
     normalized = value.strip()
     if normalized[:1].lower() == "v":
         normalized = normalized[1:]
@@ -59,6 +64,7 @@ def _parse_version(value: str) -> Version | None:
 
 
 def _is_newer(latest: str, current: str) -> bool:
+    """判断 latest 是否严格高于 current;任一侧无法解析时返回 False。"""
     latest_version = _parse_version(latest)
     current_version = _parse_version(current)
     return bool(
@@ -69,6 +75,11 @@ def _is_newer(latest: str, current: str) -> bool:
 
 
 def _release_tag(entry: ElementTree.Element, namespace: dict[str, str]) -> tuple[str, str]:
+    """从 feed 条目提取 (版本 tag, 发布链接)。
+
+    优先取 alternate 链接里 /releases/tag/ 之后的段,并校验 https 与 github.com;
+    取不到时回退到 atom:id 末段,链接一律用通用发布页。无法识别版本时返回空 tag。
+    """
     link = entry.find("atom:link[@rel='alternate']", namespace)
     release_url = link.get("href", "").strip() if link is not None else ""
     if release_url:
@@ -91,6 +102,10 @@ def _release_tag(entry: ElementTree.Element, namespace: dict[str, str]) -> tuple
 
 
 def _parse_release_feed(content: bytes, current: str) -> ReleaseEntry | None:
+    """解析 releases atom feed,返回版本最高的候选条目;无可用候选时返回 None。
+
+    当前版本为稳定版时会排除预发布 tag,避免提示降级到历史 beta 版本线。
+    """
     root = ElementTree.fromstring(content)
     namespace = {"atom": "http://www.w3.org/2005/Atom"}
     current_version = _parse_version(current)
@@ -120,6 +135,10 @@ def _parse_release_feed(content: bytes, current: str) -> ReleaseEntry | None:
 
 
 def _fetch_version() -> AppVersionRead:
+    """拉取 releases feed 并组装版本信息;检查被关闭或请求失败时返回降级结果。
+
+    不向外抛异常:网络、XML 解析与版本格式问题统一折算为 check_succeeded=False。
+    """
     current = app_version()
     if not update_check_enabled():
         return AppVersionRead(
@@ -152,6 +171,10 @@ def _fetch_version() -> AppVersionRead:
 
 @router.get("/version", response_model=AppVersionRead)
 def get_app_version() -> AppVersionRead:
+    """返回当前版本与可用更新,用进程内 TTL 缓存限制对外请求频率。
+
+    命中未过期缓存直接复用;成功结果缓存 6 小时,失败结果缓存 15 分钟。
+    """
     global _cached_result
     now = time.monotonic()
     with _cache_lock:

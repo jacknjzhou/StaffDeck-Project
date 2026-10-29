@@ -12,22 +12,22 @@ import {
 } from './ui';
 
 export type DataTableColumn<T> = {
-  /** Unique column key. */
+  /** 列唯一标识。 */
   key: string;
-  /** Header cell content. */
+  /** 表头单元格内容。 */
   title: ReactNode;
-  /** Cell renderer. Falls back to `row[dataIndex]` when omitted. */
+  /** 单元格渲染函数；未提供时回退到 row[dataIndex]。 */
   render?: (row: T, index: number) => ReactNode;
-  /** Shortcut for reading a plain field value when no `render` is provided. */
+  /** 未提供 render 时用于读取普通字段值的快捷方式。 */
   dataIndex?: keyof T;
-  /** Fixed column width (px number or any CSS width). */
+  /** 固定列宽，支持像素数值或任意 CSS 宽度。 */
   width?: number | string;
   align?: 'left' | 'center' | 'right';
-  /** Extra classes for the body cell. */
+  /** 表体单元格附加类名。 */
   className?: string;
-  /** Extra classes for the header cell. */
+  /** 表头单元格附加类名。 */
   headClassName?: string;
-  /** Keep the column visible at an edge while the table scrolls horizontally. */
+  /** 表格横向滚动时将该列固定在左/右边缘。 */
   sticky?: 'left' | 'right';
 };
 
@@ -39,13 +39,13 @@ export type DataTableProps<T> = {
   emptyText?: ReactNode;
   loadingText?: ReactNode;
   onRowClick?: (row: T, index: number) => void;
-  /** Body row height. `default` = 64px, `compact` = 46px (SD1 execution-log style). */
+  /** 表体行高：default = 64px，compact = 46px（SD1 执行日志风格）。 */
   size?: 'default' | 'compact';
-  /** Zebra striping: even rows get a subtle `#fbfbfb` fill. */
+  /** 斑马纹：偶数行填充浅色 #fbfbfb。 */
   striped?: boolean;
-  /** Full grid: every cell is bordered instead of row-only dividers. */
+  /** 全网格：所有单元格显示边框，而非仅行分隔线。 */
   bordered?: boolean;
-  /** Extra classes for the outer rounded container. */
+  /** 外层圆角容器附加类名。 */
   className?: string;
   'aria-label'?: string;
 };
@@ -74,9 +74,9 @@ const STICKY_BODY_CLASS = {
 } as const;
 
 /**
- * Business data table (SD1 designs: node 281:1942 default, 281:2040 compact grid).
- * Rounded `#f2f3f7` frame, gray header row, white body rows with hairline dividers.
- * Built on top of the shadcn `Table` primitives but owns the product-specific styling.
+ * 业务数据表格（SD1 设计稿：节点 281:1942 默认样式，281:2040 紧凑网格）。
+ * 圆角 #f2f3f7 外框、灰色表头、白色表体与细线分隔。
+ * 基于 shadcn `Table` 基础组件实现，但产品特有的样式由本组件维护。
  */
 export function DataTable<T>({
   columns,

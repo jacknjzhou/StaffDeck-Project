@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 def run_external_task_worker() -> None:
+    """外部异步任务的轮询主循环，按配置间隔反复处理到期任务直到收到停止信号。
+
+    单轮异常只记录日志不中断循环，每轮使用独立 Session，避免一次失败永久阻断后续工具。
+    """
     while not _stop_event.is_set():
         try:
             with Session(engine) as db:
@@ -28,6 +32,7 @@ def run_external_task_worker() -> None:
 
 
 def start_external_task_worker() -> None:
+    """启动后台轮询线程；已有存活线程时直接返回，因此重复调用是幂等的。"""
     global _thread
     with _lifecycle_lock:
         if _thread and _thread.is_alive():
@@ -42,6 +47,7 @@ def start_external_task_worker() -> None:
 
 
 def stop_external_task_worker(timeout_seconds: float = 5.0) -> bool:
+    """请求停止轮询线程并在超时内等待其退出；线程已退出返回 True，超时仍存活返回 False。"""
     global _thread
     with _lifecycle_lock:
         _stop_event.set()

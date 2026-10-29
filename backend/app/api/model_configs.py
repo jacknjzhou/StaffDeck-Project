@@ -59,10 +59,12 @@ MODEL_VERIFICATION_PROBES = (
     dependencies=[Depends(require_current_tenant)],
 )
 def list_model_protocols(tenant_id: str = Query(...)) -> dict[str, list[str]]:
+    """列出服务端支持的模型 API 协议，供前端配置页下拉选择。"""
     return {"protocols": available_model_protocols()}
 
 
 def model_config_read(row: ModelConfig) -> ModelConfigRead:
+    """把 ModelConfig 表记录转成对外响应结构，API Key 仅以掩码返回。"""
     api_key = decrypt_secret(row.api_key_encrypted)
     extra_body = row.extra_body_json if isinstance(row.extra_body_json, dict) else {}
     return ModelConfigRead(
@@ -98,6 +100,7 @@ def model_config_read(row: ModelConfig) -> ModelConfigRead:
 def list_model_configs(
     tenant_id: str = Query(...), db: Session = Depends(get_session)
 ) -> list[ModelConfigRead]:
+    """列出指定租户下的全部模型配置。"""
     ensure_tenant(db, tenant_id)
     rows = db.exec(select(ModelConfig).where(ModelConfig.tenant_id == tenant_id)).all()
     return [model_config_read(row) for row in rows]
@@ -110,6 +113,11 @@ def create_model_config(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> ModelConfigRead:
+    """新建模型配置，默认处于停用且未验证状态。
+
+    verify_before_save 且请求启用时，先跑一次真实连通性验证再落库并设为默认；
+    缺 API Key 或采样参数非法抛 422，默认项唯一约束冲突抛 409。
+    """
     ensure_tenant_admin(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
     protocol = resolve_api_protocol(request.api_protocol, request.provider)
@@ -155,6 +163,12 @@ def update_model_config(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> ModelConfigRead:
+    """更新模型配置；安全相关字段变化会让配置回到未验证并强制停用。
+
+    协议、base_url、model、API Key、协议选项或 extra_body 任一变化都递增
+    security_revision 并清空信任状态与默认标记；verify_before_save 时先验证
+    再启用，默认项唯一约束冲突抛 409。
+    """
     ensure_tenant_admin(request.tenant_id, current_user)
     row = _get_model_config(db, request.tenant_id, config_id)
     has_other_available_model = _has_available_model(
@@ -257,6 +271,7 @@ def delete_model_config(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    """删除模型配置，并级联删除引用它的智能体模型绑定。"""
     ensure_tenant_admin(tenant_id, current_user)
     row = _get_model_config(db, tenant_id, config_id)
     bindings = db.exec(
@@ -280,6 +295,7 @@ def delete_model_config(
 def set_default_model_config(
     config_id: str, tenant_id: str = Query(...), db: Session = Depends(get_session)
 ) -> ModelConfigRead:
+    """把指定配置设为租户默认模型；未通过验证或未启用时抛 409。"""
     row = _get_model_config(db, tenant_id, config_id)
     _require_trusted(row)
     if not row.enabled:
@@ -304,6 +320,12 @@ def test_model_config(
     activate_if_initial: bool = False,
     db: Session = Depends(get_session),
 ) -> ModelConfigTestResponse:
+    """对模型配置做连通性验证并落库验证状态，返回各能力探针结果。
+
+    按 text/stream/json 三个探针在总时限内依次执行；期间若配置被并发改动
+    （security_revision、attempt_id 或状态变化）则返回 MODEL_VERIFICATION_STALE；
+    activate_if_initial 时，租户尚无可用模型的情况下把验证成功的配置设为默认。
+    """
     row = _get_model_config(db, tenant_id, config_id)
     initial_activation_candidate = (
         activate_if_initial
@@ -429,6 +451,10 @@ def test_model_config(
 
 
 def _verify_candidate_for_save(row: ModelConfig) -> None:
+    """保存前对候选配置跑一遍验证探针，失败抛 502 且不落库。
+
+    只更新内存行的验证字段（尝试状态、trust_status、指纹），事务提交由调用方负责。
+    """
     attempt_id = uuid4().hex
     row.verification_attempt_id = attempt_id
     row.verification_attempt_status = "verifying"
@@ -448,6 +474,11 @@ def _verify_candidate_for_save(row: ModelConfig) -> None:
 def _run_verification_probes(
     config: ResolvedModelConfig,
 ) -> tuple[list[ModelCapabilityTestResult], str | None]:
+    """依次执行 text/stream/json 三个探针，返回已通过的能力列表与文本输出。
+
+    单探针超时取自身预算与总时限剩余量的较小值；总时限耗尽抛
+    MODEL_VERIFICATION_DEADLINE_EXCEEDED，输出为空或 JSON 非法同样抛 LLMError。
+    """
     capabilities: list[ModelCapabilityTestResult] = []
     output: str | None = None
     verification_started = monotonic()
@@ -488,6 +519,7 @@ def _run_verification_probes(
 
 
 def _verification_error_code(exc: Exception) -> str:
+    """从异常里提取对外错误码：优先 LLMError.code，其次识别 MODEL_ 前缀纯码。"""
     if isinstance(exc, LLMError) and exc.code:
         return exc.code
     value = str(exc).strip()
@@ -499,6 +531,10 @@ def _verification_error_code(exc: Exception) -> str:
 def _mark_verification_failed(
     db: Session, row: ModelConfig, attempt_id: str, error_code: str
 ) -> None:
+    """把当前验证尝试标记为失败并写入错误码。
+
+    重新读取行后比对 attempt_id，已被新尝试取代则直接返回，避免覆盖新状态。
+    """
     db.refresh(row)
     if row.verification_attempt_id != attempt_id:
         return
@@ -509,6 +545,7 @@ def _mark_verification_failed(
 
 
 def _get_model_config(db: Session, tenant_id: str, config_id: str) -> ModelConfig:
+    """按租户取模型配置；不存在或不属于该租户时抛 404。"""
     ensure_tenant(db, tenant_id)
     row = db.get(ModelConfig, config_id)
     if not row or row.tenant_id != tenant_id:
@@ -519,6 +556,7 @@ def _get_model_config(db: Session, tenant_id: str, config_id: str) -> ModelConfi
 def _has_available_model(
     db: Session, tenant_id: str, *, exclude_config_id: str | None = None
 ) -> bool:
+    """判断租户是否已有可用模型（启用或默认），可排除指定配置本身。"""
     statement = select(ModelConfig).where(
         ModelConfig.tenant_id == tenant_id,
         (ModelConfig.enabled == True) | (ModelConfig.is_default == True),  # noqa: E712
@@ -529,6 +567,7 @@ def _has_available_model(
 
 
 def _clear_default(db: Session, tenant_id: str) -> None:
+    """用一条批量 UPDATE 清掉租户下所有默认标记，为新默认项腾位。"""
     db.exec(
         update(ModelConfig)
         .where(
@@ -543,6 +582,7 @@ def _request_protocol_options(
     protocol_options: dict | None,
     protocol: ModelApiProtocol,
 ) -> dict:
+    """规范化请求里的协议选项：Chat Completions 归一化，其他协议必须为空。"""
     if protocol_options is None:
         return {}
     if protocol is ModelApiProtocol.OPENAI_CHAT_COMPLETIONS:
@@ -553,7 +593,7 @@ def _request_protocol_options(
 
 
 def _request_extra_body(extra_body: dict | None, protocol: ModelApiProtocol) -> dict:
-    """Validate provider-specific request fields separately from protocol options."""
+    """校验模型商专属透传字段：仅 Chat Completions 协议允许非空，其余协议抛 422。"""
     if not extra_body:
         return {}
     if protocol is not ModelApiProtocol.OPENAI_CHAT_COMPLETIONS:
@@ -564,6 +604,7 @@ def _request_extra_body(extra_body: dict | None, protocol: ModelApiProtocol) -> 
 def _validate_sampling(
     protocol: ModelApiProtocol, temperature: float, max_output_tokens: int
 ) -> None:
+    """校验采样参数：温度上限随协议不同（Anthropic 为 1，其余为 2），最大输出 token 必须为正。"""
     max_temperature = 1 if protocol is ModelApiProtocol.ANTHROPIC_MESSAGES else 2
     if not 0 <= temperature <= max_temperature:
         raise HTTPException(status_code=422, detail="MODEL_TEMPERATURE_INVALID")
@@ -572,6 +613,10 @@ def _validate_sampling(
 
 
 def _require_trusted(row: ModelConfig) -> None:
+    """要求配置已验证且指纹仍匹配；历史可信配置在同协议下直接放行。
+
+    不满足时抛 409 MODEL_CONFIG_VERIFICATION_REQUIRED，提示需重新测试。
+    """
     if row.trust_status == "legacy_trusted" and row.api_protocol == "openai_chat_completions":
         return
     if row.trust_status != "verified" or row.verified_fingerprint != _fingerprint(row):
@@ -579,6 +624,7 @@ def _require_trusted(row: ModelConfig) -> None:
 
 
 def _fingerprint(row: ModelConfig) -> str:
+    """按协议、地址、模型、密钥版本与安全版本算出配置指纹，用于判定验证是否失效。"""
     protocol = ModelApiProtocol(row.api_protocol)
     return model_config_fingerprint(
         api_protocol=row.api_protocol,
@@ -591,6 +637,7 @@ def _fingerprint(row: ModelConfig) -> str:
 
 
 def _commit_or_conflict(db: Session) -> None:
+    """提交事务；默认项唯一约束冲突时回滚并抛 409 MODEL_DEFAULT_CONFLICT。"""
     try:
         db.commit()
     except IntegrityError as exc:

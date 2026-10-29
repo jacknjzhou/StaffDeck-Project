@@ -3,6 +3,7 @@ from app.general_skills import runtime_env
 
 
 def test_bundled_python_used_when_frozen(monkeypatch, tmp_path) -> None:
+    """验证冻结运行时解析解释器时优先返回随包内置的 Python。"""
     monkeypatch.setattr(paths, "is_frozen", lambda: True)
     bundled = tmp_path / "runtime" / "bin" / "python"
     bundled.parent.mkdir(parents=True)
@@ -13,6 +14,7 @@ def test_bundled_python_used_when_frozen(monkeypatch, tmp_path) -> None:
 
 
 def test_network_install_disabled_skips_pip(monkeypatch, tmp_path) -> None:
+    """验证关闭网络安装开关时，准备运行时不会触发依赖安装。"""
     fake_python = tmp_path / "python3"
     fake_python.write_text("")
     called = {"pip": False}
@@ -30,6 +32,7 @@ def test_network_install_disabled_skips_pip(monkeypatch, tmp_path) -> None:
 
 
 def test_network_install_enabled_triggers_pip(monkeypatch, tmp_path) -> None:
+    """验证开启网络安装与自动安装开关时，准备运行时会触发依赖安装。"""
     fake_python = tmp_path / "python3"
     fake_python.write_text("")
     called = {"pip": False}
