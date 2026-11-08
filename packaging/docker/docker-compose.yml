@@ -28,6 +28,8 @@ services:
     environment: &app_env
       DATABASE_URL: postgresql+psycopg://staffdeck:${STAFFDECK_PG_PASSWORD}@postgres:5432/staffdeck
       APP_SECRET: ${STAFFDECK_APP_SECRET:?STAFFDECK_APP_SECRET must be set}
+      ENVIRONMENT: ${STAFFDECK_ENVIRONMENT:-production}
+      BOOTSTRAP_ADMIN_PASSWORD: ${STAFFDECK_BOOTSTRAP_ADMIN_PASSWORD:-}
       REDIS_URL: redis://redis:6379/0
       PROCESS_ROLE: api
       STAFFDECK_RUN_MIGRATIONS: "1"

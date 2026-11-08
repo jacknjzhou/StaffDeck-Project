@@ -1,6 +1,7 @@
 import os as _os
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +11,14 @@ class Settings(BaseSettings):
     app_name: str = "Skill Agent Loop Service"
     database_url: str = "sqlite:///./skill_agent_loop.db"
     app_secret: str = "change-me-in-development"
+    # 部署形态：production 时启动阶段即校验密钥等安全配置，开发环境保留默认值。
+    environment: str = "development"
+    bootstrap_admin_password: str = ""
+    seed_demo_data: bool = True
+    mcp_stdio_enabled: bool = False
+    mcp_stdio_allowed_commands: str = "npx,uvx,node,python3,uv"
+    login_rate_limit_per_minute: int = 10
+    max_upload_bytes: int = 50 * 1024 * 1024
     demo_model_base_url: str = "http://localhost:52010/v1"
     demo_model_name: str = "qwen3.6-27b"
     demo_model_api_key: str = ""
@@ -94,6 +103,11 @@ class Settings(BaseSettings):
     )
 
     @property
+    def is_production(self) -> bool:
+        """当前部署形态是否为生产环境（决定是否启用启动期安全校验）。"""
+        return self.environment.lower() == "production"
+
+    @property
     def cors_origin_list(self) -> list[str]:
         """把逗号分隔的 cors_origins 拆成去掉空白与空项的来源列表。"""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -107,6 +121,19 @@ class Settings(BaseSettings):
     def general_skill_runtime_package_list(self) -> list[str]:
         """把逗号分隔的 general_skill_runtime_packages 拆成去空白的包名列表。"""
         return [item.strip() for item in self.general_skill_runtime_packages.split(",") if item.strip()]
+
+    @model_validator(mode="after")
+    def _validate_production_secrets(self) -> "Settings":
+        """生产环境拒绝默认或过短的 APP_SECRET，把配置错误提前到进程启动阶段。"""
+        if not self.is_production:
+            return self
+        if self.app_secret == "change-me-in-development" or len(self.app_secret) < 32:
+            raise ValueError(
+                "APP_SECRET must be set to a random value of at least 32 characters "
+                "in production; generate one with `python -c \"import secrets;"
+                "print(secrets.token_urlsafe(48))\"`"
+            )
+        return self
 
 
 @lru_cache
