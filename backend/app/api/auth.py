@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from datetime import datetime
-from typing import Literal, Optional
+from threading import Lock
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
@@ -27,6 +29,127 @@ from app.security.tenant import ensure_tenant
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# 登录限速(成功与失败都计数):固定窗口 60 秒。配置了 Redis 时跨进程共享,
+# 否则退化为进程内计数;身份键同时带来源 IP 与用户名,避免 NAT 放大或换用户名绕过。
+_LOGIN_RATE_KEY_PREFIX = "staffdeck:login:"
+_LOGIN_RATE_WINDOW_SECONDS = 60
+# 进程内窗口的键上限:超过后先清理过期项,防止伪造用户名把字典撑大。
+_LOGIN_RATE_WINDOW_MAX_KEYS = 1024
+_login_memory_windows: dict[str, tuple[float, int]] = {}
+_login_memory_lock = Lock()
+_login_redis_client: Any = None
+_login_redis_client_url = ""
+
+
+def _settings() -> Any:
+    """延迟读取设置,让测试可以 monkeypatch `app.config.get_settings`。"""
+    from app.config import get_settings
+
+    return get_settings()
+
+
+def _login_identity_key(host: str, username: str) -> str:
+    """限速身份键:来源 + 用户名,避免只按 IP 被 NAT 放大或只按用户被绕过。"""
+    return f"login:{host}:{username}"
+
+
+def _request_host(request: Request) -> str:
+    """取直连来源 IP;测试客户端没有 client 时退化为 unknown。"""
+    client = request.client
+    host = getattr(client, "host", "") if client is not None else ""
+    return host or "unknown"
+
+
+def _build_login_redis_client(url: str) -> Any:
+    """构造限速用 Redis 客户端;独立成型便于测试注入 fakeredis。"""
+    from redis import Redis
+
+    return Redis.from_url(
+        url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2
+    )
+
+
+def _login_redis(url: str) -> Any:
+    """按 URL 复用 Redis 客户端,避免每次登录都新建连接。"""
+    global _login_redis_client, _login_redis_client_url
+    if _login_redis_client is None or _login_redis_client_url != url:
+        _login_redis_client = _build_login_redis_client(url)
+        _login_redis_client_url = url
+    return _login_redis_client
+
+
+def _prune_memory_windows(now: float) -> None:
+    """清理已过期的进程内窗口条目(调用方持有 `_login_memory_lock`)。"""
+    expired = [
+        key
+        for key, (start, _) in _login_memory_windows.items()
+        if now - start >= _LOGIN_RATE_WINDOW_SECONDS
+    ]
+    for key in expired:
+        del _login_memory_windows[key]
+
+
+def _hit_memory_window(identity: str) -> int:
+    """进程内固定窗口计数,返回当前窗口内的累计次数。"""
+    now = time.monotonic()
+    with _login_memory_lock:
+        start, count = _login_memory_windows.get(identity, (now, 0))
+        if now - start >= _LOGIN_RATE_WINDOW_SECONDS:
+            start, count = now, 0
+        if identity not in _login_memory_windows and (
+            len(_login_memory_windows) >= _LOGIN_RATE_WINDOW_MAX_KEYS
+        ):
+            _prune_memory_windows(now)
+            if len(_login_memory_windows) >= _LOGIN_RATE_WINDOW_MAX_KEYS:
+                # 全是活跃窗口时强制淘汰最早的一条,保证字典有界。
+                oldest = min(
+                    _login_memory_windows,
+                    key=lambda key: _login_memory_windows[key][0],
+                )
+                del _login_memory_windows[oldest]
+        count += 1
+        _login_memory_windows[identity] = (start, count)
+        return count
+
+
+def _rate_limit_login(identity: str) -> None:
+    """固定窗口登录限速,超限抛 429。
+
+    配置 Redis 时用 INCR + EXPIRE 跨进程共享;Redis 异常只记 warning 并降级到
+    进程内窗口,登录接口绝不能因此 500。密码与凭据永远不写日志。
+    """
+    settings = _settings()
+    limit = int(settings.login_rate_limit_per_minute or 0)
+    if limit <= 0:
+        return
+    url = str(settings.redis_url or "").strip()
+    count: int | None = None
+    if url:
+        try:
+            client = _login_redis(url)
+            key = f"{_LOGIN_RATE_KEY_PREFIX}{identity}"
+            count = int(client.incr(key))
+            if count == 1:
+                client.expire(key, _LOGIN_RATE_WINDOW_SECONDS)
+        except Exception as exc:  # noqa: BLE001 - Redis 故障必须降级而非 500
+            logger.warning(
+                "login rate limit: redis unavailable, falling back to memory: %r", exc
+            )
+            count = None
+    if count is None:
+        count = _hit_memory_window(identity)
+    if count > limit:
+        raise HTTPException(status_code=429, detail="too many login attempts")
+
+
+def _reset_login_rate_limit_state() -> None:
+    """清空限速窗口与 Redis 客户端缓存,供测试隔离与运维重置使用。"""
+    global _login_redis_client, _login_redis_client_url
+    with _login_memory_lock:
+        _login_memory_windows.clear()
+    _login_redis_client = None
+    _login_redis_client_url = ""
 
 
 class LoginRequest(BaseModel):
@@ -129,28 +252,35 @@ ACCOUNT_API_CLIENT_PREFIX = "StaffDeck 账号全量 API"
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(request: LoginRequest, db: Session = Depends(get_session)) -> LoginResponse:
-    """账号密码登录：校验租户与密码后签发访问令牌。
+def login(
+    request: Request,
+    payload: LoginRequest,
+    db: Session = Depends(get_session),
+) -> LoginResponse:
+    """账号密码登录：限速后校验租户与密码，签发访问令牌。
 
     用户名不存在时允许唯一匹配 display_name 作为登录名；凭据错误一律返回 401。
+    所有尝试(无论成败)都计入限速窗口，避免攻击者靠无限重试枚举账号。
     """
-    ensure_tenant(db, request.tenant_id)
-    username = request.username.strip()
-    if not username or not request.password:
+    username = payload.username.strip()
+    # 先计数再查租户/密码:所有尝试(含错误租户、空字段)都进同一窗口。
+    _rate_limit_login(_login_identity_key(_request_host(request), username))
+    ensure_tenant(db, payload.tenant_id)
+    if not username or not payload.password:
         raise HTTPException(status_code=400, detail="Username and password are required")
 
     user = db.exec(
-        select(User).where(User.tenant_id == request.tenant_id, User.username == username)
+        select(User).where(User.tenant_id == payload.tenant_id, User.username == username)
     ).first()
     if not user:
         display_name_matches = db.exec(
             select(User)
-            .where(User.tenant_id == request.tenant_id, User.display_name == username)
+            .where(User.tenant_id == payload.tenant_id, User.display_name == username)
             .limit(2)
         ).all()
         if len(display_name_matches) == 1:
             user = display_name_matches[0]
-    if not user or not verify_password(request.password, user.password_hash):
+    if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     return LoginResponse(
@@ -692,10 +822,22 @@ def oidc_callback(code: str, state: str, db: Session = Depends(get_session)):
     email = (userinfo.get("email") or "").strip()
     if not email:
         raise HTTPException(status_code=400, detail="OIDC account missing email")
-    user = db.exec(select(User).where(User.username == email)).first()
+    tenant_id = settings.oidc_tenant_id or "tenant_demo"
+    user = db.exec(
+        select(User).where(User.tenant_id == tenant_id, User.username == email)
+    ).first()
     if user is None:
+        other_tenant_user = db.exec(
+            select(User).where(User.username == email, User.tenant_id != tenant_id)
+        ).first()
+        if other_tenant_user is not None:
+            # 多租户歧义:绝不静默选中或新建重复账号,交给管理员显式绑定。
+            raise HTTPException(
+                status_code=409,
+                detail="该邮箱已存在于其他租户，请联系管理员在当前租户显式绑定该账号",
+            )
         user = User(
-            tenant_id="tenant_demo",
+            tenant_id=tenant_id,
             username=email,
             display_name=(userinfo.get("name") or email).strip()[:80],
             # 不可用占位:OIDC 账号不走密码校验(verify_password 对非法哈希恒 False)

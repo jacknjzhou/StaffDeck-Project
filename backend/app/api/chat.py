@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import timedelta
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, or_, update
@@ -22,6 +22,11 @@ from starlette.background import BackgroundTask
 from app.agents.branching import model_for_agent, visible_published_skills
 from app.channels.service_outbox import stage_channel_delivery
 from app.core import AgentLoop
+from app.core.body_limit import (
+    CHAT_UPLOAD_BODY_LIMIT,
+    MAX_CHAT_ATTACHMENT_BYTES,
+    MAX_CHAT_ATTACHMENTS,
+)
 from app.core.cancellation import cancel_chat_turn, is_chat_turn_cancelled
 from app.core.capability_manifest import CapabilityManifestBuilder
 from app.core.harness_session_cleanup import harness_task_workspace_path
@@ -102,8 +107,28 @@ STREAM_RELAY_POLL_SECONDS = 0.08
 STREAM_RELAY_HEARTBEAT_SECONDS = 5.0
 STREAM_RELAY_IDLE_TIMEOUT_SECONDS = 660.0
 STREAM_INTERRUPTED_TRACEBACK_CHAR_LIMIT = 6000
-MAX_CHAT_ATTACHMENT_BYTES = 12 * 1024 * 1024
-MAX_CHAT_ATTACHMENTS = 8
+
+
+def _parse_content_length(value: str | None) -> int | None:
+    """把 content-length 头解析为整数;缺失或非法时返回 None 交由分片校验兜底。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _reject_oversized_upload(content_length: int | None, limit: int) -> None:
+    """声明长度超限时立即 413。
+
+    中间件已在 multipart 解析前做过权威拦截,这里是端点内的纵深防御;
+    长度缺失或非法时放行,真正的上限仍由逐文件读取校验保证。
+    """
+    if content_length is not None and content_length > limit:
+        raise HTTPException(status_code=413, detail="请求体超过上传大小限制")
+
+
 SESSION_TITLE_SUMMARY_EVENT = "session_title_summarized"
 SCHEDULE_WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 EVENT_PAYLOAD_META_KEYS = {"id", "event", "type", "event_type", "created_at", "data"}
@@ -1032,6 +1057,7 @@ def list_slash_commands(
 
 @router.post("/attachments", response_model=list[ChatAttachmentRead])
 async def upload_chat_attachments(
+    request: Request,
     tenant_id: str = Query(...),
     files: list[UploadFile] = File(...),
     current_user: User = Depends(get_current_user),
@@ -1039,8 +1065,13 @@ async def upload_chat_attachments(
 ) -> list[ChatAttachmentRead]:
     """接收并暂存本轮聊天附件，返回前端可回传的附件描述。
     数量超过 MAX_CHAT_ATTACHMENTS 返回 400，单个文件超过大小上限返回 413。
+    请求体声明长度明显超限时在读取文件前直接 413。
     """
     _ensure_request_tenant(tenant_id, current_user)
+    _reject_oversized_upload(
+        _parse_content_length(request.headers.get("content-length")),
+        limit=CHAT_UPLOAD_BODY_LIMIT,
+    )
     ensure_tenant(db, tenant_id)
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")

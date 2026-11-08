@@ -58,7 +58,7 @@ def _test_engine():
     return engine
 
 
-def _client_with_oidc(monkeypatch, *, enabled: bool = True):
+def _client_with_oidc(monkeypatch, *, enabled: bool = True, tenant_id: str = ""):
     """装配启用 OIDC 配置的独立 FastAPI 实例与测试客户端,并按需关闭 OIDC。"""
     settings = Settings(
         oidc_enabled=enabled,
@@ -67,6 +67,7 @@ def _client_with_oidc(monkeypatch, *, enabled: bool = True):
         oidc_client_secret="sec",
         oidc_redirect_uri="http://localhost:5173/api/auth/oidc/callback",
         frontend_base_url="http://localhost:5173",
+        oidc_tenant_id=tenant_id,
         database_url="sqlite://",
         app_secret="test-secret",
     )
@@ -144,3 +145,73 @@ def test_callback_rejects_unknown_state(monkeypatch):
         "/api/auth/oidc/callback?code=c&state=forged", follow_redirects=False
     )
     assert resp.status_code == 400
+
+
+def _seed_oidc_user(engine, *, tenant_id: str, email: str) -> None:
+    """在指定租户预置一个同邮箱账号,用于验证跨租户歧义。"""
+    with Session(engine) as db:
+        db.add(
+            User(
+                tenant_id=tenant_id,
+                username=email,
+                display_name="Existing",
+                password_hash="oidc",
+                source="oidc",
+            )
+        )
+        db.commit()
+
+
+def _run_callback(client, *, email: str):
+    """带合法 state 与桩 userinfo 走一次回调,返回响应。"""
+    from app.security import oidc as oidc_mod
+
+    state = oidc_mod.new_state()
+    with patch(
+        "app.security.oidc._discover", return_value=DISCOVERY_FULL
+    ), patch(
+        "app.security.oidc._exchange_code",
+        return_value={"access_token": "at"},
+    ), patch(
+        "app.security.oidc._fetch_userinfo",
+        return_value={"sub": "u-9", "email": email, "name": "Dev"},
+    ):
+        return client.get(
+            f"/api/auth/oidc/callback?code=c&state={state}", follow_redirects=False
+        )
+
+
+def test_callback_creates_user_in_configured_tenant(monkeypatch):
+    """配置 oidc_tenant_id 后,新用户落在绑定租户而不是默认租户。"""
+    client, engine = _client_with_oidc(monkeypatch, tenant_id="tenant_acme")
+    resp = _run_callback(client, email="dev@example.com")
+
+    assert resp.status_code == 302
+    with Session(engine) as db:
+        user = db.exec(select(User).where(User.username == "dev@example.com")).first()
+        assert user is not None
+        assert user.tenant_id == "tenant_acme"
+
+
+def test_callback_reuses_user_in_bound_tenant(monkeypatch):
+    """绑定租户内已有同邮箱账号时直接复用,不新建重复用户。"""
+    client, engine = _client_with_oidc(monkeypatch, tenant_id="tenant_acme")
+    _seed_oidc_user(engine, tenant_id="tenant_acme", email="dev@example.com")
+    resp = _run_callback(client, email="dev@example.com")
+
+    assert resp.status_code == 302
+    with Session(engine) as db:
+        rows = db.exec(select(User).where(User.username == "dev@example.com")).all()
+        assert [row.tenant_id for row in rows] == ["tenant_acme"]
+
+
+def test_callback_rejects_email_bound_to_another_tenant(monkeypatch):
+    """同一邮箱存在于其他租户时返回 409,禁止静默登录或新建重复账号。"""
+    client, engine = _client_with_oidc(monkeypatch, tenant_id="tenant_acme")
+    _seed_oidc_user(engine, tenant_id="tenant_demo", email="dev@example.com")
+    resp = _run_callback(client, email="dev@example.com")
+
+    assert resp.status_code == 409
+    with Session(engine) as db:
+        rows = db.exec(select(User).where(User.username == "dev@example.com")).all()
+        assert [row.tenant_id for row in rows] == ["tenant_demo"]

@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 from sqlalchemy.pool import StaticPool
+from starlette.requests import Request
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.api.auth import (
@@ -14,6 +15,12 @@ from app.db.models import Tenant, User
 from app.security.auth import hash_password
 
 
+def _call_login(db: Session, payload: LoginRequest):
+    """按新签名(请求对象在前)调用登录,请求只需带 client 供限速取来源。"""
+    request = Request({"type": "http", "client": ("127.0.0.1", 1234), "headers": []})
+    return login(request, payload, db)
+
+
 def test_unknown_login_does_not_create_account() -> None:
     """验证登录不存在的账号返回 401，且不会顺带创建用户。"""
     with _test_session() as db:
@@ -21,7 +28,10 @@ def test_unknown_login_does_not_create_account() -> None:
         db.commit()
 
         try:
-            login(LoginRequest(tenant_id="tenant_demo", username="missing", password="secret"), db)
+            _call_login(
+                db,
+                LoginRequest(tenant_id="tenant_demo", username="missing", password="secret"),
+            )
         except HTTPException as error:
             assert error.status_code == 401
             assert error.detail == "Invalid username or password"
@@ -115,9 +125,9 @@ def test_admin_password_update_allows_login_with_unique_display_name() -> None:
             db,
         )
 
-        session = login(
-            LoginRequest(tenant_id="tenant_demo", username="zongkelong", password="123456"),
+        session = _call_login(
             db,
+            LoginRequest(tenant_id="tenant_demo", username="zongkelong", password="123456"),
         )
 
         assert session.user.id == member.id
@@ -149,9 +159,9 @@ def test_duplicate_display_name_cannot_be_used_to_login() -> None:
         db.commit()
 
         try:
-            login(
-                LoginRequest(tenant_id="tenant_demo", username="duplicate", password="123456"),
+            _call_login(
                 db,
+                LoginRequest(tenant_id="tenant_demo", username="duplicate", password="123456"),
             )
         except HTTPException as error:
             assert error.status_code == 401

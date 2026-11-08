@@ -39,6 +39,7 @@ from app.async_jobs import shutdown_async_jobs, start_async_jobs
 from app.channels import start_channel_services, stop_channel_services
 from app.config import get_settings
 from app.core import runtime_state
+from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.harness_recovery import (
     recover_orphan_harness_runs,
     start_harness_recovery_sweeper,
@@ -78,6 +79,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 上传体积预检:FastAPI 会在进入端点前解析 multipart,超限请求必须在这里
+# 读取 body 之前拒绝。仅覆盖 POST /api/chat/attachments,其余请求原样放行。
+app.add_middleware(BodySizeLimitMiddleware)
 
 
 # 进程角色 -> 启用的能力组。/api/chat、/api/enterprise、/api/v1 路由全部进程
