@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import func
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -215,3 +216,15 @@ def test_callback_rejects_email_bound_to_another_tenant(monkeypatch):
     with Session(engine) as db:
         rows = db.exec(select(User).where(User.username == "dev@example.com")).all()
         assert [row.tenant_id for row in rows] == ["tenant_demo"]
+
+
+def test_callback_normalizes_email_case_and_whitespace(monkeypatch):
+    """邮箱先去空白再转小写,已有账号即使大小写不同也能复用。"""
+    client, engine = _client_with_oidc(monkeypatch, tenant_id="tenant_acme")
+    _seed_oidc_user(engine, tenant_id="tenant_acme", email="Dev@Example.com")
+    resp = _run_callback(client, email="  DEV@example.COM  ")
+
+    assert resp.status_code == 302
+    with Session(engine) as db:
+        rows = db.exec(select(User).where(func.lower(User.username) == "dev@example.com")).all()
+        assert [row.tenant_id for row in rows] == ["tenant_acme"]

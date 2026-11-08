@@ -1081,7 +1081,7 @@ async def upload_chat_attachments(
     from app.session.attachment_store import stage_chat_attachment
 
     for file in files:
-        data = await file.read()
+        data = await file.read(MAX_CHAT_ATTACHMENT_BYTES + 1)
         if len(data) > MAX_CHAT_ATTACHMENT_BYTES:
             raise HTTPException(status_code=413, detail=f"{file.filename or '文件'} 超过上传大小限制")
         attachment = parse_chat_attachment(

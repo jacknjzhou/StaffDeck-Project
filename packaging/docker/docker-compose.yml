@@ -31,6 +31,10 @@ services:
       ENVIRONMENT: ${STAFFDECK_ENVIRONMENT:-production}
       BOOTSTRAP_ADMIN_PASSWORD: ${STAFFDECK_BOOTSTRAP_ADMIN_PASSWORD:-}
       REDIS_URL: redis://redis:6379/0
+      # uvicorn 默认只信任 127.0.0.1 的 X-Forwarded-*;nginx 在另一个容器,
+      # 不放开这里会导致所有登录都记为 nginx 的地址。api 端口未发布,
+      # 仅信任 Docker 子网与回环即可,生产禁止改成 `*`。
+      FORWARDED_ALLOW_IPS: ${STAFFDECK_FORWARDED_ALLOW_IPS:-172.16.0.0/12,127.0.0.1}
       PROCESS_ROLE: api
       STAFFDECK_RUN_MIGRATIONS: "1"
     depends_on:

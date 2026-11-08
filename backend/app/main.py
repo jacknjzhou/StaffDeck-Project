@@ -72,6 +72,11 @@ app = FastAPI(
     openapi_url=None,
 )
 
+# 上传体积预检:FastAPI 会在进入端点前解析 multipart,超限请求必须在这里
+# 读取 body 之前拒绝。仅覆盖 POST /api/chat/attachments,其余请求原样放行。
+# 先注册体积预检、后注册 CORS:Starlette 后注册的中间件在外层,413 也能带 CORS 头。
+app.add_middleware(BodySizeLimitMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -79,10 +84,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 上传体积预检:FastAPI 会在进入端点前解析 multipart,超限请求必须在这里
-# 读取 body 之前拒绝。仅覆盖 POST /api/chat/attachments,其余请求原样放行。
-app.add_middleware(BodySizeLimitMiddleware)
 
 
 # 进程角色 -> 启用的能力组。/api/chat、/api/enterprise、/api/v1 路由全部进程

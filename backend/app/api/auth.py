@@ -10,6 +10,8 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
+from redis.exceptions import RedisError
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.db import get_session
@@ -116,8 +118,9 @@ def _hit_memory_window(identity: str) -> int:
 def _rate_limit_login(identity: str) -> None:
     """固定窗口登录限速,超限抛 429。
 
-    配置 Redis 时用 INCR + EXPIRE 跨进程共享;Redis 异常只记 warning 并降级到
-    进程内窗口,登录接口绝不能因此 500。密码与凭据永远不写日志。
+    配置 Redis 时用 INCR + EXPIRE 跨进程共享;每次 INCR 后补一次 NX 过期,
+    修复历史上缺失 TTL 的键。Redis 异常只记日志并降级到进程内窗口,
+    登录接口绝不能因此 500。密码与凭据永远不写日志。
     """
     settings = _settings()
     limit = int(settings.login_rate_limit_per_minute or 0)
@@ -130,17 +133,22 @@ def _rate_limit_login(identity: str) -> None:
             client = _login_redis(url)
             key = f"{_LOGIN_RATE_KEY_PREFIX}{identity}"
             count = int(client.incr(key))
-            if count == 1:
-                client.expire(key, _LOGIN_RATE_WINDOW_SECONDS)
-        except Exception as exc:  # noqa: BLE001 - Redis 故障必须降级而非 500
-            logger.warning(
+            # NX: 只在键还没有 TTL 时补,避免把已有窗口续期;同时修复
+            # INCR 成功后进程崩溃留下的永久键。
+            client.expire(key, _LOGIN_RATE_WINDOW_SECONDS, nx=True)
+        except (RedisError, OSError) as exc:
+            logger.exception(
                 "login rate limit: redis unavailable, falling back to memory: %r", exc
             )
             count = None
     if count is None:
         count = _hit_memory_window(identity)
     if count > limit:
-        raise HTTPException(status_code=429, detail="too many login attempts")
+        raise HTTPException(
+            status_code=429,
+            detail="too many login attempts",
+            headers={"Retry-After": str(_LOGIN_RATE_WINDOW_SECONDS)},
+        )
 
 
 def _reset_login_rate_limit_state() -> None:
@@ -819,16 +827,22 @@ def oidc_callback(code: str, state: str, db: Session = Depends(get_session)):
     discovery = oidc_mod._discover(settings.oidc_issuer)
     tokens = oidc_mod._exchange_code(discovery, code)
     userinfo = oidc_mod._fetch_userinfo(discovery, tokens["access_token"])
-    email = (userinfo.get("email") or "").strip()
+    email = (userinfo.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="OIDC account missing email")
     tenant_id = settings.oidc_tenant_id or "tenant_demo"
     user = db.exec(
-        select(User).where(User.tenant_id == tenant_id, User.username == email)
+        select(User).where(
+            User.tenant_id == tenant_id,
+            func.lower(User.username) == email,
+        )
     ).first()
     if user is None:
         other_tenant_user = db.exec(
-            select(User).where(User.username == email, User.tenant_id != tenant_id)
+            select(User).where(
+                func.lower(User.username) == email,
+                User.tenant_id != tenant_id,
+            )
         ).first()
         if other_tenant_user is not None:
             # 多租户歧义:绝不静默选中或新建重复账号,交给管理员显式绑定。

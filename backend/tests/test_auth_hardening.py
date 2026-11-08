@@ -15,10 +15,14 @@ import app.api.chat as chat_api
 from app.api.auth import _login_identity_key, _rate_limit_login
 from app.api.chat import _reject_oversized_upload
 from app.config import Settings
-from app.core.body_limit import CHAT_UPLOAD_BODY_LIMIT, BodySizeLimitMiddleware
+from app.core.body_limit import (
+    CHAT_UPLOAD_BODY_LIMIT,
+    REJECT_OVERSIZED_DETAIL,
+    BodySizeLimitMiddleware,
+)
 from app.db import get_session
 from app.db.models import Tenant, User
-from app.security.auth import create_access_token, hash_password
+from app.security.auth import create_access_token, get_current_user, hash_password
 
 
 @pytest.fixture(autouse=True)
@@ -142,6 +146,7 @@ def test_rate_limit_blocks_after_limit_in_memory(monkeypatch) -> None:
         _rate_limit_login(identity)
     assert exc.value.status_code == 429
     assert exc.value.detail == "too many login attempts"
+    assert exc.value.headers == {"Retry-After": "60"}
 
 
 def test_rate_limit_keys_are_independent(monkeypatch) -> None:
@@ -173,6 +178,28 @@ def test_rate_limit_uses_redis_fixed_window(monkeypatch) -> None:
         _rate_limit_login(identity)
     assert exc.value.status_code == 429
     assert fake.get(key) == "3"
+    # 超限时也要保证窗口有 TTL,不能留下永久键。
+    assert fake.ttl(key) > 0
+
+
+def test_rate_limit_repairs_missing_redis_ttl(monkeypatch) -> None:
+    """已有计数但丢失 TTL 的键在下一次登录时补上过期时间。"""
+    _use_settings(
+        monkeypatch,
+        redis_url="redis://localhost:6379/0",
+        login_rate_limit_per_minute=3,
+    )
+    fake = fakeredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(auth_api, "_build_login_redis_client", lambda url: fake)
+    identity = "login:10.0.0.7:admin"
+    key = f"staffdeck:login:{identity}"
+    fake.set(key, "1")
+    assert fake.ttl(key) == -1
+
+    _rate_limit_login(identity)
+
+    assert fake.get(key) == "2"
+    assert fake.ttl(key) > 0
 
 
 def test_rate_limit_falls_back_to_memory_when_redis_errors(monkeypatch, caplog) -> None:
@@ -284,3 +311,50 @@ def test_login_endpoint_returns_429_after_limit(monkeypatch) -> None:
     response = client.post("/api/auth/login", json=payload)
     assert response.status_code == 429
     assert response.json()["detail"] == "too many login attempts"
+    assert response.headers["retry-after"] == "60"
+
+
+def test_login_endpoint_counts_successful_logins(monkeypatch) -> None:
+    """成功登录同样消耗预算:只统计失败的计数器无法通过本用例。"""
+    client = _auth_client(monkeypatch, limit=2)
+    payload = {"tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret"}
+    assert client.post("/api/auth/login", json=payload).status_code == 200
+    assert client.post("/api/auth/login", json=payload).status_code == 200
+    response = client.post("/api/auth/login", json=payload)
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "60"
+
+
+def test_main_app_wires_cors_outside_body_limit() -> None:
+    """CORS 必须比体积预检更外层,413 响应才会带上跨域头。"""
+    from app import main as main_module
+
+    names = [middleware.cls.__name__ for middleware in main_module.app.user_middleware]
+    assert names[0] == "CORSMiddleware"
+    assert "BodySizeLimitMiddleware" in names
+
+
+def test_real_app_rejects_oversized_upload_before_route(monkeypatch) -> None:
+    """真实 TestClient 上传超限请求由中间件 413,路由与鉴权依赖都不执行。"""
+    from app import main as main_module
+    import app.core.body_limit as body_limit
+
+    monkeypatch.setattr(body_limit, "CHAT_UPLOAD_BODY_LIMIT", 64)
+
+    def _must_not_run() -> None:
+        raise AssertionError("attachment route must not run for oversized uploads")
+
+    main_module.app.dependency_overrides[get_current_user] = _must_not_run
+    try:
+        response = TestClient(main_module.app).post(
+            "/api/chat/attachments",
+            params={"tenant_id": "tenant_demo"},
+            files={"files": ("big.txt", b"x" * 1024, "text/plain")},
+            headers={"Origin": "http://localhost:5173"},
+        )
+    finally:
+        main_module.app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == REJECT_OVERSIZED_DETAIL
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"

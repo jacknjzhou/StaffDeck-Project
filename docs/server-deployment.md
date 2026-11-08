@@ -190,14 +190,23 @@ OIDC_ISSUER=https://your-idp.example.com
 OIDC_CLIENT_ID=staffdeck
 OIDC_CLIENT_SECRET=...
 OIDC_REDIRECT_URI=https://staffdeck.example.com/api/auth/oidc/callback
+OIDC_TENANT_ID=tenant_acme
 FRONTEND_BASE_URL=https://staffdeck.example.com
 ```
 
-登录入口 `GET /api/auth/oidc/login`，IdP 回调后按邮箱查找/创建用户并签发常规 JWT，
-重定向到 `{FRONTEND_BASE_URL}/login?token=<JWT>`。未启用时该端点返回 404。
+`OIDC_TENANT_ID` 指定 OIDC 登录绑定的租户。未设置时回退到 `tenant_demo`；
+生产多租户部署必须显式设置，否则所有 SSO 用户都会落到演示租户。
 
-> 已知限制：OIDC 目前**只按邮箱匹配用户，不校验租户**。在启用多租户的部署中，
-> 不同租户出现同名邮箱时可能把身份绑到错误租户；加固任务见优化计划任务 7。
+登录入口 `GET /api/auth/oidc/login`，IdP 回调后按邮箱在 `OIDC_TENANT_ID`
+绑定的租户内查找/创建用户并签发常规 JWT，重定向到
+`{FRONTEND_BASE_URL}/login?token=<JWT>`。未启用时该端点返回 404。
+
+匹配规则：
+
+- 邮箱先 `strip().lower()`，再按 `(tenant_id, lower(username))` 查询，避免大小写差异造成重复账号。
+- 新用户创建在 `OIDC_TENANT_ID` 租户；`OIDC_TENANT_ID` 未设置时回退 `tenant_demo`。
+- 若同邮箱已存在于其他租户，返回 **409** 并提示管理员先在当前租户显式绑定，
+  绝不静默选中其他租户账号或新建重复账号。
 
 ---
 
@@ -214,9 +223,13 @@ FRONTEND_BASE_URL=https://staffdeck.example.com
 | `PUBLIC_API_ENABLED` | 是否挂载 `/api/v1` | `true` |
 | `STAFFDECK_PG_PASSWORD` | compose 用，PostgreSQL 密码 | 必填 |
 | `STAFFDECK_HOST_PORT` | compose 暴露的宿主端口 | `5173` |
+| `OIDC_TENANT_ID` | OIDC 登录绑定的租户；生产多租户必须显式设置 | `tenant_demo` |
+| `FORWARDED_ALLOW_IPS` | uvicorn 信任的代理 IP/CIDR（禁 `*`） | `127.0.0.1` |
+| `STAFFDECK_FORWARDED_ALLOW_IPS` | compose 覆盖上值 | `172.16.0.0/12,127.0.0.1` |
 | `OIDC_*` | 见上节 | 未启用 |
 
-完整列表见 `backend/app/config.py`。
+nginx 是 compose 的唯一入口且 api 端口未发布，因此默认只信任 Docker 子网与回环；
+若绕过 nginx 直连 api，需同步收紧该值。完整列表见 `backend/app/config.py`。
 
 ---
 
