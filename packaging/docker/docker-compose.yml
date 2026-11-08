@@ -43,7 +43,9 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5173/api/health')\""]
+      # /api/ready 同时校验数据库与角色租约：容器 healthy 才代表真的能服务，
+      # 而不只是进程还在。探针 503 时编排层会摘流量并让依赖服务延后启动。
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5173/api/ready')\""]
       interval: 10s
       timeout: 5s
       retries: 18
@@ -60,7 +62,8 @@ services:
       STAFFDECK_RUN_MIGRATIONS: "0"
     depends_on:
       api:
-        condition: service_started
+        # worker 只消费 api 已就绪的消息；api 未就绪时启动会反复撞 503/连接失败。
+        condition: service_healthy
     restart: unless-stopped
 
   connector:
@@ -73,7 +76,7 @@ services:
       STAFFDECK_RUN_MIGRATIONS: "0"
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   nginx:

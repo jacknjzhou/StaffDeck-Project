@@ -6,6 +6,8 @@ import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlmodel import Session
 
 from app.a2a import recover_codex_a2a_tasks, stop_codex_a2a_tasks
@@ -45,6 +47,7 @@ from app.core.harness_recovery import (
     start_harness_recovery_sweeper,
     stop_harness_recovery_sweeper,
 )
+from app.core.runtime_state import is_lease_lost
 from app.db import engine, init_db
 from app.db.database_path import sqlite_database_path
 from app.db.seed import ensure_bootstrap_admin, seed_demo_data
@@ -300,6 +303,40 @@ def on_shutdown() -> None:
 def health() -> dict[str, str]:
     """健康检查端点，返回固定的 ok 状态与应用名，供探活使用。"""
     return {"status": "ok", "app": "StaffDeck"}
+
+
+def _check_database() -> bool:
+    """探测数据库连通性。
+
+    探针的职责是报告状态而不是制造故障：连接或查询失败统一收敛成 False，
+    由调用方转成 503；这里不抛异常，也不重试，编排层靠重试间隔兜底。
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        return False
+    return True
+
+
+# is_lease_lost 以模块级名字从 runtime_state 导入：就绪探针与测试都直接引用
+# 本模块的这个名字，monkeypatch 才有一个稳定的补丁点。
+@app.get("/api/ready", tags=["health"])
+def ready() -> JSONResponse:
+    """就绪探针：数据库可连通且角色租约仍在握时才返回 200。
+
+    未就绪返回 503，编排层据此摘掉流量；两项状态分开上报，排障时不需要
+    再猜是数据库还是角色互斥先失效。端点不依赖 lifespan，可独立于启动钩子调用。
+    """
+    database_ok = _check_database()
+    lease_ok = not is_lease_lost()
+    is_ready = database_ok and lease_ok
+    payload = {
+        "status": "ok" if is_ready else "degraded",
+        "database": database_ok,
+        "lease": lease_ok,
+    }
+    return JSONResponse(payload, status_code=200 if is_ready else 503)
 
 
 app.include_router(app_updates.router)

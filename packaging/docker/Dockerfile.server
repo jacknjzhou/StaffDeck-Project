@@ -45,6 +45,16 @@ COPY --from=frontend /build/dist ../frontend-enterprise/dist
 COPY packaging/docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# 非 root 运行。/opt/venv 保持 root 所有、只读即可（app 用户不需要写入依赖）；
+# /app 整体交给 app，因为运行期写入（SQLite 锁文件、数据目录、应用缓存）都落在
+# 应用根下。entrypoint 只执行 python/alembic，不做 chown、不监听 1024 以下端口，
+# 因此降权后无需任何 root 能力。
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin app \
+    && mkdir -p /app/backend/data \
+    && chown -R app:app /app
+
+USER app
+
 EXPOSE 5173
 
 CMD ["/entrypoint.sh"]
