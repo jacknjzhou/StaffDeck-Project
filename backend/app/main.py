@@ -195,8 +195,7 @@ def _startup_by_role() -> None:
                 generated = ensure_bootstrap_admin(db)
         if generated:
             logger.warning(
-                "bootstrap admin password generated; change it after first login: %s",
-                generated,
+                "Bootstrap admin ensured; generated password (if any) was logged at creation."
             )
         recover_codex_a2a_tasks()
     if _role_enables("worker"):

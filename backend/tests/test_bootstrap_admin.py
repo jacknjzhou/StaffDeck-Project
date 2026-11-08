@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.db.models import User
+from app.db.models import Tenant, User
 from app.db.seed import ensure_bootstrap_admin
 from app.security.auth import verify_password
 
@@ -57,3 +59,43 @@ def test_bootstrap_admin_rotates_legacy_default(monkeypatch):
     assert password and password != "admin"
     assert not verify_password("admin", admin.password_hash)
     assert verify_password(password, admin.password_hash)
+
+
+def test_bootstrap_admin_creates_tenant_for_login(monkeypatch):
+    """空库引导必须同时建租户，否则登录接口在 ensure_tenant 处 404。"""
+    monkeypatch.setattr("app.db.seed.get_settings", lambda: type("S", (), {
+        "bootstrap_admin_password": "", "seed_demo_data": False, "is_production": True,
+    })())
+    session = _session()
+    password = ensure_bootstrap_admin(session)
+    admin = session.exec(select(User).where(User.username == "admin")).one()
+
+    assert session.get(Tenant, "tenant_demo") is not None
+    assert password and verify_password(password, admin.password_hash)
+
+
+def test_bootstrap_admin_logs_generated_password_once(monkeypatch, caplog):
+    """随机口令只在生成时记录一次，便于运维从启动日志取到。"""
+    monkeypatch.setattr("app.db.seed.get_settings", lambda: type("S", (), {
+        "bootstrap_admin_password": "", "seed_demo_data": False, "is_production": True,
+    })())
+    session = _session()
+    with caplog.at_level(logging.WARNING):
+        password = ensure_bootstrap_admin(session)
+
+    assert password
+    assert sum(1 for record in caplog.records if password in record.getMessage()) == 1
+
+
+def test_bootstrap_admin_does_not_log_configured_password(monkeypatch, caplog):
+    """运维通过 BOOTSTRAP_ADMIN_PASSWORD 指定的口令不得写入日志。"""
+    configured = "Operator-Supplied-Passw0rd"
+    monkeypatch.setattr("app.db.seed.get_settings", lambda: type("S", (), {
+        "bootstrap_admin_password": configured, "seed_demo_data": False, "is_production": True,
+    })())
+    session = _session()
+    with caplog.at_level(logging.WARNING):
+        password = ensure_bootstrap_admin(session)
+
+    assert password == configured
+    assert configured not in caplog.text

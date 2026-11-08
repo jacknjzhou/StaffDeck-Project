@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import sys
 from pathlib import Path
@@ -24,6 +25,9 @@ from app.db.models import (
 from app.security.encryption import encrypt_secret
 from app.security.auth import hash_password, verify_password
 from app.db.staffdeck_seed import seed_staffdeck_admin_gallery
+
+
+logger = logging.getLogger(__name__)
 
 
 ADAPTIVE_FLOW_RULE = (
@@ -922,11 +926,27 @@ def ensure_bootstrap_admin(session: Session) -> str | None:
         select(User).where(User.tenant_id == "tenant_demo", User.username == "admin")
     ).first()
     if admin is None:
-        password = settings.bootstrap_admin_password or secrets.token_urlsafe(18)
-        session.add(User(id="admin", tenant_id="tenant_demo", username="admin",
-                         display_name="Administrator", role="admin",
-                         password_hash=hash_password(password)))
+        # SEED_DEMO_DATA=false 时也必须补齐租户，否则登录接口在 ensure_tenant 处 404。
+        if session.get(Tenant, "tenant_demo") is None:
+            session.add(Tenant(id="tenant_demo", name="Demo Enterprise"))
+        configured_password = settings.bootstrap_admin_password
+        password = configured_password or secrets.token_urlsafe(18)
+        session.add(
+            User(
+                id="admin",
+                tenant_id="tenant_demo",
+                username="admin",
+                display_name="Administrator",
+                role="admin",
+                password_hash=hash_password(password),
+            )
+        )
         session.commit()
+        if not configured_password:
+            logger.warning(
+                "Bootstrap admin 'admin' created. Generated password (shown once): %s",
+                password,
+            )
         return password
     if admin.role != "admin":
         admin.role = "admin"
@@ -934,11 +954,18 @@ def ensure_bootstrap_admin(session: Session) -> str | None:
         session.add(admin)
         session.commit()
     if settings.is_production and verify_password("admin", admin.password_hash):
-        password = settings.bootstrap_admin_password or secrets.token_urlsafe(18)
+        configured_password = settings.bootstrap_admin_password
+        password = configured_password or secrets.token_urlsafe(18)
         admin.password_hash = hash_password(password)
         admin.updated_at = utc_now()
         session.add(admin)
         session.commit()
+        if not configured_password:
+            logger.warning(
+                "Bootstrap admin 'admin' legacy password rotated. "
+                "Generated password (shown once): %s",
+                password,
+            )
         return password
     return None
 
