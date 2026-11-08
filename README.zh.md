@@ -22,6 +22,7 @@
 
 
 ## 更新日志
+- **2026-11-08**：StaffDeck 转为服务端优先交付：一套 Docker Compose、浏览器访问自有域名，不再发布桌面安装包。
 - **2026-08-18**: 我们推出v0.4.0，引入多员工智能协作与更快的调用链路。
 - **2026-08-06**: 我们推出v0.3.0，提供了更方便的SOP编辑与运行时沙箱。
 - **2026-08-03**: 我们推出v0.2.0，提供更好的harness系统和IM渠道支持。
@@ -38,32 +39,28 @@ StaffDeck是一套面向企业的数字员工构建与管理平台，帮助专�
 - 📚 **文档结构感知的知识检索**：基于文档、章节、页面和摘要等层级构建可导航索引，让数字员工先判断信息可能位于哪里，再逐层定位原文；支持知识分桶、定向检索、来源引用和检索调试。
 - 🔌 **自主执行与持续迭代**：通过 HTTP API、MCP 和定时任务执行真实业务操作，并结合长期记忆、完整 Trace、真人接管、用户反馈和反馈分析形成持续迭代闭环。
 
-## 客户端下载
+## 服务端部署
 
-访问 [StaffDeck 官方网站](https://staffdeck.openbmb.cn/)，或直接下载最新桌面客户端：
-
-| 平台 | 架构 | 下载 |
-| --- | --- | --- |
-| macOS | Apple Silicon（arm64） | [下载 `.dmg`](https://github.com/OpenBMB/StaffDeck/releases/latest/download/StaffDeck-macos-arm64.dmg) |
-| macOS | Intel（x86_64） | [下载 `.dmg`](https://github.com/OpenBMB/StaffDeck/releases/latest/download/StaffDeck-macos-x86_64.dmg) |
-| Windows | x64 | [下载安装程序 `.exe`](https://github.com/OpenBMB/StaffDeck/releases/latest/download/StaffDeck-windows-x64-setup.exe) |
-| Linux | x86_64（Debian/Ubuntu） | [下载 `.deb`](https://github.com/OpenBMB/StaffDeck/releases/latest/download/StaffDeck-linux-x86_64.deb) |
-
-Linux 安装包默认只监听本机 `127.0.0.1`。安装后可以在终端配置监听模式和
-端口，无头服务器也适用：
+StaffDeck 以 Web 服务形态交付：一套 Docker Compose 同时运行 API、Worker、Connector、
+PostgreSQL、Redis 与 nginx，所有用户通过浏览器访问你自己的域名即可，不再分发桌面
+安装包，也不需要在用户机器上安装任何运行时。
 
 ```bash
-staffdeck setup
-staffdeck setup --mode local --port 5173
-staffdeck setup --mode lan --port 5173
-staffdeck setup --mode public --port 5173 --public-url https://staff.example.com
+cd packaging/docker
+cp .env.example .env     # 至少设置 STAFFDECK_PG_PASSWORD 与长随机 STAFFDECK_APP_SECRET
+docker compose up -d --build
 ```
 
-`local` 只允许本机访问；`lan` 和 `public` 监听 `0.0.0.0`。`--port` 用来
-设置监听端口。交互式终端下，`public` 会先尝试自动推断公网 URL；如果无法
-推断，或者是在无头环境中运行，就需要显式传入 `--public-url`。公网部署建议
-使用 HTTPS 反向代理；启用 OIDC 时，`OIDC_REDIRECT_URI` 应配置为同一个公网
-URL。配置按用户保存，并在下次启动时生效。
+| 入口 | 地址 |
+| --- | --- |
+| 管理端 | `http://localhost:5173/enterprise` |
+| 用户端 | `http://localhost:5173/workspace` |
+| 健康检查 | `http://localhost:5173/api/health` |
+
+设置 `STAFFDECK_HOST_PORT` 可以把整套服务发布到其他宿主端口。TLS、备份、SSO、升级与
+迁移路径见[服务端部署手册](docs/server-deployment.md)。旧的
+`desktop_launcher.py` / `single_port_app.py` 入口仅用于本地开发，打包安装包不再是
+支持的交付方式。
 
 ## Agent 一键部署
 
@@ -85,14 +82,14 @@ PowerShell 运行 .\scripts\dev_up.ps1 --detach；验证 /api/health 和
 
 - [💡 关于StaffDeck](#-关于staffdeck)
   - [核心亮点](#核心亮点)
-  - [客户端下载](#客户端下载)
+  - [服务端部署](#服务端部署)
   - [Agent 一键部署](#agent-一键部署)
   - [目录](#目录)
   - [快速开始](#快速开始)
     - [环境要求](#环境要求)
     - [1. 克隆并安装](#1-克隆并安装)
     - [2. 配置模型](#2-配置模型)
-    - [3. 启动 Web Demo](#3-启动-web-demo)
+    - [3. 启动控制台](#3-启动控制台)
     - [4. 验证安装](#4-验证安装)
     - [常用命令](#常用命令)
       - [统一 Python 入口](#统一-python-入口)
@@ -108,6 +105,8 @@ PowerShell 运行 .\scripts\dev_up.ps1 --detach；验证 /api/health 和
   - [致谢](#致谢)
 
 ## 快速开始
+
+以下步骤在本地启动 StaffDeck 用于开发。生产部署请直接使用[服务端部署](#服务端部署)。
 
 ### 环境要求
 
@@ -157,14 +156,14 @@ DEMO_MODEL_API_KEY="你的API-Key"
 
 API Key 用于创建初始模型配置，存入数据库前会被加密。请勿提交 `backend/.env`。服务启动后也可以在**管理员 → 模型配置**中管理模型服务。
 
-### 3. 启动 Web Demo
+### 3. 启动控制台
 
 | 平台 | 推荐命令 |
 | --- | --- |
 | macOS、Linux 或 WSL | `scripts/dev_up.sh --detach` |
 | Windows PowerShell | `.\scripts\dev_up.ps1 --detach` |
 
-两套包装脚本最终都会调用同一个跨平台 Python 生命周期入口 `scripts/dev.py`。启动过程会构建 StaffDeck 前端，并由一个 FastAPI 进程在 `5173` 端口同时提供 UI、API 与 Swagger 文档。默认管理员账号为 `admin` / `admin`，请在首次登录后通过账号配置修改密码。
+两套包装脚本最终都会调用同一个跨平台 Python 生命周期入口 `scripts/dev.py`。启动过程会构建 StaffDeck 前端，并由一个 FastAPI 进程在 `5173` 端口同时提供 UI、API 与 Swagger 文档。默认管理员账号为 `admin` / `admin`，请务必在首次登录后修改密码，切勿在仍使用默认口令的情况下对外暴露服务；生产上线前请按[服务端部署手册](docs/server-deployment.md)的生产检查清单轮换引导凭证。
 
 ### 4. 验证安装
 
@@ -271,8 +270,8 @@ StaffDeck/
 ├── backend/                  # FastAPI 接口、Agent 运行时、存储与任务 Worker
 ├── frontend-enterprise/      # React/TypeScript StaffDeck 工作台
 ├── docs/                     # 教程、API、Schema 与示例流程
-├── scripts/                  # 单端口服务生命周期与校验脚本
-├── packaging/                # macOS、Linux 与 Windows 打包资源
+├── scripts/                  # 本地生命周期、Compose 冒烟与校验脚本
+├── packaging/                # Docker/nginx 部署资产；桌面打包脚本为历史遗留
 ├── README.md                 # English
 └── README.zh.md              # 简体中文
 ```

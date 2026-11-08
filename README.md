@@ -19,6 +19,7 @@
 </div>
 
 ## News
+- **2026-11-08**: StaffDeck moves to server-first delivery: one Docker Compose stack, browser access through your own domain, and no more desktop installers.
 - **2026-09-01**: We present v0.5.0 for faster and more stable execution.
 - **2026-08-18**: We present v0.4.0 for multi-staff cooperation and faster runing.
 - **2026-08-06**: We present v0.3.0 for SOP editing and sandbox.
@@ -36,33 +37,30 @@ StaffDeck is an enterprise platform for building and managing digital employees.
 - 📚 **Document-structure-aware knowledge retrieval**: Build navigable indexes across documents, chapters, pages, summaries, and other levels, allowing digital employees to first estimate where information may reside and then locate the original text step by step. Support knowledge buckets, targeted retrieval, source citations, and retrieval debugging.
 - 🔌 **Autonomous execution and continuous improvement**: Perform real business operations through HTTP APIs, MCP, and scheduled tasks, then close the improvement loop with long-term memory, complete traces, human takeover, user feedback, and feedback analysis.
 
-## Desktop Downloads
+## Server Deployment
 
-Visit the [StaffDeck official website](https://staffdeck.openbmb.cn/) or download the latest desktop release directly:
-
-| Platform | Architecture | Download |
-| --- | --- | --- |
-| macOS | Apple Silicon (arm64) | [Download `.dmg`](https://github.com/OpenBMB/StaffDeck/releases/latest/download/StaffDeck-macos-arm64.dmg) |
-| macOS | Intel (x86_64) | [Download `.dmg`](https://github.com/OpenBMB/StaffDeck/releases/latest/download/StaffDeck-macos-x86_64.dmg) |
-| Windows | x64 | [Download installer `.exe`](https://github.com/OpenBMB/StaffDeck/releases/latest/download/StaffDeck-windows-x64-setup.exe) |
-| Linux | x86_64 (Debian/Ubuntu) | [Download `.deb`](https://github.com/OpenBMB/StaffDeck/releases/latest/download/StaffDeck-linux-x86_64.deb) |
-
-Linux packages listen on `127.0.0.1` by default. Use `staffdeck setup` from a
-terminal to choose the listening mode and port, including on a headless host:
+StaffDeck is deployed as a web service. One Docker Compose stack runs the API, worker,
+connector, PostgreSQL, Redis, and nginx, and everyone reaches the console in a browser at
+your own domain — there is no desktop installer to distribute and nothing to install on
+user machines.
 
 ```bash
-staffdeck setup
-staffdeck setup --mode local --port 5173
-staffdeck setup --mode lan --port 5173
-staffdeck setup --mode public --port 5173 --public-url https://staff.example.com
+cd packaging/docker
+cp .env.example .env     # set STAFFDECK_PG_PASSWORD and a long random STAFFDECK_APP_SECRET
+docker compose up -d --build
 ```
 
-`local` listens only on the machine; `lan` and `public` listen on `0.0.0.0`.
-`--port` sets the listening port. In interactive terminals, `public` tries to
-infer a public URL first; if it cannot, or when running headless, pass
-`--public-url` explicitly. For public deployments, use an HTTPS reverse proxy
-and set the same public URL as `OIDC_REDIRECT_URI` when SSO is enabled. The
-setup is saved per user and applied on the next launch.
+| Entry | URL |
+| --- | --- |
+| Admin console | `http://localhost:5173/enterprise` |
+| User workspace | `http://localhost:5173/workspace` |
+| Health check | `http://localhost:5173/api/health` |
+
+Set `STAFFDECK_HOST_PORT` to publish the stack on another host port. TLS, backups, SSO,
+upgrades, and the supported migration path are documented in
+[Server Deployment](docs/server-deployment.md). The legacy `desktop_launcher.py` /
+`single_port_app.py` entry points remain for local development, but packaged desktop
+installers are no longer a supported distribution channel.
 
 ## Agent-Friendly Quick Deploy
 
@@ -86,14 +84,14 @@ plus /workspace/gallery before reporting success.
 
 - [💡 About StaffDeck](#-about-staffdeck)
   - [Core Features](#core-features)
-  - [Desktop Downloads](#desktop-downloads)
+  - [Server Deployment](#server-deployment)
   - [Agent-Friendly Quick Deploy](#agent-friendly-quick-deploy)
   - [Table of Contents](#table-of-contents)
   - [Quick Start](#quick-start)
     - [Requirements](#requirements)
     - [1. Clone and Install](#1-clone-and-install)
     - [2. Configure a Model](#2-configure-a-model)
-    - [3. Launch the Web Demo](#3-launch-the-web-demo)
+    - [3. Launch the Console](#3-launch-the-console)
     - [4. Verify the Installation](#4-verify-the-installation)
     - [Useful Commands](#useful-commands)
       - [Unified Python Entry](#unified-python-entry)
@@ -109,6 +107,9 @@ plus /workspace/gallery before reporting success.
   - [Acknowledgments](#acknowledgments)
 
 ## Quick Start
+
+The steps below start StaffDeck locally for development. For production, use
+[Server Deployment](#server-deployment) instead.
 
 ### Requirements
 
@@ -158,7 +159,7 @@ DEMO_MODEL_API_KEY="your-api-key"
 
 The API key is used to create the initial model configuration and is encrypted before being stored in the database. Do not commit `backend/.env`. After startup, model services can also be managed from **Admin → Model Configuration**.
 
-### 3. Launch the Web Demo
+### 3. Launch the Console
 
 | Platform | Recommended command |
 | --- | --- |
@@ -167,7 +168,10 @@ The API key is used to create the initial model configuration and is encrypted b
 
 Both wrappers call the same cross-platform Python lifecycle entry, `scripts/dev.py`. The startup process builds the StaffDeck frontend and serves the UI, API, and Swagger documentation from one FastAPI process on port `5173`.
 
-Initial administrator credentials: username `admin`, password `admin`. Please change the password after first login.
+Initial administrator credentials: username `admin`, password `admin`. Change the password
+immediately after the first login; never expose an instance that still uses the default
+credentials. The production checklist in [Server Deployment](docs/server-deployment.md)
+covers bootstrap credential rotation.
 
 ### 4. Verify the Installation
 
@@ -270,8 +274,8 @@ StaffDeck/
 ├── backend/                  # FastAPI APIs, agent runtime, storage, and task workers
 ├── frontend-enterprise/      # React/TypeScript StaffDeck workspace
 ├── docs/                     # Tutorials, APIs, schemas, and example flows
-├── scripts/                  # Single-port service lifecycle and validation scripts
-├── packaging/                # macOS, Linux, and Windows packaging assets
+├── scripts/                  # Local lifecycle, compose smoke, and validation scripts
+├── packaging/                # Docker/nginx deployment assets; desktop packaging scripts are legacy
 ├── README.md                 # English
 └── README.zh.md              # Simplified Chinese
 ```

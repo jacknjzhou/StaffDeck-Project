@@ -1,69 +1,31 @@
-# Application update reminder
+# Application update reminder（已废弃）
 
-StaffDeck desktop builds perform a best-effort check for newer GitHub releases after a user
-signs in and completes the first-run guides. The feature only displays a reminder; it never
-downloads or installs an update.
+> **状态：已废弃（2026-11-08）。** StaffDeck 已改为服务端优先交付，桌面安装包不再是
+> 支持的发行渠道，客户端内的“有新版本”提醒也随之退役。本文件仅保留给仍在运行旧
+> 桌面版本的环境作历史参考。
 
-## Runtime behavior
+## 为什么废弃
 
-`GET /api/app/version` returns the current application version and the newest compatible release
-from `https://github.com/OpenBMB/StaffDeck/releases.atom`. A stable build ignores prereleases. A
-prerelease build may advance to a newer prerelease or a stable release.
+- 交付形态改为 Docker Compose 服务端部署，用户通过浏览器访问，不存在需要逐台升级的
+  桌面客户端。
+- 版本推进由服务端镜像完成：升级 = 替换镜像 + 执行迁移，不依赖客户端轮询 GitHub
+  Releases，也不依赖用户点击提醒。
+- 继续保留客户端更新检查会与“服务端是唯一版本源”冲突，并产生无意义的外网请求。
 
-Successful checks are cached for six hours and failed checks for fifteen minutes. Network,
-parsing, and invalid-version failures are reported as `check_succeeded=false` and do not affect
-normal application use.
+## 旧版行为（仅供排查）
 
-The frontend waits until both first-run guides are complete. It then shows a 30-second toast only
-when an update exists. The key below records the announced release in that browser, so refreshing
-does not repeat the same version:
+旧桌面构建在登录并完成首次引导后，best-effort 请求 `GET /api/app/version`，从
+`https://github.com/OpenBMB/StaffDeck/releases.atom` 读取最新兼容版本，成功结果缓存
+六小时、失败缓存十五分钟；只弹 30 秒提示，不下载、不安装。提示去重键为
+`staffdeck_update_reminded_version`。`STAFFDECK_UPDATE_CHECK` 可显式开关。以上逻辑
+不再演进，也不再接受兼容性修复。
 
-```text
-staffdeck_update_reminded_version
-```
+## 现在如何升级
 
-The release URL is accepted only when it is an HTTPS GitHub URL under the StaffDeck release-tag
-path. Packaged macOS builds hand external links from the embedded StaffDeck window to the system
-browser. Other platforms already display StaffDeck in the system browser.
+1. 备份 PostgreSQL（`pg_dump`）并确认 `STAFFDECK_APP_SECRET` 已单独保管。
+2. 拉取新镜像并重建：`cd packaging/docker && docker compose pull && docker compose up -d`。
+3. `api` 容器会在启动前执行 `python -m app.db.migrations_cli upgrade`；`worker` /
+   `connector` 的 `STAFFDECK_RUN_MIGRATIONS` 保持为 `0`。
+4. 验证 `/api/health` 与关键页面，再恢复 `worker` / `connector` 流量。
 
-Update comparison compatibility is guaranteed from the `0.2.0` stable release onward. Historical
-`0.12-beta.*` development builds predate that version line and are not supported as update-check
-starting points. Stable builds ignore all prerelease tags, so those historical tags cannot affect
-updates between supported stable versions such as `0.2.0` and `0.2.1`.
-
-## Enablement
-
-Packaged PyInstaller applications enable update checks by default. Source and private deployments
-disable them by default to avoid unexpected outbound traffic. They can opt in or out explicitly:
-
-```text
-STAFFDECK_UPDATE_CHECK=true
-STAFFDECK_UPDATE_CHECK=false
-```
-
-`STAFFDECK_VERSION` overrides the current version for development and deployment testing.
-
-## Build version
-
-`packaging/ultrarag.spec` reads `VERSION`, validates it, and writes
-`packaging/build/staffdeck-version.txt`. PyInstaller bundles that file with the application.
-Runtime lookup supports the PyInstaller extraction directory, an executable-adjacent resource,
-and macOS `Contents/Resources`.
-
-Example:
-
-```bash
-VERSION=v0.2.0 bash packaging/build_macos.sh
-```
-
-## Manual acceptance
-
-1. Start a packaged build, or source deployment with checks enabled, using a version older than
-   the latest GitHub release.
-2. Sign in and complete or close both first-run guides.
-3. Confirm the toast identifies the current and latest versions and links to the matching trusted
-   GitHub release.
-4. Close the toast and refresh. Confirm the same release is not shown again.
-5. Test while offline and confirm the rest of StaffDeck remains usable.
-6. Test a stable current version against a feed containing only prereleases and confirm no update
-   is offered.
+完整步骤与回滚注意事项见 `docs/server-deployment.md`。
