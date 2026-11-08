@@ -42,6 +42,18 @@ _SAFE_ENV_KEYS = (
     "SYSTEMROOT",
     "USERPROFILE",
     "COMSPEC",
+    # 代理与自定义 CA 属于网络定位信息，不含凭证；保留它们才能让 npx 等走企业代理。
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
 )
 
 
@@ -66,8 +78,9 @@ def _enforce_stdio_policy(command: list[str]) -> None:
         for item in settings.mcp_stdio_allowed_commands.split(",")
         if item.strip()
     }
-    if Path(command[0]).name not in allowed:
-        raise ValueError(f"stdio command not in allowlist: {command[0]!r}")
+    executable = command[0] if command else ""
+    if Path(executable).name not in allowed:
+        raise ValueError(f"stdio command not in allowlist: {executable!r}")
 
 
 # --------------------------------------------------------------------------- #

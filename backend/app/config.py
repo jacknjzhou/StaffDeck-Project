@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = ""
     seed_demo_data: bool = True
     mcp_stdio_enabled: bool = False
-    mcp_stdio_allowed_commands: str = "npx,uvx,node,python3,uv"
+    mcp_stdio_allowed_commands: str = "npx,uvx,node,python,python3,uv"
     login_rate_limit_per_minute: int = 10
     max_upload_bytes: int = 50 * 1024 * 1024
     demo_model_base_url: str = "http://localhost:52010/v1"

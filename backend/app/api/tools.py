@@ -886,11 +886,16 @@ def _server_connection(row: MCPServer) -> MCPServerConnection:
 
 
 def _ensure_stdio_enabled(connection: MCPServerConnection | None) -> None:
-    """stdio 通道未在本部署启用时拒绝新建、修改与探测，返回 403。"""
+    """stdio 写入/探测入口的部署级门禁：先看开关，再按白名单复核命令。"""
     if connection is None or connection.transport != "stdio":
         return
     if not get_settings().mcp_stdio_enabled:
         raise HTTPException(status_code=403, detail="stdio MCP 未在本部署启用")
+    if not connection.allowed_stdio_command():
+        raise HTTPException(
+            status_code=403,
+            detail=f"stdio command not in allowlist: {connection.command}",
+        )
 
 
 def _connection_to_client_config(connection: MCPServerConnection) -> dict[str, Any]:

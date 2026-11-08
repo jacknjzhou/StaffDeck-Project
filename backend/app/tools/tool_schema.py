@@ -193,15 +193,6 @@ class MCPServerConnection(BaseModel):
         }
         return Path(self.command or "").name in allowed
 
-    @model_validator(mode="after")
-    def _validate_stdio_command(self) -> "MCPServerConnection":
-        """拒绝白名单之外的 stdio 命令，避免任意命令执行。"""
-        if self.transport != "stdio":
-            return self
-        if not self.allowed_stdio_command():
-            raise ValueError(f"stdio command not in allowlist: {self.command!r}")
-        return self
-
 
 class MCPServerCreateRequest(BaseModel):
     """创建 MCP Server 的请求体，包含传输连接配置与 MCP App 模式。"""
