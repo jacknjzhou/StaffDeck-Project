@@ -33,6 +33,11 @@ def _row(
     )
 
 
+def _off_loop() -> bool:
+    """判断当前调用是否发生在事件循环所在主线程之外（即执行器线程）。"""
+    return threading.current_thread() is not threading.main_thread()
+
+
 class _FakeClock:
     """每次调用前进固定步长的单调时钟，用来驱动心跳与空闲超时判定。"""
 
@@ -97,6 +102,12 @@ def _stream(**overrides: object) -> AsyncIterator[str]:
     return cast(AsyncIterator[str], chat.stream_events(**kwargs))
 
 
+def _assert_off_loop(ran_off_loop: list[bool]) -> None:
+    """断言假函数至少被调用过一次，且每次都落在执行器线程而非事件循环线程。"""
+    assert ran_off_loop, "fake was never invoked"
+    assert all(ran_off_loop), "fake ran on the event loop thread"
+
+
 def test_stream_events_is_module_level_async_generator() -> None:
     """中继必须是模块级异步生成器，不能在事件循环里 time.sleep。"""
     assert hasattr(chat, "stream_events")
@@ -141,9 +152,11 @@ async def test_terminal_event_then_worker_done_closes_stream(
     batches = [[terminal], []]
     calls = {"count": 0}
     cursors: list[object] = []
+    ran_off_loop: list[bool] = []
 
     def fake_reader(tenant_id: str, session_id: str, cursor: object) -> list[object]:
         """按批次返回事件，并在第二批时标记 worker 已结束。"""
+        ran_off_loop.append(_off_loop())
         index = calls["count"]
         calls["count"] += 1
         cursors.append(cursor)
@@ -165,6 +178,7 @@ async def test_terminal_event_then_worker_done_closes_stream(
     assert len(frames) == 1
     assert frames[0].startswith(f"id: {terminal.id}\nevent: complete\n")
     assert '"reply": "done"' in frames[0]
+    _assert_off_loop(ran_off_loop)
 
 
 @pytest.mark.asyncio
@@ -176,9 +190,11 @@ async def test_heartbeat_when_no_rows_and_poll_delay_is_async(
     _install_clock(monkeypatch)
     worker_done = threading.Event()
     calls = {"count": 0}
+    ran_off_loop: list[bool] = []
 
     def fake_reader(tenant_id: str, session_id: str, cursor: object) -> list[object]:
         """始终返回空批，第四次读取时结束 worker。"""
+        ran_off_loop.append(_off_loop())
         calls["count"] += 1
         if calls["count"] >= 4:
             worker_done.set()
@@ -197,13 +213,14 @@ async def test_heartbeat_when_no_rows_and_poll_delay_is_async(
     assert "event: heartbeat" in frames[0]
     assert '"phase": "relay"' in frames[0]
     assert '"sessionId": "sess-1"' in frames[0]
+    _assert_off_loop(ran_off_loop)
 
 
 @pytest.mark.asyncio
 async def test_internal_visibility_rows_are_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """internal 可见性轮次的事件及其后续事件不下发，游标仍正常推进。"""
+    """internal 轮次的四个身份键各自命中后续行都会被跳过，游标仍正常推进。"""
     _install_fake_asyncio(monkeypatch)
     _install_clock(monkeypatch)
     internal = _row(
@@ -211,23 +228,41 @@ async def test_internal_visibility_rows_are_skipped(
         {
             "content": "secret",
             "turn_id": "turn-internal",
+            "user_message_id": "user-internal",
+            "message_id": "msg-internal",
+            "client_turn_id": "client-internal",
             "message_visibility": "internal",
         },
         index=1,
     )
-    follow_up = _row(
-        "stream_delta",
-        {"content": "secret follow up", "turn_id": "turn-internal"},
-        index=2,
+    follow_turn = _row(
+        "stream_delta", {"content": "secret turn", "turn_id": "turn-internal"}, index=2
     )
-    visible = _row("stream_delta", {"content": "hello", "turn_id": "turn-visible"}, index=3)
-    batches = [[internal, follow_up, visible], []]
+    follow_user = _row(
+        "stream_delta",
+        {"content": "secret user", "user_message_id": "user-internal"},
+        index=3,
+    )
+    follow_message = _row(
+        "stream_delta",
+        {"content": "secret message", "message_id": "msg-internal"},
+        index=4,
+    )
+    follow_client = _row(
+        "stream_delta",
+        {"content": "secret client", "client_turn_id": "client-internal"},
+        index=5,
+    )
+    visible = _row("stream_delta", {"content": "hello", "turn_id": "turn-visible"}, index=6)
+    batches = [[internal, follow_turn, follow_user, follow_message, follow_client, visible], []]
     worker_done = threading.Event()
     calls = {"count": 0}
     cursors: list[object] = []
+    ran_off_loop: list[bool] = []
 
     def fake_reader(tenant_id: str, session_id: str, cursor: object) -> list[object]:
         """返回内部行与可见行混合的一批，第二批为空并结束 worker。"""
+        ran_off_loop.append(_off_loop())
         index = calls["count"]
         calls["count"] += 1
         cursors.append(cursor)
@@ -247,6 +282,48 @@ async def test_internal_visibility_rows_are_skipped(
     assert "hello" in frames[0]
     assert "secret" not in frames[0]
     assert cursors == [None, (visible.created_at, visible.id)]
+    _assert_off_loop(ran_off_loop)
+
+
+@pytest.mark.asyncio
+async def test_multiple_rows_in_one_batch_are_emitted_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """单次读取返回多条可见事件时按行序全部下发，游标停在最后一行。"""
+    _install_fake_asyncio(monkeypatch)
+    _install_clock(monkeypatch)
+    first = _row("stream_delta", {"content": "one"}, index=1)
+    second = _row("stream_delta", {"content": "two"}, index=2)
+    worker_done = threading.Event()
+    batches = [[first, second], []]
+    calls = {"count": 0}
+    cursors: list[object] = []
+    ran_off_loop: list[bool] = []
+
+    def fake_reader(tenant_id: str, session_id: str, cursor: object) -> list[object]:
+        """首批返回两行，第二批为空并结束 worker。"""
+        ran_off_loop.append(_off_loop())
+        index = calls["count"]
+        calls["count"] += 1
+        cursors.append(cursor)
+        if calls["count"] >= 2:
+            worker_done.set()
+        return list(batches[index]) if index < len(batches) else []
+
+    monkeypatch.setattr(chat, "_read_relay_rows", fake_reader)
+
+    frames = await asyncio.wait_for(
+        _collect(_stream(worker_done=worker_done)),
+        timeout=2,
+    )
+
+    assert len(frames) == 2
+    assert frames[0].startswith(f"id: {first.id}\nevent: stream_delta\n")
+    assert frames[1].startswith(f"id: {second.id}\nevent: stream_delta\n")
+    assert '"content": "one"' in frames[0]
+    assert '"content": "two"' in frames[1]
+    assert cursors == [None, (second.created_at, second.id)]
+    _assert_off_loop(ran_off_loop)
 
 
 @pytest.mark.asyncio
@@ -260,9 +337,12 @@ async def test_idle_timeout_persists_interruption_and_keeps_waiting(
     worker_done = threading.Event()
     calls = {"count": 0}
     persisted: list[tuple[str, str, str]] = []
+    reader_off_loop: list[bool] = []
+    persist_off_loop: list[bool] = []
 
     def fake_reader(tenant_id: str, session_id: str, cursor: object) -> list[object]:
         """始终返回空批，第二次读取时结束 worker，避免超时路径无限循环。"""
+        reader_off_loop.append(_off_loop())
         calls["count"] += 1
         if calls["count"] >= 2:
             worker_done.set()
@@ -270,6 +350,7 @@ async def test_idle_timeout_persists_interruption_and_keeps_waiting(
 
     def fake_timeout(tenant_id: str, session_id: str, client_turn_id: str) -> None:
         """记录超时落库调用，替代真实数据库写入。"""
+        persist_off_loop.append(_off_loop())
         persisted.append((tenant_id, session_id, client_turn_id))
 
     monkeypatch.setattr(chat, "_read_relay_rows", fake_reader)
@@ -283,3 +364,6 @@ async def test_idle_timeout_persists_interruption_and_keeps_waiting(
     assert calls["count"] == 2
     assert persisted == [("tenant-1", "sess-1", "turn-1")]
     assert frames == []
+    _assert_off_loop(reader_off_loop)
+    assert persist_off_loop, "idle-timeout persistence was never invoked"
+    assert all(persist_off_loop), "idle-timeout persistence ran on the event loop thread"
