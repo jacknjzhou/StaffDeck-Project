@@ -29,6 +29,27 @@ class MCPClientError(RuntimeError):
 MCP_APPS_EXTENSION_ID = "io.modelcontextprotocol/ui"
 MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 
+# stdio 子进程只继承这些与运行时定位相关的基础变量，云凭证等一律不随环境泄漏。
+_SAFE_ENV_KEYS = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "SYSTEMROOT",
+    "USERPROFILE",
+    "COMSPEC",
+)
+
+
+def build_stdio_env(config_env: dict[str, str] | None = None) -> dict[str, str]:
+    """构造 stdio 子进程环境：只继承基础变量，其余由显式配置提供。"""
+    env = {key: os.environ[key] for key in _SAFE_ENV_KEYS if key in os.environ}
+    env.update(config_env or {})
+    return env
+
 
 # --------------------------------------------------------------------------- #
 # Transport 归一化
@@ -475,10 +496,13 @@ class _StdioSession(_MCPSession):
         启动失败会区分工作目录不存在、命令缺失、权限不足等情况，统一抛 MCPClientError。
         """
         command = _stdio_command(self.config)
-        env = os.environ.copy()
         raw_env = self.config.get("env")
-        if isinstance(raw_env, Mapping):
-            env.update({str(key): str(value) for key, value in raw_env.items()})
+        config_env = (
+            {str(key): str(value) for key, value in raw_env.items()}
+            if isinstance(raw_env, Mapping)
+            else None
+        )
+        env = build_stdio_env(config_env)
         cwd = str(self.config["cwd"]) if self.config.get("cwd") else None
         _validate_stdio_launch(command, cwd)
         try:

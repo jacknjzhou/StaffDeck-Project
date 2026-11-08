@@ -18,6 +18,7 @@ from app.api.tools import (
     list_tools,
     sync_mcp_tools,
 )
+from app.config import get_settings
 from app.db.models import MCPServer, Tenant, Tool, User
 from app.db.models import AgentProfile, AgentResourceBinding
 from app.tools.tool_executor import ToolExecutor
@@ -35,6 +36,19 @@ from app.tools.tool_schema import (
     MCPSyncRequest,
     ToolCall,
 )
+
+
+def _allow_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
+    """测试内开启 stdio，并把当前解释器加入白名单，便于启动真实 mock 子进程。"""
+    allowed = f"npx,uvx,node,python3,uv,{Path(sys.executable).name}"
+    settings = get_settings().model_copy(
+        update={
+            "mcp_stdio_enabled": True,
+            "mcp_stdio_allowed_commands": allowed,
+        }
+    )
+    monkeypatch.setattr("app.tools.tool_schema.get_settings", lambda: settings)
+    monkeypatch.setattr("app.api.tools.get_settings", lambda: settings)
 
 
 def _admin_user() -> User:
@@ -69,8 +83,9 @@ def test_discover_builtin_mcp_server_lists_tools() -> None:
         assert echo.input_schema["properties"]["text"]["type"] == "string"
 
 
-def test_discover_stdio_mcp_server_lists_tools() -> None:
+def test_discover_stdio_mcp_server_lists_tools(monkeypatch) -> None:
     """验证通过 stdio 子进程启动的 MCP 服务也能被发现并列出工具。"""
+    _allow_stdio(monkeypatch)
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -166,8 +181,9 @@ def test_mcp_app_resource_limit_is_ten_mib() -> None:
         )
 
 
-def test_synced_mcp_app_renders_and_calls_read_only_tool() -> None:
+def test_synced_mcp_app_renders_and_calls_read_only_tool(monkeypatch) -> None:
     """验证同步后的 MCP App 工具可渲染卡片资源，并能在应用内调用只读工具。"""
+    _allow_stdio(monkeypatch)
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(

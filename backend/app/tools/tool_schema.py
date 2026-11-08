@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.capability_scope import CapabilityScope
+from app.config import get_settings
 
 
 class ToolExecutionPolicy(BaseModel):
@@ -181,6 +183,24 @@ class MCPServerConnection(BaseModel):
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     cwd: Optional[str] = None
+
+    def allowed_stdio_command(self) -> bool:
+        """按可执行文件名判断 stdio 命令是否落入部署配置的白名单。"""
+        allowed = {
+            item.strip()
+            for item in get_settings().mcp_stdio_allowed_commands.split(",")
+            if item.strip()
+        }
+        return Path(self.command or "").name in allowed
+
+    @model_validator(mode="after")
+    def _validate_stdio_command(self) -> "MCPServerConnection":
+        """拒绝白名单之外的 stdio 命令，避免任意命令执行。"""
+        if self.transport != "stdio":
+            return self
+        if not self.allowed_stdio_command():
+            raise ValueError(f"stdio command not in allowlist: {self.command!r}")
+        return self
 
 
 class MCPServerCreateRequest(BaseModel):
