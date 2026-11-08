@@ -38,6 +38,7 @@ from app.api import (
 from app.async_jobs import shutdown_async_jobs, start_async_jobs
 from app.channels import start_channel_services, stop_channel_services
 from app.config import get_settings
+from app.core import runtime_state
 from app.core.harness_recovery import (
     recover_orphan_harness_runs,
     start_harness_recovery_sweeper,
@@ -97,35 +98,77 @@ def _role_enables(capability: str) -> bool:
 
 
 # 本进程持有的角色租约（PG + redis_url 部署下防同角色双进程）。
-# SQLite 桌面/单机模式靠文件锁互斥，redis_url 为空时租约获取内部直接跳过。
+# SQLite 桌面/单机模式靠文件锁互斥；生产缺 Redis 时 acquire_role_lease 直接报错。
 _held_leases: list[RedisLease] = []
 _lease_renew_stop = threading.Event()
 _lease_renew_thread: threading.Thread | None = None
 LEASE_RENEW_INTERVAL_SECONDS = 20.0
+# 连续这么多轮续期失败即认定租约丢失：互斥保护已失效，就绪探针必须转未就绪。
+LEASE_RENEW_MAX_FAILURES = 3
+_lease_renew_failures = 0
+
+
+def _renew_held_leases_once() -> str:
+    """为全部已持有租约续期一轮，返回失败描述；空串表示本轮全部成功。
+
+    单个租约的异常不打断其余租约，也不让续期线程退出：租约丢失的处理是
+    “标记未就绪”，而不是杀掉进程。
+    """
+    failures: list[str] = []
+    # 取快照再遍历：shutdown 路径可能并发清空 _held_leases。
+    held = list(_held_leases)
+    for lease in held:
+        try:
+            if not lease.renew():
+                failures.append(f"{lease}: 租约已被他人持有或已过期")
+        except Exception as exc:  # noqa: BLE001 - 续期失败不应打断进程
+            failures.append(f"{lease}: {exc!r}")
+    return "; ".join(failures)
+
+
+def _record_lease_renew_failure(reason: str) -> None:
+    """累计连续失败轮数；达到阈值后置位 lost 并只记录一条错误日志。"""
+    global _lease_renew_failures
+    _lease_renew_failures += 1
+    if _lease_renew_failures < LEASE_RENEW_MAX_FAILURES:
+        return
+    if runtime_state.is_lease_lost():
+        return
+    runtime_state.mark_lease_lost()
+    logger.error(
+        "角色租约连续 %d 轮续期失败，本进程已标记为 not-ready：%s",
+        _lease_renew_failures,
+        reason,
+    )
+
+
+def _reset_lease_renew_failures() -> None:
+    """续期成功后清零连续失败计数。"""
+    global _lease_renew_failures
+    _lease_renew_failures = 0
 
 
 def _start_lease_renewer() -> None:
     """为已持有的角色租约周期续期。
 
     租约 TTL 很短，崩溃的进程不会永久占用角色，因此存活进程必须续期；否则
-    超过 LEASE_TTL_SECONDS 后租约静默过期，互斥保证随之失效。
+    超过 LEASE_TTL_SECONDS 后租约静默过期，互斥保证随之失效。连续
+    LEASE_RENEW_MAX_FAILURES 轮失败后把进程标记为未就绪，但不退出进程。
     """
     global _lease_renew_thread
     if not _held_leases:
         return
     _lease_renew_stop.clear()
+    _reset_lease_renew_failures()
 
     def renew_loop() -> None:
         """后台循环：每次间隔结束后为全部已持有租约续期一次。"""
         while not _lease_renew_stop.wait(LEASE_RENEW_INTERVAL_SECONDS):
-            for lease in list(_held_leases):
-                try:
-                    if not lease.renew():
-                        logger.error(
-                            "角色租约续期失败（租约已被他人持有或已过期）：%s", lease
-                        )
-                except Exception:  # noqa: BLE001 - 续期失败不应打断进程
-                    logger.exception("角色租约续期异常")
+            reason = _renew_held_leases_once()
+            if reason:
+                _record_lease_renew_failure(reason)
+            else:
+                _reset_lease_renew_failures()
 
     _lease_renew_thread = threading.Thread(
         target=renew_loop, name="staffdeck-lease-renewer", daemon=True

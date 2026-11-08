@@ -204,3 +204,108 @@ def test_held_leases_are_renewed_while_process_runs(monkeypatch):
 
     assert not main_mod._lease_renew_thread
     assert held[0].released
+
+
+class _ScriptedLease:
+    """按预设序列返回续期结果的替身租约，用于验证“连续失败”计数语义。"""
+
+    def __init__(self, results: list[bool]) -> None:
+        """记录续期结果序列，并初始化计数与释放标记。"""
+        self.results = results
+        self.renewed = 0
+        self.released = False
+
+    def renew(self) -> bool:
+        """按下标返回结果，序列用尽后重复最后一项。"""
+        index = min(self.renewed, len(self.results) - 1)
+        self.renewed += 1
+        return self.results[index]
+
+    def release(self) -> None:
+        """标记租约已释放，供清理路径断言。"""
+        self.released = True
+
+
+def _wait_until(predicate, timeout: float = 3.0) -> None:
+    """轮询等待条件成立，避免对后台线程用固定 sleep 造成偶发失败。"""
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while not predicate() and _time.monotonic() < deadline:
+        _time.sleep(0.01)
+    assert predicate()
+
+
+def _renewer_test_setup(monkeypatch, results: list[bool]):
+    """装配一个只持有替身租约的 main 模块，返回（模块, 租约）。"""
+    from app.core import runtime_state
+
+    main_mod = _patch_settings(monkeypatch, redis_url="redis://example:6379/0")
+    monkeypatch.setattr(main_mod, "LEASE_RENEW_INTERVAL_SECONDS", 0.02)
+    lease = _ScriptedLease(results)
+    main_mod._stop_lease_renewer()
+    main_mod._held_leases.clear()
+    main_mod._held_leases.append(lease)
+    runtime_state.lease_lost.clear()
+    main_mod._lease_renew_failures = 0
+    return main_mod, lease
+
+
+def _renewer_test_teardown(main_mod) -> None:
+    """停止续期线程并清理托管状态，避免测试间相互污染。"""
+    from app.core import runtime_state
+
+    main_mod._stop_lease_renewer()
+    main_mod._held_leases.clear()
+    main_mod._lease_renew_failures = 0
+    runtime_state.lease_lost.clear()
+
+
+def test_three_consecutive_renew_failures_mark_lease_lost_once(monkeypatch, caplog):
+    """连续 3 次续期失败后置位 lease_lost，且只记一条错误日志（不逐次刷屏）。"""
+    import logging
+
+    from app.core import runtime_state
+
+    main_mod, lease = _renewer_test_setup(monkeypatch, [False])
+    caplog.set_level(logging.ERROR, logger="staffdeck.main")
+
+    def _error_records() -> list[logging.LogRecord]:
+        """只取 main 记录器发出的 ERROR，排除其他库的噪音。"""
+        return [
+            record
+            for record in caplog.records
+            if record.name == "staffdeck.main" and record.levelno == logging.ERROR
+        ]
+
+    main_mod._start_lease_renewer()
+    try:
+        _wait_until(runtime_state.is_lease_lost)
+        assert lease.renewed >= 3
+        # mark_lease_lost 与 logger.error 紧邻，事件置位后日志可能尚未落盘。
+        _wait_until(lambda: len(_error_records()) == 1)
+        assert len(_error_records()) == 1
+
+        settled = lease.renewed
+        _wait_until(lambda: lease.renewed >= settled + 3)
+        assert len(_error_records()) == 1, "lost lease must not log on every failed renewal"
+        assert main_mod._lease_renew_thread.is_alive()
+    finally:
+        _renewer_test_teardown(main_mod)
+
+
+def test_successful_renewal_resets_failure_streak(monkeypatch, caplog):
+    """两次失败后成功一次即清零，因此永不到达 3 连败、也不会置位 lost。"""
+    import logging
+
+    from app.core import runtime_state
+
+    main_mod, lease = _renewer_test_setup(monkeypatch, [False, False, True])
+    caplog.set_level(logging.ERROR, logger="staffdeck.main")
+    main_mod._start_lease_renewer()
+    try:
+        _wait_until(lambda: lease.renewed >= 6)
+        assert not runtime_state.is_lease_lost()
+        assert [r for r in caplog.records if r.levelno == logging.ERROR] == []
+    finally:
+        _renewer_test_teardown(main_mod)
