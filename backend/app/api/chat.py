@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import mimetypes
@@ -7,7 +8,7 @@ import re
 import threading
 import time
 import traceback
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -1482,75 +1483,91 @@ def chat_stream(
 
     threading.Thread(target=run_stream_worker, daemon=True).start()
 
-    def stream_events() -> Iterator[str]:
-        """按游标轮询事件表，把新增事件转成 SSE 文本输出。
-        跳过 internal 可见性轮次的事件；收到终止事件后等 worker 结束再关闭连接，
-        长时间没有事件时发心跳，空闲超时则落一条中断事件后继续等待。
-        """
-        nonlocal initial_cursor
-        relay_ready.wait(15)
-        deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
-        last_heartbeat_at = time.monotonic()
-        terminal_sent = False
-        internal_relay_turn_ids: set[str] = set()
-        while True:
-            session_id = source_session_id["value"]
-            emitted = False
-            if session_id:
-                with Session(engine) as relay_db:
-                    rows = _events_after_cursor(relay_db, request.tenant_id, session_id, initial_cursor)
-                for row in rows:
-                    payload = row.payload_json or {}
-                    row_turn_ids = {
-                        str(payload.get(key) or "").strip()
-                        for key in ("turn_id", "user_message_id", "message_id", "client_turn_id")
-                        if str(payload.get(key) or "").strip()
-                    }
-                    if payload.get("message_visibility") == "internal":
-                        internal_relay_turn_ids.update(row_turn_ids)
-                    event_name, data = _relay_event_payload(row)
-                    initial_cursor = (row.created_at, row.id)
-                    emitted = True
-                    if row_turn_ids & internal_relay_turn_ids:
-                        continue
-                    yield _sse(event_name, data, row.id)
-                    if event_name in STREAM_RELAY_TERMINAL_EVENTS:
-                        terminal_sent = True
-                if emitted:
-                    deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
-                    last_heartbeat_at = time.monotonic()
-            if terminal_sent and worker_done.is_set() and not emitted:
-                return
-            if worker_done.is_set() and not emitted:
-                return
-            if time.monotonic() > deadline:
-                if session_id:
-                    with Session(engine) as timeout_db:
-                        chat_session = timeout_db.get(ChatSession, session_id)
-                        if chat_session:
-                            _persist_chat_turn_interrupted(
-                                timeout_db,
-                                request.tenant_id,
-                                chat_session,
-                                request.client_turn_id or "",
-                                "stream relay timed out waiting for terminal event",
-                            )
-                            timeout_db.commit()
-                    continue
-                return
-            now = time.monotonic()
-            if now - last_heartbeat_at >= STREAM_RELAY_HEARTBEAT_SECONDS:
-                last_heartbeat_at = now
-                yield _sse(
-                    "heartbeat",
-                    {
-                        "phase": "relay",
-                        "sessionId": session_id or request.session_id or "",
-                    },
-                )
-            time.sleep(STREAM_RELAY_POLL_SECONDS)
+    return StreamingResponse(
+        stream_events(
+            tenant_id=request.tenant_id,
+            fallback_session_id=request.session_id or "",
+            client_turn_id=request.client_turn_id or "",
+            session_id_ref=source_session_id,
+            initial_cursor=initial_cursor,
+            relay_ready=relay_ready,
+            worker_done=worker_done,
+        ),
+        media_type="text/event-stream",
+    )
 
-    return StreamingResponse(stream_events(), media_type="text/event-stream")
+
+async def stream_events(
+    *,
+    tenant_id: str,
+    fallback_session_id: str,
+    client_turn_id: str,
+    session_id_ref: dict[str, str],
+    initial_cursor: tuple[object, str] | None,
+    relay_ready: threading.Event,
+    worker_done: threading.Event,
+) -> AsyncIterator[str]:
+    """按游标轮询事件表，把新增事件转成 SSE 文本输出。
+    跳过 internal 可见性轮次的事件；收到终止事件后等 worker 结束再关闭连接，
+    长时间没有事件时发心跳，空闲超时则落一条中断事件后继续等待。
+    事件表读取与超时落库都放线程池，事件循环只负责等待与写流。
+    """
+    await asyncio.to_thread(relay_ready.wait, 15)
+    cursor = initial_cursor
+    deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
+    last_heartbeat_at = time.monotonic()
+    terminal_sent = False
+    internal_relay_turn_ids: set[str] = set()
+    while True:
+        session_id = session_id_ref["value"]
+        emitted = False
+        if session_id:
+            rows = await asyncio.to_thread(_read_relay_rows, tenant_id, session_id, cursor)
+            for row in rows:
+                payload = row.payload_json or {}
+                row_turn_ids = {
+                    str(payload.get(key) or "").strip()
+                    for key in ("turn_id", "user_message_id", "message_id", "client_turn_id")
+                    if str(payload.get(key) or "").strip()
+                }
+                if payload.get("message_visibility") == "internal":
+                    internal_relay_turn_ids.update(row_turn_ids)
+                event_name, data = _relay_event_payload(row)
+                cursor = (row.created_at, row.id)
+                emitted = True
+                if row_turn_ids & internal_relay_turn_ids:
+                    continue
+                yield _sse(event_name, data, row.id)
+                if event_name in STREAM_RELAY_TERMINAL_EVENTS:
+                    terminal_sent = True
+            if emitted:
+                deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
+                last_heartbeat_at = time.monotonic()
+        if terminal_sent and worker_done.is_set() and not emitted:
+            return
+        if worker_done.is_set() and not emitted:
+            return
+        if time.monotonic() > deadline:
+            if session_id:
+                await asyncio.to_thread(
+                    _persist_relay_idle_timeout,
+                    tenant_id,
+                    session_id,
+                    client_turn_id,
+                )
+                continue
+            return
+        now = time.monotonic()
+        if now - last_heartbeat_at >= STREAM_RELAY_HEARTBEAT_SECONDS:
+            last_heartbeat_at = now
+            yield _sse(
+                "heartbeat",
+                {
+                    "phase": "relay",
+                    "sessionId": session_id or fallback_session_id,
+                },
+            )
+        await asyncio.sleep(STREAM_RELAY_POLL_SECONDS)
 
 
 @router.post("/sessions/{session_id}/cancel")
@@ -2072,6 +2089,35 @@ def _events_after_cursor(
             )
         )
     return db.exec(statement.order_by(AgentEvent.created_at, AgentEvent.id).limit(200)).all()
+
+
+def _read_relay_rows(
+    tenant_id: str,
+    session_id: str,
+    cursor: tuple[object, str] | None,
+) -> list[AgentEvent]:
+    """在线程池中读取游标之后的一批事件，避免阻塞事件循环。"""
+    with Session(engine) as relay_db:
+        return _events_after_cursor(relay_db, tenant_id, session_id, cursor)
+
+
+def _persist_relay_idle_timeout(
+    tenant_id: str,
+    session_id: str,
+    client_turn_id: str,
+) -> None:
+    """空闲超时后落一条中断事件；在线程池中执行，避免阻塞事件循环。"""
+    with Session(engine) as timeout_db:
+        chat_session = timeout_db.get(ChatSession, session_id)
+        if chat_session:
+            _persist_chat_turn_interrupted(
+                timeout_db,
+                tenant_id,
+                chat_session,
+                client_turn_id,
+                "stream relay timed out waiting for terminal event",
+            )
+            timeout_db.commit()
 
 
 def _latest_event_cursor(db: Session, tenant_id: str, session_id: str) -> tuple[object, str] | None:
