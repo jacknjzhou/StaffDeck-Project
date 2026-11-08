@@ -75,15 +75,16 @@ _CAPABILITY_SCOPE_TABLES = (
 def init_db() -> None:
     """启动时初始化数据库:建表、执行 SQLite 增量迁移并清理孤儿会话。
 
-    先导入模型以注册元数据,再建表,随后在 SQLite 上开启 WAL 并补齐历史表结构。
+    先导入模型以注册元数据,再校验生产库版本,随后建表并补齐历史表结构。
     """
     import app.db.models  # noqa: F401
 
     _configure_sqlite_runtime()
+    # 必须早于 create_all:未纳管的生产库要先抛出"先跑迁移",否则 create_all 会先建出一批表,
+    # 之后 alembic upgrade head 的基线 create_table(无 checkfirst)反而撞上已存在的表。
+    assert_schema_current(engine)
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_skill_schema()
-    # 生产(PG)库必须已由 Alembic 升级到 head;SQLite/开发环境在函数内直接放行。
-    assert_schema_current(engine)
     _purge_orphaned_chat_sessions()
 
 
@@ -101,10 +102,16 @@ def _alembic_head_revisions() -> set[str]:
 def assert_schema_current(engine: Engine) -> None:
     """生产库必须由 Alembic 管理:版本表缺失或落后于 head 时抛错快速失败。
 
-    只在生产环境且非 SQLite 时生效:开发/测试用 init_db() 直接建表,本地 SQLite
-    库也没有 alembic_version,不能因此拒绝启动。
+    只在生产环境、非 SQLite 且进程角色为 api 时生效:
+    - 开发/测试用 init_db() 直接建表,本地 SQLite 库也没有 alembic_version,不能因此拒绝启动;
+    - worker/connector 不执行迁移,且 compose 里只等 api 启动(不等迁移完成),逐进程校验会让
+      它们在每次带迁移的发版中崩溃重启;迁移由 api 角色的 entrypoint 负责,故只由 api 把关
+      (角色为 all 的单体部署同样不校验,避免多进程共享库时互相卡启动顺序)。
     """
-    if not get_settings().is_production or engine.dialect.name == "sqlite":
+    settings = get_settings()
+    if not settings.is_production or engine.dialect.name == "sqlite":
+        return
+    if settings.process_role != "api":
         return
     with engine.connect() as conn:
         has_version_table = inspect(conn).has_table("alembic_version")
