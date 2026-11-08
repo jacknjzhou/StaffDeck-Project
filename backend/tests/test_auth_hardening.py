@@ -330,8 +330,8 @@ def test_main_app_wires_cors_outside_body_limit() -> None:
     from app import main as main_module
 
     names = [middleware.cls.__name__ for middleware in main_module.app.user_middleware]
-    assert names[0] == "CORSMiddleware"
-    assert "BodySizeLimitMiddleware" in names
+    # 断言相对顺序:完整套件会经 single_port_app 追加中间件,绝对下标不稳定。
+    assert names.index("CORSMiddleware") < names.index("BodySizeLimitMiddleware")
 
 
 def test_real_app_rejects_oversized_upload_before_route(monkeypatch) -> None:

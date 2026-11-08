@@ -136,9 +136,9 @@ def _rate_limit_login(identity: str) -> None:
             # NX: 只在键还没有 TTL 时补,避免把已有窗口续期;同时修复
             # INCR 成功后进程崩溃留下的永久键。
             client.expire(key, _LOGIN_RATE_WINDOW_SECONDS, nx=True)
-        except (RedisError, OSError) as exc:
+        except (RedisError, OSError):
             logger.exception(
-                "login rate limit: redis unavailable, falling back to memory: %r", exc
+                "login rate limit: redis unavailable, falling back to memory"
             )
             count = None
     if count is None:
