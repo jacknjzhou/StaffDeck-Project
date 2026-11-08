@@ -21,11 +21,11 @@ def test_four_agent_stages_use_identical_system_and_stage_local_user_content(
     systems: dict[str, str] = {}
     payloads: dict[str, dict] = {}
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实的 LLM 客户端初始化，用例不需要网络配置。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """按阶段返回固定 JSON，并记录各阶段使用的系统提示词与载荷。"""
         phase = payload["_agent_stage"]["phase"]
         systems[phase] = system_prompt
@@ -38,7 +38,7 @@ def test_four_agent_stages_use_identical_system_and_stage_local_user_content(
             return {"action": "pass", "needs_retry": False}
         raise AssertionError(f"unexpected phase: {phase}")
 
-    def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_text(self, system_prompt, payload):
         """记录最终回复阶段的提示词与载荷，并返回固定文本。"""
         phase = payload["_agent_stage"]["phase"]
         systems[phase] = system_prompt
@@ -116,11 +116,11 @@ def test_general_skill_substages_use_the_same_unified_system_prompt(monkeypatch)
     """验证通用技能各子阶段的系统提示词与主流程完全一致。"""
     systems: dict[str, str] = {}
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实的 LLM 客户端初始化，用例不需要网络配置。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """按通用技能子阶段返回固定 JSON，并记录该阶段的系统提示词。"""
         phase = payload["_agent_stage"]["phase"]
         systems[phase] = system_prompt
@@ -149,7 +149,7 @@ def test_general_skill_substages_use_the_same_unified_system_prompt(monkeypatch)
             return {"reply": "执行完成"}
         raise AssertionError(f"unexpected phase: {phase}")
 
-    def fake_execute_plan(  # noqa: ANN001
+    def fake_execute_plan(
         self,
         skill,
         query,

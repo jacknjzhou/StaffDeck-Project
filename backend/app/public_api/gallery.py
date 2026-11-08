@@ -5,14 +5,13 @@ import json
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlmodel import Session
 
-from app.api import agents as internal_agents
 from app.agents.schema import AgentProfileRead
+from app.api import agents as internal_agents
 from app.db import get_session
 from app.public_api.auth import PublicPrincipal, require_scopes
 from app.public_api.errors import PublicAPIError
 from app.public_api.idempotency import replay_idempotent_response, store_idempotent_response
 from app.public_api.utils import decode_cursor, encode_cursor
-
 
 router = APIRouter(prefix="/gallery/agents", tags=["gallery"])
 

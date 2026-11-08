@@ -8,7 +8,6 @@ from app.db import get_session
 from app.db.models import APIAuditLog, APIJob, ChatSession, HumanHandoffRequest, MessageFeedback
 from app.public_api.auth import PublicPrincipal, enforce_agent_access, require_scopes
 
-
 router = APIRouter(tags=["operations"])
 
 

@@ -191,7 +191,7 @@ def test_wechat_kf_callback_returns_400_for_malicious_plaintext_xml(monkeypatch)
 
 def test_wechat_kf_callback_rejects_stale_timestamp() -> None:
     """验证时间戳超出允许窗口时以「已过期」拒绝,防止重放。"""
-    with pytest.raises(HTTPException, match="已过期.*超过 300 秒"):
+    with pytest.raises(HTTPException, match=r"已过期.*超过 300 秒"):
         wechat_kf_api._verify_callback(
             "token",
             "signature",
@@ -203,7 +203,7 @@ def test_wechat_kf_callback_rejects_stale_timestamp() -> None:
 
 def test_wechat_kf_callback_rejects_invalid_timestamp() -> None:
     """验证时间戳不是 Unix 秒级整数时被拒绝。"""
-    with pytest.raises(HTTPException, match="时间戳无效.*Unix 秒级整数"):
+    with pytest.raises(HTTPException, match=r"时间戳无效.*Unix 秒级整数"):
         wechat_kf_api._verify_callback(
             "token", "signature", "not-a-timestamp", "nonce", "ciphertext"
         )
@@ -211,7 +211,7 @@ def test_wechat_kf_callback_rejects_invalid_timestamp() -> None:
 
 def test_wechat_kf_callback_rejects_future_timestamp() -> None:
     """验证时间戳明显超前时以「尚未生效」拒绝,提示检查客户端时钟。"""
-    with pytest.raises(HTTPException, match="尚未生效.*检查客户端时钟"):
+    with pytest.raises(HTTPException, match=r"尚未生效.*检查客户端时钟"):
         wechat_kf_api._verify_callback(
             "token",
             "signature",

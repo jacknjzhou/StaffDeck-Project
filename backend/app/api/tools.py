@@ -19,8 +19,8 @@ from app.agents.branching import (
     user_creator_metadata,
     visible_tool_rows,
 )
-from app.config import get_settings
 from app.capability_scope import normalize_capability_scope
+from app.config import get_settings
 from app.db import get_session
 from app.db.models import (
     A2ATaskEvent,
@@ -55,9 +55,9 @@ from app.tools.tool_schema import (
     MCPAppResourceRead,
     MCPAppToolCallRequest,
     MCPAppToolCallResponse,
+    MCPDiscoveredTool,
     MCPDiscoverRequest,
     MCPDiscoverResponse,
-    MCPDiscoveredTool,
     MCPServerConnection,
     MCPServerCreateRequest,
     MCPServerRead,
@@ -321,7 +321,7 @@ def probe_tool(
             input_schema=request.input_schema,
             output_schema=request.output_schema,
         )
-        result = ToolExecutor(db)._execute_a2a_tool(  # noqa: SLF001
+        result = ToolExecutor(db)._execute_a2a_tool(
             tool,
             request.sample_arguments,
         )
@@ -1405,7 +1405,7 @@ def _discover_response(
             success=False,
             error=ToolError(code="MCP_DISCOVER_ERROR", message=str(exc)),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return MCPDiscoverResponse(
             success=False,
             error=ToolError(code="MCP_DISCOVER_UNEXPECTED", message=str(exc)),

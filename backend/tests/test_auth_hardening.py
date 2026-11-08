@@ -336,8 +336,8 @@ def test_main_app_wires_cors_outside_body_limit() -> None:
 
 def test_real_app_rejects_oversized_upload_before_route(monkeypatch) -> None:
     """真实 TestClient 上传超限请求由中间件 413,路由与鉴权依赖都不执行。"""
-    from app import main as main_module
     import app.core.body_limit as body_limit
+    from app import main as main_module
 
     monkeypatch.setattr(body_limit, "CHAT_UPLOAD_BODY_LIMIT", 64)
 

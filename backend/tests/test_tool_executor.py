@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-
-from app.agents.branching import ensure_private_resource_binding
-from app.tools.tool_executor import ToolExecutor
-from app.tools.tool_schema import ToolCall
-from app.db.models import A2ATaskEvent, A2ATaskRun, AgentProfile, MCPServer, Tenant, Tool
-from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
+
+from app.agents.branching import ensure_private_resource_binding
+from app.db.models import A2ATaskEvent, A2ATaskRun, AgentProfile, MCPServer, Tenant, Tool
+from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
+from app.tools.tool_executor import ToolExecutor
+from app.tools.tool_schema import ToolCall
 
 
 def test_resolve_secret_header(monkeypatch):

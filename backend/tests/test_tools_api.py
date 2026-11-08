@@ -55,7 +55,7 @@ def _member_user() -> User:
     )
 
 
-def probe_tool(request: ToolProbeRequest, db: Session):  # noqa: ANN201
+def probe_tool(request: ToolProbeRequest, db: Session):
     """以普通成员身份调用工具探测接口，避免每个用例重复构造用户。"""
     return _probe_tool(request, db, _member_user())
 

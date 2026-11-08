@@ -10,12 +10,10 @@ import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.db.models import Tenant, Tool
 from app.api.tools import probe_tool
-from app.tools.tool_schema import ToolProbeRequest
-from app.db.models import User
+from app.db.models import Tenant, Tool, User
 from app.tools.tool_executor import ToolExecutor
-from app.tools.tool_schema import ToolCall
+from app.tools.tool_schema import ToolCall, ToolProbeRequest
 
 
 def _wait_for_port(port: int) -> None:

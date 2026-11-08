@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import secrets
 import sys
+from itertools import pairwise
 from pathlib import Path
 
 from sqlmodel import Session, select
@@ -22,10 +23,9 @@ from app.db.models import (
     User,
     utc_now,
 )
-from app.security.encryption import encrypt_secret
-from app.security.auth import hash_password, verify_password
 from app.db.staffdeck_seed import seed_staffdeck_admin_gallery
-
+from app.security.auth import hash_password, verify_password
+from app.security.encryption import encrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -1471,7 +1471,7 @@ def _skill_content_graph(content: dict) -> dict:
                     "priority": index,
                     "label": "",
                 }
-                for index, (source, target) in enumerate(zip(node_ids, node_ids[1:]))
+                for index, (source, target) in enumerate(pairwise(node_ids))
             ],
         )
     else:

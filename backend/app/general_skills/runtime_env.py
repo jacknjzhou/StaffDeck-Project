@@ -5,10 +5,11 @@ import subprocess
 import sys
 import threading
 import venv
+from collections.abc import Iterator
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
-from typing import BinaryIO, Iterator
+from typing import BinaryIO
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.version import InvalidVersion, Version

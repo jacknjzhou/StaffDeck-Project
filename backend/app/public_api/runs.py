@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import mimetypes
 import re
-from typing import Any
 import threading
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
@@ -16,16 +16,20 @@ from app.core.cancellation import cancel_chat_turn
 from app.core.harness_session_cleanup import harness_task_workspace_path
 from app.db import engine, get_session
 from app.db.models import (
+    AgentEvent,
     APIClient,
     APICredential,
     APIJob,
-    AgentEvent,
     HarnessInvocationRecord,
     HarnessTaskFrameRecord,
     HarnessTurnRecord,
     Message,
 )
-from app.harness import HarnessArtifactAccessError, normalize_harness_artifact_path, open_harness_artifact
+from app.harness import (
+    HarnessArtifactAccessError,
+    normalize_harness_artifact_path,
+    open_harness_artifact,
+)
 from app.public_api.auth import PublicPrincipal, enforce_agent_access, require_scopes
 from app.public_api.errors import PublicAPIError
 from app.public_api.idempotency import replay_idempotent_response, store_idempotent_response
@@ -34,13 +38,16 @@ from app.public_api.jobs import (
     ensure_not_cancelled,
     job_read,
     register_job_handler,
+    stream_job_events,
     update_job,
 )
-from app.public_api.jobs import stream_job_events
 from app.public_api.schemas import AgentRunCreate, PublicSessionCreate
-from app.public_api.sessions import create_public_session_row, ensure_public_agent, owned_public_session
+from app.public_api.sessions import (
+    create_public_session_row,
+    ensure_public_agent,
+    owned_public_session,
+)
 from app.session.session_schema import ChatAttachmentRead, ChatTurnRequest, ChatTurnResponse
-
 
 router = APIRouter(tags=["runs"])
 
@@ -231,7 +238,7 @@ def execute_run(db: Session, job: APIJob) -> dict[str, Any]:
                         worker_result["response"] = ChatTurnResponse.model_validate(data)
                 if "response" not in worker_result:
                     raise RuntimeError("Harness stream ended without a complete response")
-        except Exception as exc:  # noqa: BLE001 - re-raised at persistent job boundary.
+        except Exception as exc:  # re-raised at persistent job boundary.
             worker_result["error"] = exc
         finally:
             worker_done.set()

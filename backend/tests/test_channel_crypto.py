@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import InvalidToken
 
 from app.channels.crypto import decrypt_channel_secret, encrypt_channel_secret
 from app.config import get_settings
@@ -25,5 +26,5 @@ def test_channel_secret_change_makes_old_token_undecryptable(monkeypatch) -> Non
     token = encrypt_channel_secret("same-secret")
     changed = get_settings().model_copy(update={"channel_secret": "another-secret"})
     monkeypatch.setattr("app.channels.crypto.get_settings", lambda: changed)
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidToken):
         decrypt_channel_secret(token)

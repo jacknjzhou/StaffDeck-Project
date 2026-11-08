@@ -34,7 +34,7 @@ def decode_replay_envelope(payload: object) -> ChannelInbound:
         raise ValueError("invalid_envelope_inbound")
     raw_attachments = normalized.get("attachments") or []
     if not isinstance(raw_attachments, list):
-        raise ValueError("invalid_envelope_attachments")  # noqa: TRY004
+        raise ValueError("invalid_envelope_attachments")
     if any(not isinstance(attachment, dict) for attachment in raw_attachments):
         raise ValueError("invalid_envelope_attachments")
     try:

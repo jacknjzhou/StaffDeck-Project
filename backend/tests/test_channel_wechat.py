@@ -621,8 +621,8 @@ def test_reconcile_starts_and_stops_binding_threads() -> None:
     manager = WeChatPollManager(db_engine=engine, client_factory=lambda binding: None)
     started: list[str] = []
     stopped: list[str] = []
-    manager.ensure_binding = lambda binding_id: started.append(binding_id)  # noqa: E731
-    manager.stop_binding = lambda binding_id: stopped.append(binding_id)  # noqa: E731
+    manager.ensure_binding = lambda binding_id: started.append(binding_id)
+    manager.stop_binding = lambda binding_id: stopped.append(binding_id)
     manager.running_binding_ids = lambda: {"stale_binding"}
 
     manager.reconcile_once()
@@ -845,7 +845,7 @@ def test_reconcile_does_not_restart_recovering_binding() -> None:
 
     ensured: list[str] = []
     original_ensure = manager.ensure_binding
-    manager.ensure_binding = lambda bid: ensured.append(bid)  # noqa: E731
+    manager.ensure_binding = lambda bid: ensured.append(bid)
     manager.reconcile_once()
     manager.ensure_binding = original_ensure
     # 恢复等待中的绑定 status 仍是 active 且线程活着:reconcile 不重复拉起、不误杀

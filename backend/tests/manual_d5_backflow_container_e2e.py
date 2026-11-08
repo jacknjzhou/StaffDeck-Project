@@ -221,7 +221,8 @@ def main() -> int:
     check("all 4 accepted", first == {"accepted": 4, "duplicates": 0}, str(first))
 
     print("\n== 6. 整批重发 + 1 条新增 ==")
-    extended = events + [
+    extended = [
+        *events,
         {
             "type": "message",
             "event_id": "m:msg-user-container-2",

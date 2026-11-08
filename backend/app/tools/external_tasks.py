@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import secrets
 import logging
+import secrets
 from datetime import timedelta
 from typing import Any
 

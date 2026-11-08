@@ -13,12 +13,12 @@ from app.api import knowledge_bases as internal_knowledge_bases
 from app.api import scheduled_tasks as internal_scheduled_tasks
 from app.api import tools as internal_tools
 from app.db import get_session
-from app.db.models import APIJob, AgentResourceBinding, KnowledgeIngestJob, Tool, utc_now
+from app.db.models import AgentResourceBinding, APIJob, KnowledgeIngestJob, Tool, utc_now
 from app.general_skills.schema import GeneralSkillImportRequest, GeneralSkillRunRequest
 from app.knowledge.schema import (
     KnowledgeBaseCreateRequest,
-    KnowledgeBaseUpdateRequest,
     KnowledgeBaseRollbackRequest,
+    KnowledgeBaseUpdateRequest,
     KnowledgeConceptUpdateRequest,
     KnowledgeDocumentUpdateRequest,
     KnowledgeDocumentUploadRequest,
@@ -41,7 +41,6 @@ from app.tools.tool_schema import (
     ToolTestRequest,
     ToolUpdateRequest,
 )
-
 
 router = APIRouter(tags=["resources"])
 

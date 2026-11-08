@@ -20,44 +20,43 @@ from app.agents.branching import (
     mark_resource_private_for_agent,
     metadata_preserving_creator,
     user_creator_metadata,
-    visible_knowledge_base_versions,
     visible_knowledge_base_version_ids,
+    visible_knowledge_base_versions,
 )
 from app.async_jobs import enqueue_async_job
 from app.db import get_session
 from app.db.models import (
+    KnowledgeBase,
+    KnowledgeBaseVersion,
     KnowledgeBucket,
     KnowledgeChunk,
     KnowledgeConcept,
     KnowledgeDiscoverySuggestion,
     KnowledgeDocument,
     KnowledgeIngestJob,
-    KnowledgeBase,
-    KnowledgeBaseVersion,
     ModelConfig,
     User,
     utc_now,
-)
-from app.llm.model_config_resolver import resolve_model_config_for_runtime
-from app.knowledge.schema import (
-    KnowledgeBucketRead,
-    KnowledgeChunkRead,
-    KnowledgeChunkUpdateRequest,
-    KnowledgeDiscoveryRead,
-    KnowledgeDocumentRead,
-    KnowledgeDocumentUpdateRequest,
-    KnowledgeDocumentUploadRequest,
-    KnowledgeBucketUpdateRequest,
-    KnowledgeOkfImportRequest,
-    KnowledgeIngestJobRead,
-    KnowledgeSearchRequest,
-    KnowledgeSearchResponse,
 )
 from app.knowledge.okf import (
     build_okf_for_document,
     create_concept_evidence_rows,
     parse_okf_bundle,
     upsert_concepts,
+)
+from app.knowledge.schema import (
+    KnowledgeBucketRead,
+    KnowledgeBucketUpdateRequest,
+    KnowledgeChunkRead,
+    KnowledgeChunkUpdateRequest,
+    KnowledgeDiscoveryRead,
+    KnowledgeDocumentRead,
+    KnowledgeDocumentUpdateRequest,
+    KnowledgeDocumentUploadRequest,
+    KnowledgeIngestJobRead,
+    KnowledgeOkfImportRequest,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
 )
 from app.knowledge.service import (
     IngestPayload,
@@ -68,6 +67,7 @@ from app.knowledge.service import (
     chunk_read,
     validate_discovered_skill,
 )
+from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.security.auth import ensure_current_user_tenant, get_current_user
 from app.security.permissions import (
     ensure_agent_scope_manager,
@@ -148,7 +148,7 @@ def import_okf_bundle(
     try:
         content = base64.b64decode(request.content_base64)
         parsed_docs = parse_okf_bundle(request.filename, content)
-    except Exception as exc:  # noqa: BLE001 - surface stable import failures.
+    except Exception as exc:  # surface stable import failures.
         raise HTTPException(status_code=400, detail=f"OKF import failed: {exc}") from exc
     if not parsed_docs:
         raise HTTPException(

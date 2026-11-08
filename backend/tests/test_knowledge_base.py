@@ -3,15 +3,19 @@ from __future__ import annotations
 import base64
 from datetime import timedelta
 from io import BytesIO
+from typing import ClassVar
 
 import pytest
 from docx import Document
+from pydantic import ValidationError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.agents.branching import ensure_open_gallery_binding
 from app.api.knowledge import (
     confirm_discovery as confirm_discovery_api,
+)
+from app.api.knowledge import (
     list_documents,
     search_knowledge,
     update_chunk,
@@ -35,9 +39,14 @@ from app.db.models import (
     User,
     utc_now,
 )
-from app.knowledge.schema import KnowledgeChunkUpdateRequest, KnowledgeDocumentUpdateRequest, KnowledgeSearchRequest, KnowledgeSearchResponse
 from app.knowledge.okf import search_concepts
 from app.knowledge.parser import extract_text
+from app.knowledge.schema import (
+    KnowledgeChunkUpdateRequest,
+    KnowledgeDocumentUpdateRequest,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
+)
 from app.knowledge.service import (
     IngestPayload,
     KnowledgeDiscoveryConflictError,
@@ -61,7 +70,7 @@ from app.skills.skill_schema import SkillCard
 
 def test_skill_card_rejects_legacy_steps_and_accepts_graph() -> None:
     """验证技能卡拒绝旧的 steps 字段，并接受节点图形式的技能定义。"""
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SkillCard(
             skill_id="skill_test",
             name="测试技能",
@@ -124,7 +133,7 @@ def test_knowledge_ingest_creates_document_buckets_and_chunks_without_auto_disco
             )
         )
 
-        service._run_ingest_job(job.id)  # noqa: SLF001 - exercise persistent job logic synchronously.
+        service._run_ingest_job(job.id)  # exercise persistent job logic synchronously.
 
         job = db.get(type(job), job.id)
         assert job is not None
@@ -309,7 +318,7 @@ def test_pdf_pages_receive_stable_section_labels(monkeypatch) -> None:
 
     class FakeReader:
         """模拟 pypdf 阅读器，用固定页面列表替代真实 PDF 解析。"""
-        pages = [FakePage("First page policy"), FakePage(""), FakePage("Third page process")]
+        pages: ClassVar[list] = [FakePage("First page policy"), FakePage(""), FakePage("Third page process")]
 
     monkeypatch.setattr("pypdf.PdfReader", lambda _stream: FakeReader())
 
@@ -439,7 +448,7 @@ def test_knowledge_ingest_cancel_running_job_cleans_partial_artifacts() -> None:
         assert cancelling is not None
         assert cancelling.status == "cancel_requested"
 
-        service._run_ingest_job(job.id)  # noqa: SLF001 - exercise persisted cancellation path.
+        service._run_ingest_job(job.id)  # exercise persisted cancellation path.
 
         cancelled = db.get(KnowledgeIngestJob, job.id)
         assert cancelled is not None
@@ -903,7 +912,7 @@ def test_knowledge_search_api_uses_selected_model_config(monkeypatch) -> None:
     """验证检索接口使用请求中指定的模型配置。"""
     captured: dict[str, str | None] = {}
 
-    def fake_search(self, request, model_config=None):  # noqa: ANN001
+    def fake_search(self, request, model_config=None):
         """伪造检索服务，记录传入的模型配置并返回最小响应。"""
         captured["model_id"] = model_config.id if model_config else None
         return KnowledgeSearchResponse(route_trace=[{"phase": "ok"}])
@@ -1470,7 +1479,7 @@ def test_confirm_discovery_rejects_noncanonical_skill_graph() -> None:
         db.commit()
         db.refresh(suggestion)
 
-        with pytest.raises(KnowledgeDiscoveryValidationError, match="nodes.0.*id, label"):
+        with pytest.raises(KnowledgeDiscoveryValidationError, match=r"nodes\.0.*id, label"):
             KnowledgeService(db).confirm_discovery(suggestion)
 
         db.refresh(suggestion)
@@ -1600,7 +1609,7 @@ def test_discovered_skill_rejects_unknown_fields_instead_of_dropping_them() -> N
         "terminal_node_ids": ["start"],
     }
 
-    with pytest.raises(KnowledgeDiscoveryValidationError, match="nodes.0.*prompt"):
+    with pytest.raises(KnowledgeDiscoveryValidationError, match=r"nodes\.0.*prompt"):
         validate_discovered_skill(payload)
 
 
@@ -1734,7 +1743,7 @@ def test_discovery_only_marks_valid_skill_as_pending(monkeypatch: pytest.MonkeyP
         db.add(job)
         db.commit()
 
-        KnowledgeService(db)._discover_from_document(  # noqa: SLF001
+        KnowledgeService(db)._discover_from_document(
             "tenant_demo", "kb_demo", document, [bucket], job
         )
 

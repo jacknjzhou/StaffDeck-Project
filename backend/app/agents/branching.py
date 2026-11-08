@@ -103,7 +103,7 @@ def get_overall_agent(db: Session, tenant_id: str) -> AgentProfile | None:
     return db.exec(
         select(AgentProfile).where(
             AgentProfile.tenant_id == tenant_id,
-            AgentProfile.is_overall == True,
+            AgentProfile.is_overall.is_(True),
             AgentProfile.status != "archived",
         )
     ).first()
@@ -1127,8 +1127,8 @@ def model_for_agent(
     model = db.exec(
         select(ModelConfig).where(
             ModelConfig.tenant_id == tenant_id,
-            ModelConfig.is_default == True,
-            ModelConfig.enabled == True,
+            ModelConfig.is_default.is_(True),
+            ModelConfig.enabled.is_(True),
         )
     ).first()
     return _runtime_model(db, tenant_id, model) if model else None

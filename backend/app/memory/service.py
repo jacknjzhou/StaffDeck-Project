@@ -13,7 +13,6 @@ from app.observability.spans import llm_operation
 from app.session.session_schema import ChatTurnRequest, StepAgentResult
 from app.tools.tool_schema import ToolResult
 
-
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "memory_extractor_prompt.md"
 MEMORY_SOURCE = "model_memory_extractor"
 PROFILE_NAME_KEY = "preferred_name"
@@ -428,7 +427,7 @@ def _normalize_memory_key(value: Any, kind: str, content: str) -> str:
         normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip().lower()).strip("_")
         if normalized:
             return normalized[:80]
-    digest = hashlib.md5(f"{kind}:{content}".encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
+    digest = hashlib.md5(f"{kind}:{content}".encode(), usedforsecurity=False).hexdigest()[:12]
     return f"{kind}_{digest}"
 
 

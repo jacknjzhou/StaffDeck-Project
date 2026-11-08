@@ -163,7 +163,6 @@ def test_handoff_requires_structured_step_declaration():
 def test_handoff_assignee_uses_agent_owner_metadata_before_admin():
     """验证员工配置了有效属主时,优先把工单派给该属主而非租户管理员。"""
     engine = _test_engine()
-    session_id = "session_wecom_group_resume"
     with Session(engine) as db:
         _admin, user, other = _seed_handoff_users(db)
         db.add(

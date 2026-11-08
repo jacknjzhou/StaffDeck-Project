@@ -6,7 +6,6 @@ from app.db.models import ChatSession, new_id, utc_now
 from app.session.session_schema import PendingTask, RouterDecision, TaskUpdate
 from app.session.slot_policy import strip_router_generated_message_slots
 
-
 TASK_IDENTITY_FIELDS = {
     "document_id",
     "knowledge_base_id",

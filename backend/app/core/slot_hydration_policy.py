@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, ClassVar
 
 from app.db.models import ChatSession, Skill
 from app.session.session_schema import RouterDecision, TurnPlan
@@ -11,7 +11,7 @@ from app.session.session_schema import RouterDecision, TurnPlan
 class SlotHydrationPolicy:
     """SOP 槽位注水策略：只用带稳定 key 的结构化记忆补全槽位，不做自然语言推测。"""
     ALLOWED_MEMORY_KINDS = frozenset({"profile", "preference", "fact"})
-    SLOT_MEMORY_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    SLOT_MEMORY_KEY_ALIASES: ClassVar[dict[str, tuple[str, ...]]] = {
         "user_name": ("preferred_name",),
     }
 

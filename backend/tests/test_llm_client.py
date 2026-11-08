@@ -3,19 +3,19 @@ from types import SimpleNamespace
 import pytest
 
 from app.llm.client import LLMClient, LLMError, _thinking_mode_for_model
-from app.llm.protocol_drivers import ChatCompletionsDriver, ProtocolCallError
 from app.llm.output_policy import (
     operation_empty_response_retries,
     operation_output_tokens,
 )
-from app.llm.stage_protocol import TURN_STAGE_MESSAGES_KEY, stage_payload
+from app.llm.protocol_drivers import ChatCompletionsDriver, ProtocolCallError
 from app.llm.schemas import ModelConfigCreateRequest
+from app.llm.stage_protocol import TURN_STAGE_MESSAGES_KEY, stage_payload
 from app.observability.spans import bind_span_sink, llm_operation
 
 
 class _ForbiddenResponses:
     """断言型替身：一旦被调用即失败，用于确保走 chat.completions。"""
-    def create(self, **_kwargs):  # noqa: ANN003
+    def create(self, **_kwargs):
         """直接断言失败，证明 OpenAI 兼容模型不会使用 responses 接口。"""
         raise AssertionError("responses.create must not be called for OpenAI-compatible models")
 
@@ -26,7 +26,7 @@ class _FakeChatCompletions:
         """初始化调用记录列表。"""
         self.calls = []
 
-    def create(self, **kwargs):  # noqa: ANN003
+    def create(self, **kwargs):
         """记录请求参数并返回内容为 ok 的假补全对象。"""
         self.calls.append(kwargs)
         message = type("Message", (), {"content": "ok"})()
@@ -53,11 +53,11 @@ def test_llm_client_uses_600_second_timeout(monkeypatch):
     """验证客户端读取 600 秒超时，并合并 extra_body 与 thinking 配置。"""
     captured = {}
 
-    def fake_decrypt_secret(_value):  # noqa: ANN001
+    def fake_decrypt_secret(_value):
         """跳过解密，直接返回固定的 api-key。"""
         return "api-key"
 
-    def fake_openai(**kwargs):  # noqa: ANN003
+    def fake_openai(**kwargs):
         """记录构造参数并返回假客户端，替换真实 OpenAI 实例。"""
         captured.update(kwargs)
         return _FakeOpenAIClient()
@@ -138,7 +138,7 @@ def test_model_config_create_defaults_to_8192_output_tokens():
     assert request.extra_body == {}
 
 
-def _completion_with_content(content):  # noqa: ANN001
+def _completion_with_content(content):
     """构造指定 content 的假补全对象，用于驱动生成逻辑。"""
     return type(
         "Completion",
@@ -181,7 +181,7 @@ def test_generate_text_preserves_structured_protocol_diagnostics() -> None:
         """总是抛出带完整诊断信息的 ProtocolCallError 的假驱动。"""
         request_kind = "responses"
 
-        def complete(self, _request):  # noqa: ANN001
+        def complete(self, _request):
             """抛出带状态码、上游错误码与请求 id 的调用异常。"""
             raise ProtocolCallError(
                 "MODEL_UPSTREAM_ERROR",
@@ -489,7 +489,7 @@ def test_generate_text_retries_empty_response():
     client.max_output_tokens = 256
     contents = iter(["", None, "ok"])
 
-    def fake_create(**kwargs):  # noqa: ANN003
+    def fake_create(**kwargs):
         """记录调用并按预置序列返回不同 content 的补全。"""
         client.client.chat.completions.calls.append(kwargs)
         return _completion_with_content(next(contents))
@@ -508,7 +508,7 @@ def test_knowledge_router_uses_lexical_fallback_after_first_empty_response():
     client.base_url = "https://example.test/v1"
     client.temperature = 0.2
     client.max_output_tokens = 256
-    client.client.chat.completions.create = lambda **kwargs: (  # noqa: E731
+    client.client.chat.completions.create = lambda **kwargs: (
         client.client.chat.completions.calls.append(kwargs)
         or _completion_with_content("")
     )
@@ -554,7 +554,7 @@ def test_generate_text_empty_response_reports_provider_diagnostics():
     client.temperature = 0.2
     client.max_output_tokens = 256
 
-    def fake_create(**kwargs):  # noqa: ANN003
+    def fake_create(**kwargs):
         """记录调用并返回正文为空但带推理与 token 用量的补全。"""
         client.client.chat.completions.calls.append(kwargs)
         message = type(
@@ -612,7 +612,7 @@ def test_generate_text_stream_reports_empty_stream_diagnostics():
     client.temperature = 0.2
     client.max_output_tokens = 256
 
-    def fake_create(**kwargs):  # noqa: ANN003
+    def fake_create(**kwargs):
         """记录调用并返回只含推理、没有正文的单 chunk 流。"""
         client.client.chat.completions.calls.append(kwargs)
         delta = type("Delta", (), {"content": None, "reasoning_content": "reasoning only"})()
@@ -645,7 +645,7 @@ def test_generate_text_stream_records_ttft_and_output_volume():
 
     raw_arguments = '{"I_ENAME":"张三"}'
 
-    def chunk(content, finish_reason=None, *, reasoning=None, tool_calls=None):  # noqa: ANN001
+    def chunk(content, finish_reason=None, *, reasoning=None, tool_calls=None):
         """构造带 delta 与 finish_reason 的单个流式 chunk。"""
         delta = type(
             "Delta",
@@ -825,7 +825,7 @@ def test_stage_requests_append_each_input_and_output_to_one_turn_context() -> No
         ]
     )
 
-    def fake_create(**kwargs):  # noqa: ANN003
+    def fake_create(**kwargs):
         """记录调用并按预置序列返回阶段输出。"""
         client.client.chat.completions.calls.append(kwargs)
         return _completion_with_content(next(outputs))
@@ -903,7 +903,7 @@ def test_stage_json_repair_continues_in_the_same_turn_context() -> None:
     client.max_output_tokens = 8192
     outputs = iter(["not json", '{"decision":"answer_only"}'])
 
-    def fake_create(**kwargs):  # noqa: ANN003
+    def fake_create(**kwargs):
         """记录调用并按预置序列返回非法与合法 JSON。"""
         client.client.chat.completions.calls.append(kwargs)
         return _completion_with_content(next(outputs))
@@ -1096,7 +1096,7 @@ def test_generate_text_retries_without_images_only_after_provider_rejects_them()
     """验证仅当上游拒绝图片时才降级为纯文本重试，并保留文件路径提示。"""
     class RejectingImageCompletions(_FakeChatCompletions):
         """遇到图片内容就抛错的补全替身，用于触发降级重试。"""
-        def create(self, **kwargs):  # noqa: ANN003
+        def create(self, **kwargs):
             """记录请求；含图片时抛 ValueError，否则返回固定文本。"""
             self.calls.append(kwargs)
             content = kwargs["messages"][1]["content"]
@@ -1167,7 +1167,7 @@ def test_generate_json_requests_json_object_mode():
     client.model = "demo-model"
     client.temperature = 0.2
     client.max_output_tokens = 256
-    client.client.chat.completions.create = lambda **kwargs: (  # noqa: E731
+    client.client.chat.completions.create = lambda **kwargs: (
         client.client.chat.completions.calls.append(kwargs)
         or type(
             "Completion",
@@ -1196,7 +1196,7 @@ def test_internal_json_operation_uses_configured_output_budget():
     client.model = "demo-model"
     client.temperature = 0.2
     client.max_output_tokens = 8192
-    client.client.chat.completions.create = lambda **kwargs: (  # noqa: E731
+    client.client.chat.completions.create = lambda **kwargs: (
         client.client.chat.completions.calls.append(kwargs)
         or _completion_with_content('{"decision":"answer_only"}')
     )
@@ -1252,7 +1252,7 @@ def test_user_visible_response_uses_configured_output_budget():
         "session.title",
     ],
 )
-def test_control_plane_operation_uses_model_config_budget(operation):  # noqa: ANN001
+def test_control_plane_operation_uses_model_config_budget(operation):
     """验证各控制面操作都直接使用模型配置的输出上限。"""
     assert operation_output_tokens(operation, 8192) == 8192
 
@@ -1271,7 +1271,7 @@ def test_generate_json_falls_back_when_json_object_mode_is_unsupported():
     client.temperature = 0.2
     client.max_output_tokens = 256
 
-    def fake_create(**kwargs):  # noqa: ANN003
+    def fake_create(**kwargs):
         """按是否带 response_format 分别抛错或返回 JSON 文本。"""
         client.client.chat.completions.calls.append(kwargs)
         if "response_format" in kwargs:
@@ -1305,7 +1305,7 @@ def test_generate_json_falls_back_when_json_object_mode_returns_empty():
     client.temperature = 0.2
     client.max_output_tokens = 256
 
-    def fake_create(**kwargs):  # noqa: ANN003
+    def fake_create(**kwargs):
         """带 response_format 时返回空内容，否则返回合法 JSON。"""
         client.client.chat.completions.calls.append(kwargs)
         if "response_format" in kwargs:
@@ -1357,7 +1357,7 @@ def test_generate_json_repairs_unescaped_string_quotes_without_retry(monkeypatch
     client = object.__new__(LLMClient)
     payloads = []
 
-    def fake_generate_text(_system_prompt, payload, response_format=None):  # noqa: ANN001, ARG001
+    def fake_generate_text(_system_prompt, payload, response_format=None):
         """返回含未转义引号的 JSON 文本。"""
         payloads.append(payload)
         return (
@@ -1384,7 +1384,7 @@ def test_generate_json_repairs_trailing_commas_and_string_newlines(monkeypatch):
     """验证尾随逗号与字符串内裸换行可被本地修复。"""
     client = object.__new__(LLMClient)
 
-    def fake_generate_text(_system_prompt, _payload, response_format=None):  # noqa: ANN001, ARG001
+    def fake_generate_text(_system_prompt, _payload, response_format=None):
         """返回带尾随逗号与裸换行的 JSON 文本。"""
         return '{"ok": true, "reason": "第一行\n第二行",}'
 
@@ -1417,7 +1417,7 @@ def test_generate_json_sequence_accepts_consecutive_objects_without_retry(monkey
     client = object.__new__(LLMClient)
     payloads = []
 
-    def fake_generate_text(_system_prompt, payload, response_format=None):  # noqa: ANN001, ARG001
+    def fake_generate_text(_system_prompt, payload, response_format=None):
         """返回两个换行分隔的 JSON 对象。"""
         payloads.append(payload)
         return (
@@ -1446,7 +1446,7 @@ def test_generate_json_keeps_consecutive_object_recovery_opt_in(monkeypatch):
         ]
     )
 
-    def fake_generate_text(_system_prompt, payload, response_format=None):  # noqa: ANN001, ARG001
+    def fake_generate_text(_system_prompt, payload, response_format=None):
         """依次返回粘连的两个对象与单个合法对象。"""
         payloads.append(payload)
         return next(calls)

@@ -19,7 +19,6 @@ from app.llm.stage_protocol import (
 from app.observability.spans import llm_operation
 from app.session.session_schema import RouterDecision, StepAgentResult
 
-
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "step_agent_prompt.md"
 RULE_PATHS = {
     "repair": paths.resource_dir() / "app" / "llm" / "prompts" / "step_agent_repair_rules.md",

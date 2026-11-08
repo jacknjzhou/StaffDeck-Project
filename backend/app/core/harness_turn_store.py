@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import timedelta
 import hashlib
 import json
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import update
@@ -16,7 +16,6 @@ from app.db.models import (
     utc_now,
 )
 from app.session.session_schema import ChatTurnRequest, ChatTurnResponse
-
 
 TURN_LEASE_SECONDS = 900
 

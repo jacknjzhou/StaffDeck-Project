@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import threading
 import logging
+import threading
 
 from sqlmodel import Session
 

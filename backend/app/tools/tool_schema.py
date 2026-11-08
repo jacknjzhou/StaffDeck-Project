@@ -23,7 +23,7 @@ class ToolExecutionPolicy(BaseModel):
     max_tracking_seconds: int = Field(default=86400, ge=1, le=2592000)
 
     @model_validator(mode="after")
-    def validate_provider_tracking(self) -> "ToolExecutionPolicy":
+    def validate_provider_tracking(self) -> ToolExecutionPolicy:
         """校验 Provider 托管的 detached 工具必须提供 status_url，否则抛 ValueError。"""
         if (
             self.execution_mode == "detached"

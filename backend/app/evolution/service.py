@@ -36,7 +36,6 @@ from app.skills import SkillEditor
 from app.skills.nesting import SopNestingError, validate_sop_nesting
 from app.skills.skill_schema import SkillCard, SkillRewriteRequest, skill_card_from_persisted
 
-
 GENERAL_SKILL_EVOLUTION_PROMPT = """
 你是 StaffDeck 的通用技能改进器。根据当前 SKILL.md 和真实用户反馈，生成一次最小、可审核的改进。
 

@@ -15,7 +15,6 @@ from app.db.models import new_id
 from app.session.attachment_store import sandbox_attachment_path
 from app.session.session_schema import ChatAttachmentRead
 
-
 MAX_EXTRACTED_TEXT_CHARS = 24_000
 MAX_PREVIEW_CHARS = 600
 IMAGE_DATA_URL_LIMIT_BYTES = 4 * 1024 * 1024
@@ -358,7 +357,7 @@ def _pdf_attachment(filename: str, content_type: str, data: bytes) -> ChatAttach
         text = "\n\n".join(page.strip() for page in pages if page.strip())
         if len(reader.pages) > 30:
             text += f"\n\n... PDF 共 {len(reader.pages)} 页，仅提取前 30 页。"
-    except Exception as exc:  # noqa: BLE001 - return readable parse error to caller.
+    except Exception as exc:  # return readable parse error to caller.
         error = f"PDF 解析失败：{exc}"
     trimmed = _trim_text(text, MAX_EXTRACTED_TEXT_CHARS)
     return ChatAttachmentRead(

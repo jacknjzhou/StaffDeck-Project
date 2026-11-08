@@ -184,10 +184,10 @@ def channel_services_enabled() -> bool:
 def _ensure_adapters_registered() -> None:
     """导入各渠道适配器模块，触发模块级的适配器自注册。"""
     # 各适配器模块导入即自注册(模块级 register_channel_adapter)
-    import app.channels.adapters.dingtalk  # noqa: F401
-    import app.channels.adapters.feishu  # noqa: F401
-    import app.channels.adapters.wechat  # noqa: F401
-    import app.channels.adapters.wechat_kf  # noqa: F401
+    import app.channels.adapters.dingtalk
+    import app.channels.adapters.feishu
+    import app.channels.adapters.wechat
+    import app.channels.adapters.wechat_kf
     import app.channels.adapters.wecom  # noqa: F401
 
 

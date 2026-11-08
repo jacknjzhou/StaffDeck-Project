@@ -19,7 +19,6 @@ from app.observability.spans import llm_operation
 from app.session.session_schema import PendingTask, RouterDecision
 from app.session.slot_policy import strip_router_generated_message_slots
 
-
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "router_prompt.md"
 
 

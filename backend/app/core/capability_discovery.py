@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from difflib import SequenceMatcher
 import json
 import re
-from typing import Iterable
+from collections.abc import Iterable
+from difflib import SequenceMatcher
 
 from app.core.task_request_compiler import (
     CapabilityCatalogEntry,
     CapabilityDescriptor,
     CapabilityManifest,
 )
-
 
 CAPABILITY_CATALOG_BUDGET_CHARS = 8_000
 CAPABILITY_SEARCH_MAX_RESULTS = 20

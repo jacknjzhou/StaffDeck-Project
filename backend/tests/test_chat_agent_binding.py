@@ -5,15 +5,15 @@ from fastapi import HTTPException
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.api import chat as chat_api
 from app.agents.branching import agent_private_metadata
+from app.api import chat as chat_api
 from app.api.chat import (
     _bind_request_to_session_agent,
     _ensure_chat_agent_available,
     _user_message_metadata,
     create_chat_session,
-    list_slash_commands,
     list_chat_sessions,
+    list_slash_commands,
 )
 from app.core.agent_loop import AgentLoop, AgentLoopPreconditionError
 from app.db.models import (

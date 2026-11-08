@@ -35,15 +35,17 @@ from app.capabilities.registry import (
     CapabilitySnapshot,
     DurableCapabilityBinding,
 )
+from app.capabilities.testkit import ContractViolation
 from app.capability_scope import (
     GENERAL_CAPABILITY_SCOPE,
     SOP_SPECIFIC_CAPABILITY_SCOPE,
     CapabilityScope,
     normalize_capability_scope,
 )
-from app.capabilities.testkit import ContractViolation
 
 __all__ = [
+    "GENERAL_CAPABILITY_SCOPE",
+    "SOP_SPECIFIC_CAPABILITY_SCOPE",
     "CapabilityBinding",
     "CapabilityContext",
     "CapabilityErrorInfo",
@@ -59,7 +61,6 @@ __all__ = [
     "GeneralSkillPackage",
     "GeneralSkillResourceRef",
     "GeneralSkillRuntimeSnapshot",
-    "GENERAL_CAPABILITY_SCOPE",
     "KnowledgeRuntime",
     "KnowledgeScope",
     "KnowledgeSearchQuery",
@@ -68,7 +69,6 @@ __all__ = [
     "LocalKnowledgeRuntime",
     "SceneSkillCatalog",
     "SceneSkillDefinition",
-    "SOP_SPECIFIC_CAPABILITY_SCOPE",
     "build_local_capability_registry",
     "local_runtime_snapshot",
     "normalize_capability_scope",

@@ -5,7 +5,6 @@ import json
 import sys
 from typing import Any
 
-
 RESOURCE_URI = "ui://staffdeck/demo-card"
 MIME_TYPE = "text/html;profile=mcp-app"
 

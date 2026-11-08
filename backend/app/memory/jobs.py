@@ -132,7 +132,7 @@ def run_memory_capture_job(payload: dict[str, Any]) -> None:
                     model_config,
                     conversation_messages,
                 )
-        except Exception as exc:  # noqa: BLE001 - persist failure without affecting the request path.
+        except Exception as exc:  # persist failure without affecting the request path.
             events.record(
                 request.tenant_id,
                 session_id,

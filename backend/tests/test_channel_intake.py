@@ -2,6 +2,7 @@ import os
 import threading
 import time
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -123,7 +124,7 @@ def test_channel_only_attachment_uses_default_message_intent() -> None:
 class RecordingAgentLoop:
     """替代真实 AgentLoop：记录请求并模拟用户/助手消息落库。"""
 
-    calls: list = []
+    calls: ClassVar[list] = []
     error: Exception | None = None
 
     def __init__(self, db, *, event_sink=None):
@@ -161,7 +162,7 @@ class RecordingAgentLoop:
 class TypingRecorder:
     """替代真实 typing 发送:记录 status 调用序列,隔离网络。"""
 
-    calls: list[int] = []
+    calls: ClassVar[list[int]] = []
 
 
 def _record_typing(binding, ilink_user_id, context_token, status, **kwargs) -> None:
@@ -375,7 +376,7 @@ def test_harness_conflict_keeps_inbound_retryable_and_stages_terminal_notice(mon
             """保存会话对象，事件回调参数仅为对齐接口。"""
             self.db = db
 
-        def handle_turn(self, request):  # noqa: ANN001
+        def handle_turn(self, request):
             """返回会话忙错误码，触发 intake 的可重试处理。"""
             return SimpleNamespace(
                 runtime_error_code="HARNESS_SESSION_BUSY",
@@ -410,7 +411,7 @@ def test_legacy_dict_harness_conflict_is_also_retryable(monkeypatch) -> None:
             """保存会话对象，事件回调参数仅为对齐接口。"""
             self.db = db
 
-        def handle_turn(self, request):  # noqa: ANN001
+        def handle_turn(self, request):
             """返回字典形式的冲突标记，覆盖旧版返回协议。"""
             return {"reply": "HARNESS_TURN_CONFLICT"}
 

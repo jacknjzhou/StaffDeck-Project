@@ -16,8 +16,8 @@ from app.db.models import (
     Tenant,
     User,
 )
-from app.evolution.service import EvolutionService, _json_diff, _risk_for_sop_diff
 from app.evolution.schema import EvolutionAnalyzeRequest
+from app.evolution.service import EvolutionService, _json_diff, _risk_for_sop_diff
 
 
 def _session() -> Session:

@@ -49,8 +49,8 @@ from app.db.models import (
     User,
     utc_now,
 )
-from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.llm import LLMError
+from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.security.auth import ensure_current_user_tenant, get_current_user
 from app.security.permissions import (
     ensure_agent_scope_manager,
@@ -59,6 +59,12 @@ from app.security.permissions import (
 )
 from app.security.tenant import ensure_tenant
 from app.skills import SkillDistiller, SkillEditor
+from app.skills.nesting import (
+    SopNestingError,
+    nested_sop_ids,
+    sop_capability_scope,
+    validate_sop_nesting,
+)
 from app.skills.skill_schema import (
     SkillCard,
     SkillCreateRequest,
@@ -69,18 +75,12 @@ from app.skills.skill_schema import (
     SkillRead,
     SkillRewriteRequest,
     SkillRewriteResponse,
-    SkillVersionRead,
     SkillUpdateRequest,
+    SkillVersionRead,
     skill_card_from_persisted,
 )
-from app.skills.stream_jobs import SkillStreamEvent, SkillStreamJob, stream_jobs
 from app.skills.step_ids import skill_card_with_unique_step_ids
-from app.skills.nesting import (
-    SopNestingError,
-    nested_sop_ids,
-    sop_capability_scope,
-    validate_sop_nesting,
-)
+from app.skills.stream_jobs import SkillStreamEvent, SkillStreamJob, stream_jobs
 
 _CHANNEL_LABELS = {"wechat": "微信", "wecom": "企业微信", "feishu": "飞书", "dingtalk": "钉钉"}
 
@@ -1038,7 +1038,7 @@ def _run_distill_stream_job(job_id: str, request_data: dict[str, object]) -> Non
                     return
                 stream_jobs.append(job_id, str(item["event"]), dict(item["data"]))
         stream_jobs.complete(job_id)
-    except Exception as exc:  # noqa: BLE001 - expose stable job failure to UI.
+    except Exception as exc:  # expose stable job failure to UI.
         stream_jobs.fail(job_id, str(exc))
 
 
@@ -1063,7 +1063,7 @@ def _run_rewrite_stream_job(job_id: str, skill_id: str, request_data: dict[str, 
                     return
                 stream_jobs.append(job_id, str(item["event"]), dict(item["data"]))
         stream_jobs.complete(job_id)
-    except Exception as exc:  # noqa: BLE001 - expose stable job failure to UI.
+    except Exception as exc:  # expose stable job failure to UI.
         stream_jobs.fail(job_id, str(exc))
 
 

@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+from typing import ClassVar
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -404,15 +405,15 @@ def test_binding_read_never_leaks_credentials() -> None:
 
 class _FakeWeChatClient:
     """微信客户端替身：记录调用参数并返回预设状态，避免测试发起真实网络请求。"""
-    _DEFAULT_STATUS_RESPONSE: dict = {
+    _DEFAULT_STATUS_RESPONSE: ClassVar[dict] = {
         "status": "confirmed",
         "bot_token": "ilinkbot_secret_token",
         "ilink_bot_id": "bot@im.bot",
         "ilink_user_id": "user@im.wechat",
         "baseurl": "https://ilinkai.weixin.qq.com",
     }
-    instances: list["_FakeWeChatClient"] = []
-    qrcode_status_response: dict = dict(_DEFAULT_STATUS_RESPONSE)
+    instances: ClassVar[list["_FakeWeChatClient"]] = []
+    qrcode_status_response: ClassVar[dict] = dict(_DEFAULT_STATUS_RESPONSE)
 
     def __init__(self, base_url: str):
         """保存基地址、初始化调用记录，并把实例登记到 instances 便于断言。"""

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
+import app.core.cancellation as cancellation_module
 from app.api.chat import (
     _build_turn_traces,
     _event_trace_lines,
@@ -18,7 +19,6 @@ from app.api.chat import (
     message_read,
 )
 from app.channels.feishu_trace import _SinkEvent
-import app.core.cancellation as cancellation_module
 from app.core.cancellation import is_chat_turn_cancelled
 from app.db.models import (
     AgentEvent,

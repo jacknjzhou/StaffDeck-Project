@@ -9,8 +9,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.api.tools import (
     MCP_APP_RESOURCE_MAX_BYTES,
     _extract_app_resource,
-    create_mcp_server,
     call_mcp_app_tool,
+    create_mcp_server,
     delete_mcp_server,
     discover_mcp_tools,
     discover_mcp_tools_adhoc,
@@ -19,18 +19,17 @@ from app.api.tools import (
     sync_mcp_tools,
 )
 from app.config import get_settings
-from app.db.models import MCPServer, Tenant, Tool, User
-from app.db.models import AgentProfile, AgentResourceBinding
-from app.tools.tool_executor import ToolExecutor
+from app.db.models import AgentProfile, AgentResourceBinding, MCPServer, Tenant, Tool, User
 from app.tools.mcp_client import (
     MCPClientError,
     discover_mcp_server,
     execute_mcp_tool_result,
     read_mcp_resource,
 )
+from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import (
-    MCPDiscoverRequest,
     MCPAppToolCallRequest,
+    MCPDiscoverRequest,
     MCPServerConnection,
     MCPServerCreateRequest,
     MCPSyncRequest,

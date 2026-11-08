@@ -37,8 +37,8 @@ from app.db.models import (
     AgentEvent,
     AgentProfile,
     ChatSession,
-    HarnessTurnRecord,
     HarnessTaskFrameRecord,
+    HarnessTurnRecord,
     HumanHandoffRequest,
     Message,
     MessageFeedback,
@@ -77,12 +77,12 @@ from app.session.cleanup import (
     remove_chat_session_workspace,
 )
 from app.session.helpers import public_session
+from app.session.message_read import message_read
 from app.session.message_visibility import (
     internal_message_turn_ids,
     visible_message_content,
     visible_message_rows,
 )
-from app.session.message_read import message_read
 from app.session.origin import pilotdeck_origin_session_ids
 from app.session.session_schema import (
     ChatAttachmentRead,
@@ -381,16 +381,18 @@ def _summarize_session_title_once(
                     title_turn_id = next((row.id for row in messages if row.role == "user"), "")
 
                     def persist_title_span(
-                        event_type: str, event_payload: dict[str, object]
+                        event_type: str,
+                        event_payload: dict[str, object],
+                        turn_id: str = title_turn_id,
                     ) -> None:
                         """把标题生成过程中的 span 事件写入当前会话的事件表。
                         补齐 turn_id 与 user_message_id，便于 trace 按轮次归组；使用独立 Session
                         写库，避免与标题落库共用事务。
                         """
                         traced_payload = dict(event_payload)
-                        if title_turn_id:
-                            traced_payload.setdefault("turn_id", title_turn_id)
-                            traced_payload.setdefault("user_message_id", title_turn_id)
+                        if turn_id:
+                            traced_payload.setdefault("turn_id", turn_id)
+                            traced_payload.setdefault("user_message_id", turn_id)
                         with Session(engine) as span_db:
                             _persist_relay_only_event(
                                 span_db,

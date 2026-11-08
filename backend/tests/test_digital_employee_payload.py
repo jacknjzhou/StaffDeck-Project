@@ -42,7 +42,7 @@ def _agent(db: Session, name: str) -> AgentProfile:
     row = db.exec(
         select(AgentProfile).where(
             AgentProfile.name == name,
-            AgentProfile.is_overall == False,
+            AgentProfile.is_overall.is_(False),
         )
     ).first()
     assert row is not None, name
@@ -52,7 +52,7 @@ def _agent(db: Session, name: str) -> AgentProfile:
 def _gallery_agents(db: Session) -> list[AgentProfile]:
     """返回全部非汇总员工，即对外展示的员工画廊。"""
     return list(
-        db.exec(select(AgentProfile).where(AgentProfile.is_overall == False)).all()
+        db.exec(select(AgentProfile).where(AgentProfile.is_overall.is_(False))).all()
     )
 
 

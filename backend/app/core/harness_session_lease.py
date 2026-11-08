@@ -15,7 +15,6 @@ from app.db.models import (
     utc_now,
 )
 
-
 SESSION_LEASE_SECONDS = 900
 
 

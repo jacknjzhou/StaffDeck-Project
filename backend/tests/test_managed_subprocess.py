@@ -35,13 +35,13 @@ def test_windows_start_is_suspended_before_job_assignment_and_resume(monkeypatch
     class FakeJob:
         """Job 对象替身，记录加入与恢复调用的先后顺序。"""
         @classmethod
-        def assign(cls, assigned_proc):  # noqa: ANN001
+        def assign(cls, assigned_proc):
             """校验目标进程并记录加入动作，返回 Job 实例。"""
             assert assigned_proc is proc
             events.append("assign")
             return cls()
 
-        def resume(self, resumed_proc) -> None:  # noqa: ANN001
+        def resume(self, resumed_proc) -> None:
             """校验目标进程并记录恢复动作。"""
             assert resumed_proc is proc
             events.append("resume")
@@ -50,7 +50,7 @@ def test_windows_start_is_suspended_before_job_assignment_and_resume(monkeypatch
             """记录 Job 关闭动作。"""
             events.append("job-close")
 
-    def fake_popen(argv, **kwargs):  # noqa: ANN001
+    def fake_popen(argv, **kwargs):
         """记录创建参数并返回替身进程，模拟挂起启动。"""
         assert argv == ["node", "index.js"]
         events.append("popen-suspended")
@@ -79,7 +79,7 @@ def test_windows_job_failure_terminates_suspended_process(monkeypatch) -> None:
     class FailingJob:
         """加入 Job 必定失败的替身。"""
         @classmethod
-        def assign(cls, assigned_proc):  # noqa: ANN001
+        def assign(cls, assigned_proc):
             """校验目标进程后抛出 OSError，触发失败清理。"""
             assert assigned_proc is proc
             raise OSError("job denied")
@@ -107,7 +107,7 @@ def test_windows_nested_job_failure_falls_back_to_process_group(monkeypatch, win
     class NestedJobRejected:
         """模拟嵌套 Job 被拒绝的替身。"""
         @classmethod
-        def assign(cls, assigned_proc):  # noqa: ANN001
+        def assign(cls, assigned_proc):
             """抛出带父/子进程状态的任务分配错误。"""
             assert assigned_proc is proc
             raise managed_subprocess._WindowsJobAssignmentError(
@@ -153,7 +153,7 @@ def test_windows_assignment_failure_without_existing_job_still_fails_closed(monk
     class AssignmentRejected:
         """模拟普通分配失败的替身。"""
         @classmethod
-        def assign(cls, assigned_proc):  # noqa: ANN001
+        def assign(cls, assigned_proc):
             """抛出父/子进程均不在 Job 中的分配错误。"""
             assert assigned_proc is proc
             raise managed_subprocess._WindowsJobAssignmentError(
@@ -182,7 +182,7 @@ def test_posix_start_uses_a_new_session(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     terminated: list[tuple[object, str]] = []
 
-    def fake_popen(argv, **kwargs):  # noqa: ANN001
+    def fake_popen(argv, **kwargs):
         """记录创建参数并返回替身进程。"""
         captured.update(kwargs)
         return _FakeProcess()

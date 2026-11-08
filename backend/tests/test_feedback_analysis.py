@@ -8,11 +8,11 @@ from app.llm.client import LLMClient
 
 def test_feedback_analysis_uses_model_bucket(monkeypatch) -> None:
     """验证存在默认模型时按模型返回的分桶结果写入分析字段。"""
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """替换 LLMClient 初始化，避免用例连接真实模型服务。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """断言分析请求携带差评与目标消息，并返回预设的分桶结果。"""
         assert payload["feedback"]["rating"] == "down"
         assert payload["target_message"]["content"] == "请稍候"

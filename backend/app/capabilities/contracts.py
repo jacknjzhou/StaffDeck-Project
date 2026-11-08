@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Literal, Protocol, TypeAlias
 
 JsonValue: TypeAlias = (
-    None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+    bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"] | None
 )
 JsonObject: TypeAlias = Mapping[str, JsonValue]
 ExtensionMap: TypeAlias = Mapping[str, JsonObject]

@@ -10,8 +10,11 @@ from sqlmodel import Session
 from app.config import get_settings
 from app.db import engine, init_db
 from app.db.seed import seed_demo_data
-from app.scheduled_tasks.service import WORKER_SLEEP_SECONDS, due_scheduled_tasks, execute_scheduled_task
-
+from app.scheduled_tasks.service import (
+    WORKER_SLEEP_SECONDS,
+    due_scheduled_tasks,
+    execute_scheduled_task,
+)
 
 _stopped = False
 _background_thread: threading.Thread | None = None

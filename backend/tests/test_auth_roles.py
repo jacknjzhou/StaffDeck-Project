@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 from sqlalchemy.pool import StaticPool
-from starlette.requests import Request
 from sqlmodel import Session, SQLModel, create_engine, select
+from starlette.requests import Request
 
 from app.api.auth import (
     LoginRequest,

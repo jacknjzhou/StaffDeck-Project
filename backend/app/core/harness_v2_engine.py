@@ -22,7 +22,6 @@ from app.core.harness_attachments import (
     validated_task_image_payloads,
 )
 from app.core.harness_capability_invoker import HarnessCapabilityInvoker
-from app.core.published_deliverables import list_published_deliverables
 from app.core.harness_session_lease import (
     HarnessSessionLeaseLost,
     HarnessSessionLeaseStore,
@@ -33,6 +32,7 @@ from app.core.harness_session_lock import (
     release_harness_session,
 )
 from app.core.harness_turn_store import HarnessTurnStore
+from app.core.published_deliverables import list_published_deliverables
 from app.core.slash_commands import (
     SlashCommandError,
     SlashCommandSelection,
@@ -152,7 +152,7 @@ def _apply_forced_sop_snapshot(
         updated_at=current.updated_at,
     )
     if hasattr(current, "agent_branch_meta"):
-        object.__setattr__(pinned, "agent_branch_meta", getattr(current, "agent_branch_meta"))
+        object.__setattr__(pinned, "agent_branch_meta", current.agent_branch_meta)
     return [pinned if skill.skill_id == target else skill for skill in source_skills]
 
 
@@ -978,8 +978,11 @@ class HarnessV2Engine:
                 )
             self.active_run_id = run.id
             self.db.commit()
+            run_id = run.id
 
-            def trace(event_type: str, payload: dict[str, Any]) -> None:
+            def trace(
+                event_type: str, payload: dict[str, Any], harness_run_id: str = run_id
+            ) -> None:
                 """记录带 TaskFrame/run 上下文的执行事件并立即提交。
 
                 立即提交是为了让流式中继实时暴露正在运行的 TaskFrame。
@@ -991,7 +994,7 @@ class HarnessV2Engine:
                     {
                         **payload,
                         "task_frame_id": row.task_id,
-                        "harness_run_id": run.id,
+                        "harness_run_id": harness_run_id,
                         "agent_loop_id": agent_loop.id,
                         "execution_engine": "harness_v2",
                     },
@@ -1931,7 +1934,7 @@ def _inject_handoff_context(
         bool(request and getattr(request, "channel", "") == "human_handoff_resume")
         and is_answered
     )
-    for payload, result in zip(payloads, results, strict=False):
+    for payload, _result in zip(payloads, results, strict=False):
         if is_resume_turn or payload.get("status") == "handoff":
             pass
         else:

@@ -14,7 +14,6 @@ from app.core.task_request_compiler import (
 from app.db.models import ChatSession, Skill, new_id
 from app.session.session_schema import PlannedTaskFrame, TurnPlan
 
-
 SlashCommandKind = Literal["sop", "skill", "tool"]
 _COMMAND_ALIASES: dict[str, SlashCommandKind] = {
     "sop": "sop",

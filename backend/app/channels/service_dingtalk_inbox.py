@@ -4,8 +4,8 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy import or_, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import Session, select
 
 from app.channels.adapters.base import ChannelInbound, ChannelInboundAttachment

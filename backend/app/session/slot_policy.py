@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-
 ROUTER_GENERATED_MESSAGE_SLOT_KEYS = {
     "message_content",
     "user_message",

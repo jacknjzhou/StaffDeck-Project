@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.tools.tool_schema import ToolCall, ToolResult
 
-
 RouterDecisionValue = Literal[
     "continue_active",
     "switch_to_pending",
@@ -244,10 +243,10 @@ class ChatTurnRequest(BaseModel):
     client_turn_id: Optional[str] = None
     user_id: Optional[str] = None
     message: str
-    attachments: list["ChatAttachmentRead"] = Field(default_factory=list)
+    attachments: list[ChatAttachmentRead] = Field(default_factory=list)
     channel: str = "web"
     interaction_mode: Literal["normal", "scheduled_task", "team_task", "team_tl"] = "normal"
-    team_context: Optional["TeamPlannerContext"] = Field(default=None, exclude=True)
+    team_context: Optional[TeamPlannerContext] = Field(default=None, exclude=True)
     # Server-only prompt prefix. It is consumed by the runtime but never persisted as
     # the user's visible message or serialized into background-job payloads.
     context_injection: Optional[str] = Field(default=None, exclude=True)

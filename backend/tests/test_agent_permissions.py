@@ -34,6 +34,7 @@ from app.api.agents import (
 )
 from app.api.general_skills import import_general_skill
 from app.api.tools import create_tool, update_tool
+from app.db.database import _seed_agent_branch_state
 from app.db.models import (
     AgentModelBinding,
     AgentProfile,
@@ -46,7 +47,6 @@ from app.db.models import (
     Tool,
     User,
 )
-from app.db.database import _seed_agent_branch_state
 from app.general_skills.schema import GeneralSkillImportRequest
 from app.security.permissions import (
     ensure_agent_scope_manager,
@@ -103,7 +103,7 @@ def test_only_creator_or_admin_can_update_and_delete_agent() -> None:
 def test_non_admin_cannot_manage_overall_agent() -> None:
     """验证整体员工只有管理员可维护，普通用户修改得到 403。"""
     with _test_session() as db:
-        owner, other, admin = _seed_users(db)
+        owner, _other, admin = _seed_users(db)
         overall = AgentProfile(
             id="agent_overall", tenant_id="tenant_demo", name="开放广场", is_overall=True
         )

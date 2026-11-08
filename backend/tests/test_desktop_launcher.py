@@ -40,7 +40,7 @@ def test_packaging_smoke_rejects_wrong_lark_sdk_version(monkeypatch) -> None:
     """验证 lark-channel-sdk 版本不是 1.2.0 时自检直接报错。"""
     monkeypatch.setattr(desktop_launcher.importlib_metadata, "version", lambda name: "1.2.1")
 
-    with pytest.raises(RuntimeError, match="must be exactly 1.2.0, got 1.2.1"):
+    with pytest.raises(RuntimeError, match=r"must be exactly 1\.2\.0, got 1\.2\.1"):
         desktop_launcher.main(["--packaging-smoke"])
 
 

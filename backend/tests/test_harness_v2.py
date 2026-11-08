@@ -91,6 +91,7 @@ from app.scheduled_tasks.service import (
     _skip_misfired_run,
     due_scheduled_tasks,
 )
+from app.session.attachment_store import stage_chat_attachment
 from app.session.session_schema import (
     ChatAttachmentRead,
     ChatTurnRequest,
@@ -101,7 +102,6 @@ from app.session.session_schema import (
     TeamPlannerMember,
     TurnPlan,
 )
-from app.session.attachment_store import stage_chat_attachment
 from app.skills.nesting import expand_sop_for_execution
 from app.skills.skill_schema import SkillCapabilityRefs
 from app.tools.tool_schema import ToolResult
@@ -207,7 +207,7 @@ def test_agent_loop_has_no_legacy_runtime_switch(monkeypatch) -> None:
     """验证 AgentLoop 不再有旧运行时开关，各渠道统一走 Harness v2 引擎。"""
     calls: list[tuple[str, str]] = []
 
-    def fake_run(self, request):  # noqa: ANN001
+    def fake_run(self, request):
         """替换引擎 run 方法，记录渠道与交互模式作为调度证据。"""
         calls.append((request.channel, request.interaction_mode))
         return request.message
@@ -2174,7 +2174,7 @@ def test_large_external_json_result_uses_sandbox_reference_and_auto_resolves(
     }
     sink_arguments: list[dict[str, object]] = []
 
-    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):  # noqa: ANN001
+    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):
         """按工具名返回预设结果，并记录落地调用的参数。"""
         if tool_call.name == large_tool.name:
             return ToolResult(tool_name=tool_call.name, success=True, data=large_data)
@@ -2286,7 +2286,7 @@ def test_mcp_app_descriptor_is_host_only_and_emitted_as_trace(
         "initial_meta": {"ui": {"render": True}},
     }
 
-    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):  # noqa: ANN001
+    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):
         """返回带 MCP App 描述符的工具结果。"""
         return ToolResult(
             tool_name=tool_call.name,

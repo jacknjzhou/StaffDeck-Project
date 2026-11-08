@@ -9,8 +9,8 @@ import app.api.channels as channels_api
 from app.db import get_session
 from app.db.models import (
     AgentProfile,
-    ChannelBinding,
     ChannelBindCode,
+    ChannelBinding,
     ChannelBindingManager,
     Tenant,
     User,

@@ -37,11 +37,11 @@ def test_contract_accepts_minimal_employee():
 def test_contract_rejects_over_length_strings_and_extra_items():
     """验证超长字符串和超出数量上限的列表会被契约拒绝。"""
     # 守卫的守卫：fixture 本身必须真的会拦住违规，否则金样测试形同虚设
-    with pytest.raises(AssertionError, match="at /name: .*too long"):
+    with pytest.raises(AssertionError, match=r"at /name: .*too long"):
         validate_digital_employee(_minimal(name="名" * 51))
     with pytest.raises(AssertionError, match="at /tools"):
         validate_digital_employee(_minimal(tools=[f"t{i}" for i in range(51)]))
-    with pytest.raises(AssertionError, match="at /sops/0/content: .*too long"):
+    with pytest.raises(AssertionError, match=r"at /sops/0/content: .*too long"):
         validate_digital_employee(_minimal(sops=[{"title": "t", "content": "x" * 20001}]))
 
 
@@ -74,7 +74,7 @@ def test_contract_validates_the_staffdeck_extension_fields():
     )
     with pytest.raises(AssertionError, match="at /executionMode"):
         validate_digital_employee(_minimal(executionMode="distributed"))
-    with pytest.raises(AssertionError, match="at /configHash: .*too long"):
+    with pytest.raises(AssertionError, match=r"at /configHash: .*too long"):
         validate_digital_employee(_minimal(configHash="x" * 129))
     with pytest.raises(AssertionError, match="downloadUrl"):
         validate_digital_employee(

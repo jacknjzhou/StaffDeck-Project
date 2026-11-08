@@ -9,24 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session, select
 
-from app.agents.schema import (
-    AgentModelsUpdateRequest,
-    AgentAPICredentialCreateRequest,
-    AgentAPICredentialCreated,
-    AgentAPICredentialRead,
-    AgentProfileCreateRequest,
-    AgentProfileRead,
-    AgentProfileUpdateRequest,
-    AgentResourceBindingInput,
-    AgentResourceImportRequest,
-    AgentResourceBindingRead,
-    AgentResourcesUpdateRequest,
-    AgentScopeRead,
-    AgentSkillRollbackRequest,
-    AgentWorkRecordEventRead,
-    AgentWorkRecordRead,
-    AgentWorkRecordReplyStatsRead,
-)
 from app.agents.branching import (
     agent_private_metadata,
     branch_versions,
@@ -42,17 +24,35 @@ from app.agents.branching import (
     sync_branch_from_overall,
     visible_skill_rows,
 )
+from app.agents.schema import (
+    AgentAPICredentialCreated,
+    AgentAPICredentialCreateRequest,
+    AgentAPICredentialRead,
+    AgentModelsUpdateRequest,
+    AgentProfileCreateRequest,
+    AgentProfileRead,
+    AgentProfileUpdateRequest,
+    AgentResourceBindingInput,
+    AgentResourceBindingRead,
+    AgentResourceImportRequest,
+    AgentResourcesUpdateRequest,
+    AgentScopeRead,
+    AgentSkillRollbackRequest,
+    AgentWorkRecordEventRead,
+    AgentWorkRecordRead,
+    AgentWorkRecordReplyStatsRead,
+)
 from app.db import get_session
 from app.db.models import (
-    APIClient,
-    APICredential,
-    AgentModelBinding,
     AgentKnowledgeBranch,
+    AgentModelBinding,
     AgentProfile,
     AgentResourceBinding,
     AgentSkillBranch,
     AgentSkillBranchVersion,
     AgentUsage,
+    APIClient,
+    APICredential,
     ChannelBinding,
     ChannelBindingAgent,
     ChatSession,
@@ -68,8 +68,8 @@ from app.db.models import (
     Skill,
     TeamMember,
     Tool,
-    utc_now,
     User,
+    utc_now,
 )
 from app.public_api.auth import generate_api_key
 from app.public_api.credential_profiles import (

@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from time import sleep
-from typing import Any, Iterator
+from typing import Any
 
 from app import paths
 from app.db.models import ModelConfig
 from app.llm import LLMClient, LLMError
 from app.skills.llm_limits import skill_model_config
 from app.skills.nesting import validate_sop_nesting
-from app.skills.skill_reflection import reflect_skill_response, reflect_skill_response_stream
-from app.skills.skill_schema import SkillCard, SkillRewriteRequest, SkillRewriteResponse
 from app.skills.skill_distiller import (
     _compact_warnings,
     _normalize_tool_suggestions,
@@ -19,8 +18,9 @@ from app.skills.skill_distiller import (
     _tool_action_names_from_suggestions,
     _tool_resolution_warnings,
 )
+from app.skills.skill_reflection import reflect_skill_response, reflect_skill_response_stream
+from app.skills.skill_schema import SkillCard, SkillRewriteRequest, SkillRewriteResponse
 from app.skills.step_ids import skill_card_with_unique_step_ids
-
 
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "skill_editor_prompt.md"
 STREAM_INTERVAL_SECONDS = 0.035

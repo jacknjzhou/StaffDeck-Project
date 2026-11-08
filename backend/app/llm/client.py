@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator, Mapping
 import copy
 import hashlib
 import json
 import logging
 import math
 import re
+from collections.abc import Iterator, Mapping
 from typing import Any, Self
 from urllib.parse import urlsplit
 
 import httpx
-from openai import OpenAI
 from anthropic import Anthropic
+from openai import OpenAI
 
 from app.config import get_settings
 from app.db.models import ModelConfig
@@ -38,7 +38,6 @@ from app.llm.stage_protocol import (
 )
 from app.observability.spans import current_llm_operation, llm_span_attributes, start_llm_call
 from app.security.encryption import decrypt_secret
-
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +203,7 @@ class LLMClient:
         self._closed = True
         try:
             self.client.close()
-        except Exception as exc:  # noqa: BLE001 - close 绝不能影响主流程
+        except Exception as exc:  # close 绝不能影响主流程
             logger.debug("LLM client close failed: %s", exc)
 
     def __enter__(self) -> Self:

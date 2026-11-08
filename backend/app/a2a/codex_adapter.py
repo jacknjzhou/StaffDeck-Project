@@ -21,7 +21,6 @@ from app.config import get_settings
 from app.db import engine
 from app.db.models import A2ATaskEvent, A2ATaskRun, utc_now
 
-
 router = APIRouter(tags=["a2a-codex"])
 _processes: dict[str, subprocess.Popen[str]] = {}
 _process_lock = threading.Lock()

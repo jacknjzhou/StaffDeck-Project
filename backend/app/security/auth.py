@@ -16,7 +16,6 @@ from app.config import get_settings
 from app.db import get_session
 from app.db.models import User
 
-
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 14
 security = HTTPBearer(auto_error=False)
 

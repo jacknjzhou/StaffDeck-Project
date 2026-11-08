@@ -8,11 +8,11 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.db.models import ModelConfig
+from app.llm.client import _normalize_extra_body
 from app.llm.model_config_resolver import (
     resolve_model_config_for_runtime,
     resolve_model_config_for_verification,
 )
-from app.llm.client import _normalize_extra_body
 from app.llm.model_protocols import (
     ModelApiProtocol,
     available_model_protocols,

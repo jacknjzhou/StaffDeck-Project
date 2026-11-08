@@ -8,7 +8,7 @@ from app.llm.protocol_drivers import OpenAIResponsesDriver
 
 class _ClosableEvents(list):
     """可关闭的事件列表桩对象，用于断言驱动读完流后调用了 close()。"""
-    def __init__(self, values) -> None:  # noqa: ANN001
+    def __init__(self, values) -> None:
         """把事件序列装入列表并标记为尚未关闭。"""
         super().__init__(values)
         self.closed = False
@@ -20,19 +20,19 @@ class _ClosableEvents(list):
 
 class _Responses:
     """伪造 OpenAI responses 资源，记录调用参数并返回预置的响应或事件。"""
-    def __init__(self, response=None, events=None) -> None:  # noqa: ANN001
+    def __init__(self, response=None, events=None) -> None:
         """初始化调用记录，并保存预置的普通响应与流式事件。"""
         self.calls = []
         self.response = response
         self.events = events
 
-    def create(self, **kwargs):  # noqa: ANN003
+    def create(self, **kwargs):
         """记录调用参数，流式请求返回事件列表，否则返回预置响应。"""
         self.calls.append(kwargs)
         return self.events if kwargs.get("stream") else self.response
 
 
-def _request(**overrides):  # noqa: ANN003
+def _request(**overrides):
     """构造驱动测试用的请求字典，可用关键字参数覆盖任意字段。"""
     value = {
         "model": "gpt-test",

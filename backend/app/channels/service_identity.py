@@ -147,7 +147,7 @@ def channel_username(
     else:
         readable = f"{channel}_{cleaned}"
     digest = hashlib.sha256(
-        f"{tenant_id}:{channel}:{account_scope}:{external_id}".encode("utf-8")
+        f"{tenant_id}:{channel}:{account_scope}:{external_id}".encode()
     ).hexdigest()[:8]
     if len(readable) > 53:
         readable = readable[:53]

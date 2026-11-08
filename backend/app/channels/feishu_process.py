@@ -8,20 +8,20 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from feishu_connector_worker import (
+    PRODUCTION_RUNTIME,
     BindingProcessLock,
     ConnectorChildSpec,
-    PRODUCTION_RUNTIME,
     binding_lock_path,
     connector_child_entry,
 )
 
 
-class ConnectorState(str, Enum):
+class ConnectorState(StrEnum):
     """连接器进程的生命周期状态：缺失、启动中、运行中、停止中、崩溃退避。"""
     ABSENT = "absent"
     STARTING = "starting"

@@ -33,8 +33,8 @@ from app.knowledge.service import IngestPayload, KnowledgeService
 from app.security.auth import get_current_user
 from app.security.permissions import is_admin_user as _is_admin_user
 from app.security.tenant import ensure_tenant
-from app.session.message_visibility import visible_message_content, visible_message_rows
 from app.session.message_read import message_read
+from app.session.message_visibility import visible_message_content, visible_message_rows
 from app.session.session_schema import ChatTurnRequest
 from app.teams import service as team_service
 from app.teams.schema import (
@@ -50,8 +50,8 @@ from app.teams.schema import (
     TeamConversationKind,
     TeamConversationMessageRead,
     TeamConversationRead,
-    TeamConversationStreamRead,
     TeamConversationsResponse,
+    TeamConversationStreamRead,
     TeamConversationTLRead,
     TeamCreateRequest,
     TeamEventRead,
@@ -96,6 +96,7 @@ from app.teams.wakeup import (
     start_bidding,
     start_wakeup_async,
 )
+
 router = APIRouter(prefix="/api/enterprise/teams", tags=["enterprise:teams"])
 
 TEAM_LOG_EXPORT_SCHEMA = "staffdeck.team-conversation-log.v1"

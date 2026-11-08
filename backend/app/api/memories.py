@@ -5,11 +5,15 @@ from sqlmodel import Session, select
 
 from app.db import get_session
 from app.db.models import AgentProfile, ChatSession, MemoryRecord, User
-from app.memory.service import memory_agent_id, memory_matches_agent, memory_read, memory_rows_for_read
+from app.memory.service import (
+    memory_agent_id,
+    memory_matches_agent,
+    memory_read,
+    memory_rows_for_read,
+)
 from app.security.auth import get_current_user, require_current_tenant
 from app.security.permissions import agent_owned_by_user, is_admin_user
 from app.security.tenant import ensure_tenant
-
 
 router = APIRouter(prefix="/api/enterprise/memories", tags=["enterprise:memories"])
 

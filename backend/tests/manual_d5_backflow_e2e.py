@@ -135,7 +135,8 @@ def main() -> None:
     assert first.json() == {"accepted": 4, "duplicates": 0}
 
     print("\n== 4. 整批重发 + 新增一条：只有新事件被接受 ==")
-    resent = _events() + [
+    resent = [
+        *_events(),
         {
             "type": "message",
             "event_id": "m:msg-user-3",

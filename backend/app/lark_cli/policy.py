@@ -297,7 +297,7 @@ def _parsed_form_structure(form: object) -> object | None:
         except json.JSONDecodeError as exc:
             raise LarkCliPolicyError(
                 "LARK_CLI_FORM_INVALID_JSON", f"form 字符串不是合法 JSON：{exc}"
-            )
+            ) from exc
     elif isinstance(form, (list, dict)):
         structure = copy.deepcopy(form)
     else:
@@ -572,7 +572,9 @@ def _parse_data_json(raw: str | None) -> dict[str, object] | None:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise LarkCliPolicyError("LARK_CLI_DATA_INVALID_JSON", f"--data 不是合法 JSON：{exc}")
+        raise LarkCliPolicyError(
+            "LARK_CLI_DATA_INVALID_JSON", f"--data 不是合法 JSON：{exc}"
+        ) from exc
     if not isinstance(parsed, dict):
         raise LarkCliPolicyError("LARK_CLI_DATA_NOT_OBJECT", "--data 必须是 JSON object。")
     if "uuid" in parsed:

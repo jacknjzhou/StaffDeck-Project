@@ -1,8 +1,8 @@
-import threading
 import os
-from pathlib import Path
 import subprocess
 import sys
+import threading
+from pathlib import Path
 
 import pytest
 from sqlalchemy.exc import IntegrityError

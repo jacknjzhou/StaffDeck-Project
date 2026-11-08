@@ -8,7 +8,6 @@ from app import paths
 from app.llm import LLMClient, LLMError
 from app.skills.skill_schema import SkillCard, ToolSuggestion
 
-
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "skill_reflection_prompt.md"
 MAX_REFLECTION_ROUNDS = 3
 RUBRIC_LABELS: dict[str, str] = {
@@ -177,7 +176,7 @@ def reflect_skill_response_stream(
                 ],
             }
         )
-        reviewed_skill = getattr(reviewed, "draft_skill")
+        reviewed_skill = reviewed.draft_skill
         warnings = list(getattr(reviewed, "warnings", warnings))
         suggestions = list(getattr(reviewed, "tool_suggestions", suggestions))
 

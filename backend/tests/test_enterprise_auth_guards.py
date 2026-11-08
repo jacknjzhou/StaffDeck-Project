@@ -3,8 +3,8 @@ from fastapi.testclient import TestClient
 
 from app.api.agents import enterprise_router as agents_router
 from app.api.agents import scope_router as agent_scope_router
-from app.api.feedback import router as feedback_router
 from app.api.external_business_tasks import enterprise_router as external_tasks_router
+from app.api.feedback import router as feedback_router
 from app.api.general_skills import router as general_skills_router
 from app.api.knowledge import router as knowledge_router
 from app.api.knowledge_bases import router as knowledge_bases_router
@@ -14,7 +14,8 @@ from app.api.persona import router as persona_router
 from app.api.scheduled_tasks import enterprise_router as scheduled_tasks_router
 from app.api.sessions import router as sessions_router
 from app.api.skills import router as skills_router
-from app.api.tools import mcp_router, router as tools_router
+from app.api.tools import mcp_router
+from app.api.tools import router as tools_router
 from app.api.traces import router as traces_router
 from app.api.ui_config import enterprise_router as ui_config_router
 

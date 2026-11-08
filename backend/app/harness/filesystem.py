@@ -19,8 +19,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.harness.contracts import HarnessToolContext
-from app.harness.execution_context import SANDBOX_WORKSPACE
 from app.harness.errors import HarnessExecutionError
+from app.harness.execution_context import SANDBOX_WORKSPACE
 from app.harness.registry import HarnessRegistry
 from app.knowledge.parser import KnowledgeParseError, extract_text
 
@@ -426,7 +426,7 @@ class _Workspace:
                 raise HarnessExecutionError(
                     "INVALID_PATH",
                     "Harness file-tool paths must resolve to an absolute host path.",
-                )
+                ) from None
             anchor = Path(path.anchor)
             current = anchor
             relative = Path(*path.parts[1:])

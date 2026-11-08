@@ -46,6 +46,7 @@ dev = [
   "jsonschema>=4.23.0",
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.0",
+  "pytest-timeout>=2.3.1",
   "ruff>=0.5.0"
 ]
 packaging = [
@@ -69,5 +70,34 @@ include = ["app*", "mock_servers*"]
 line-length = 100
 target-version = "py311"
 
+# Pinned rule set so `ruff check backend` means the same thing locally and in CI.
+# Families are chosen for correctness signal, not breadth: pycodestyle errors (E),
+# pyflakes (F), import sorting (I), pyupgrade (UP), bugbear (B), Ruff-specific (RUF).
+# Wider families (SIM/C4/BLE/PERF/DTZ) were measured and deliberately left out: they
+# would require behaviour-adjacent rewrites (exception narrowing, comprehension
+# rewrites) that do not belong in a lint-gate commit. Tracked as follow-up work.
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF"]
+ignore = [
+  # Long lines: the formatter is not enforced (no `ruff format` gate), so 1,451
+  # existing lines exceed 100 columns. Enforcing E501 alone would either churn
+  # unrelated code or force per-file ignores on most of the backend.
+  "E501",
+  # `Depends()`, `Query()`, `Body()` as default arguments is the FastAPI idiom.
+  "B008",
+  # `Optional[X]` vs `X | None`: ~630 legacy annotations. UP's fix is safe but the
+  # churn is unrelated to this task; the follow-up plan owns the annotation sweep.
+  "UP045",
+  # Ambiguous-unicode rules flag full-width CJK punctuation in a Chinese codebase;
+  # globally false positives rather than defects.
+  "RUF001",
+  "RUF002",
+  "RUF003",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# pytest-timeout is a dev dependency installed in CI. When absent (e.g. an older
+# local venv) pytest only emits a PytestConfigWarning for this unknown key, so the
+# suite still runs; scripts/ci_local.sh also guards the --timeout CLI flag.
+timeout = 120

@@ -5,7 +5,6 @@ import threading
 from app.public_api.jobs import cleanup_public_api_records
 from app.public_api.webhooks import enqueue_due_webhook_deliveries
 
-
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 

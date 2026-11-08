@@ -140,7 +140,7 @@ def _renew_held_leases_once() -> str:
         try:
             if not lease.renew():
                 failures.append(f"{label}: 租约已被他人持有或已过期")
-        except Exception as exc:  # noqa: BLE001 - 续期失败不应打断进程
+        except Exception as exc:  # 续期失败不应打断进程
             failures.append(f"{label}: {exc!r}")
     return "; ".join(failures)
 

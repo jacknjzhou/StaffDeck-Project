@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 from fastapi import FastAPI
@@ -108,7 +109,7 @@ def _load_binding(engine, binding_id: str) -> ChannelBinding:
 class RecordingAgentLoop:
     """替代真实 AgentLoop：记录请求、模拟消息落库并返回固定回复。"""
 
-    calls: list = []
+    calls: ClassVar[list] = []
     reply_text = "自动回复"
 
     def __init__(self, db, *, event_sink=None):

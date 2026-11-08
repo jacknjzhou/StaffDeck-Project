@@ -4,13 +4,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.api.chat import session_read
-from app.session.message_read import message_read
 from app.db import get_session
-from app.db.models import APIJob, AgentProfile, ChatSession, Message, MessageFeedback, User, utc_now
-from app.feedback import FEEDBACK_BUCKET_LABELS, enqueue_feedback_analysis, feedback_analysis_read, feedback_summary
+from app.db.models import AgentProfile, APIJob, ChatSession, Message, MessageFeedback, User, utc_now
+from app.feedback import (
+    FEEDBACK_BUCKET_LABELS,
+    enqueue_feedback_analysis,
+    feedback_analysis_read,
+    feedback_summary,
+)
 from app.security.auth import get_current_user
 from app.security.permissions import agent_owned_by_user, is_admin_user
 from app.security.tenant import ensure_tenant
+from app.session.message_read import message_read
 
 router = APIRouter(prefix="/api/enterprise/feedback", tags=["enterprise:feedback"])
 

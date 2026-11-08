@@ -11,7 +11,6 @@ from app.public_api.idempotency import replay_idempotent_response, store_idempot
 from app.public_api.schemas import PublicSessionCreate, PublicSessionUpdate
 from app.public_api.utils import etag_for
 
-
 router = APIRouter(prefix="/agents/{agent_id}/sessions", tags=["sessions"])
 
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import hmac
 import secrets
-from typing import Annotated, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -12,12 +13,11 @@ from sqlmodel import Session, select
 
 from app.config import get_settings
 from app.db import get_session
-from app.db.models import APIClient, APICredential, AgentProfile, User, utc_now
+from app.db.models import AgentProfile, APIClient, APICredential, User, utc_now
 from app.public_api.credential_profiles import USER_FULL_ACCESS_SCOPES
 from app.public_api.errors import PublicAPIError
 from app.security.auth import _decode_token
 from app.security.permissions import agent_owned_by_user, is_admin_user
-
 
 PUBLIC_KEY_PREFIX = "sd_live_"
 _security = HTTPBearer(auto_error=False)

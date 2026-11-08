@@ -10,11 +10,11 @@ def test_reflection_payload_only_contains_current_rules_and_execution_result(
     """验证审查载荷只含当前步骤规则与执行结果，不含会话标识等敏感字段。"""
     captured = {}
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """替换 LLM 客户端构造，避免测试真正初始化模型连接。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """记录传给模型的载荷，并返回固定的通过决策供断言使用。"""
         captured["payload"] = payload
         return {"action": "pass", "needs_retry": False}

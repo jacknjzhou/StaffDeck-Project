@@ -41,12 +41,11 @@ from app.scheduled_tasks.schema import (
     ScheduledTaskRunRead,
     ScheduledTaskUpdateRequest,
 )
-from app.session.session_schema import ChatTurnRequest, ChatTurnResponse
 from app.security.permissions import agent_owned_by_user as _agent_owned_by_user
 from app.security.permissions import is_admin_user as _is_admin_user
 from app.security.tenant import ensure_tenant
+from app.session.session_schema import ChatTurnRequest, ChatTurnResponse
 from app.skills.nesting import SopNestingError, expand_sop_for_execution
-
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_TASK_TIME = "09:00"

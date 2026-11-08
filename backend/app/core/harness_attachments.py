@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
 import os
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
 from sqlmodel import Session
 
 from app.core.harness_session_cleanup import (
@@ -18,14 +19,14 @@ from app.harness import (
     HarnessToolContext,
     build_file_tool_registry,
 )
+from app.session.attachment_store import (
+    read_staged_chat_attachment,
+    sandbox_attachment_path,
+)
 from app.session.attachments import (
     IMAGE_DATA_URL_LIMIT_BYTES,
     image_payloads_from_attachments,
     validate_chat_turn_attachments,
-)
-from app.session.attachment_store import (
-    read_staged_chat_attachment,
-    sandbox_attachment_path,
 )
 from app.session.session_schema import ChatAttachmentRead
 

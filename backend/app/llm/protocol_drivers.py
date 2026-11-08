@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import dataclass
 import base64
 import binascii
 import json
 import re
-from types import SimpleNamespace
+from collections.abc import Iterator
+from dataclasses import dataclass
 from threading import Event
+from types import SimpleNamespace
 from typing import Any, Protocol
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
-
 
 _DATA_URL = re.compile(r"^data:(image/(?:jpeg|png|gif|webp));base64,(.+)$", re.DOTALL)
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024

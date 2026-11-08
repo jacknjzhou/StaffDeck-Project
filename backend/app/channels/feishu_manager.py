@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from sqlalchemy import update
 from sqlmodel import Session, select

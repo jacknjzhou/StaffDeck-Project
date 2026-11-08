@@ -13,14 +13,13 @@ from app.llm import LLMClient, LLMError
 from app.skills.llm_limits import skill_model_config
 from app.skills.skill_reflection import reflect_skill_response, reflect_skill_response_stream
 from app.skills.skill_schema import (
+    SkillCard,
     SkillDistillRequest,
     SkillDistillResponse,
-    SkillCard,
     SkillGraphNode,
     ToolSuggestion,
 )
 from app.skills.step_ids import ensure_unique_node_ids, skill_card_with_unique_step_ids
-
 
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "skill_distiller_prompt.md"
 STREAM_INTERVAL_SECONDS = 0.035
@@ -1844,5 +1843,5 @@ def _slugify(title: str, raw: str) -> str:
     ascii_slug = "_".join(part for part in ascii_slug.split("_") if part)
     if ascii_slug:
         return ascii_slug[:48]
-    digest = hashlib.md5(f"{title}:{raw}".encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+    digest = hashlib.md5(f"{title}:{raw}".encode(), usedforsecurity=False).hexdigest()[:8]
     return f"skill_{digest}"

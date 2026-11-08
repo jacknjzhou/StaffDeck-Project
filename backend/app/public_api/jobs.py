@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator
 from datetime import timedelta
-import json
 from time import sleep
 from typing import Any
 
@@ -15,10 +15,10 @@ from app.async_jobs import enqueue_async_job
 from app.config import get_settings
 from app.db import engine, get_session
 from app.db.models import (
+    AgentEvent,
     APIIdempotencyRecord,
     APIJob,
     APIJobEvent,
-    AgentEvent,
     ChatSession,
     WebhookDelivery,
     new_id,
@@ -31,7 +31,6 @@ from app.public_api.webhooks import (
     enqueue_webhook_deliveries,
     stage_webhook_deliveries,
 )
-
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 JobHandler = Callable[[Session, APIJob], dict[str, Any]]
@@ -469,7 +468,7 @@ def run_job(job_id: str) -> None:
             )
             if terminal is not None:
                 _emit_terminal_job_event(db, terminal, status="cancelled")
-        except Exception as exc:  # noqa: BLE001 - persisted public job boundary.
+        except Exception as exc:  # persisted public job boundary.
             db.rollback()
             job = db.get(APIJob, job_id)
             if job is None:

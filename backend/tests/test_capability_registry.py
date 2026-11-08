@@ -80,7 +80,7 @@ def test_snapshot_only_contains_requested_capabilities() -> None:
     snapshot = registry.snapshot({"knowledge.search"})
     assert snapshot.get("knowledge.search") is not None
     assert snapshot.get("scene_skill.catalog") is None
-    with pytest.raises(LookupError, match="scene_skill.catalog"):
+    with pytest.raises(LookupError, match=r"scene_skill\.catalog"):
         snapshot.require("scene_skill.catalog")
 
 

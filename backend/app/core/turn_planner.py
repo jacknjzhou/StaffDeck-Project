@@ -31,7 +31,6 @@ from app.session.session_schema import (
 )
 from app.session.slot_policy import strip_router_generated_message_slots
 
-
 PROMPT_PATH = (
     paths.resource_dir() / "app" / "llm" / "prompts" / "turn_planner_prompt.md"
 )

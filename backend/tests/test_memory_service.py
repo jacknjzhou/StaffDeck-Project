@@ -2,7 +2,15 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.api.memories import clear_my_memories, list_memories
-from app.db.models import AgentProfile, ChatSession, MemoryRecord, Message, ModelConfig, Tenant, User
+from app.db.models import (
+    AgentProfile,
+    ChatSession,
+    MemoryRecord,
+    Message,
+    ModelConfig,
+    Tenant,
+    User,
+)
 from app.llm.client import LLMClient
 from app.memory.jobs import _conversation_messages_for_turn
 from app.memory.service import MemoryService, memory_rows_for_read
@@ -13,11 +21,11 @@ def test_memory_capture_uses_model_updates_and_deduplicates_profile_name(monkeyp
     """验证记忆捕获按模型返回的 upsert 更新档案记忆，并按结构化键去重。"""
     captured_payload = {}
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实模型客户端初始化，避免用例发起外部请求。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """记录下发的 payload，并返回预设的记忆抽取结果。"""
         captured_payload.update(payload)
         return {
@@ -86,11 +94,11 @@ def test_memory_capture_uses_model_updates_and_deduplicates_profile_name(monkeyp
 
 def test_memory_capture_ignores_summary_updates(monkeypatch) -> None:
     """验证模型返回的摘要更新不落地，原有摘要内容与轮次信息保持不变。"""
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实模型客户端初始化，避免用例发起外部请求。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """断言既有摘要已注入提示，并返回一条摘要更新。"""
         assert "用户长期摘要" in payload["existing_memories"]
         return {

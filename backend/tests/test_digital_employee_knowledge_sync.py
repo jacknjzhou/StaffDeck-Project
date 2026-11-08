@@ -37,7 +37,7 @@ def seeded():
 
 def _agent_with_kb(db: Session) -> AgentProfile:
     """返回种子数据中第一个绑定了知识库的普通员工，找不到时断言失败。"""
-    for agent in db.exec(select(AgentProfile).where(AgentProfile.is_overall == False)).all():
+    for agent in db.exec(select(AgentProfile).where(AgentProfile.is_overall.is_(False))).all():
         if db.exec(
             select(AgentKnowledgeBranch).where(AgentKnowledgeBranch.agent_id == agent.id)
         ).first():

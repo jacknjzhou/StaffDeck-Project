@@ -55,8 +55,8 @@ from app.teams.service import (
     parse_tl_task_assignments,
     record_task_event,
     select_bid_candidates,
-    team_roster_lines,
     task_activation_state,
+    team_roster_lines,
     write_blackboard_entries,
 )
 
@@ -1152,7 +1152,7 @@ def _team_synthesis_evidence(
         if labels_for_task:
             result = re.sub(
                 r"\[(\d+)\]",
-                lambda match: labels_for_task.get(match.group(0), match.group(0)),
+                lambda match, labels=labels_for_task: labels.get(match.group(0), match.group(0)),
                 result,
             )
         relabeled_results[task.id] = result

@@ -387,7 +387,7 @@ class _MCPSession:
         self._notify("notifications/initialized", {})
 
     # 子类实现 ---------------------------------------------------------------
-    def __enter__(self) -> "_MCPSession":
+    def __enter__(self) -> _MCPSession:
         """默认上下文入口，子类可在此建立连接。"""
         return self
 
@@ -522,7 +522,7 @@ class _StdioSession(_MCPSession):
         self._stderr_collector: _StderrCollector | None = None
         self._next_id = 0
 
-    def __enter__(self) -> "_StdioSession":
+    def __enter__(self) -> _StdioSession:
         """按配置拉起受控子进程，并挂上 stdout/stderr 读取器。
 
         启动失败会区分工作目录不存在、命令缺失、权限不足等情况，统一抛 MCPClientError。
@@ -685,7 +685,7 @@ class _HttpSession(_MCPSession):
         self._next_id = 0
         self._session_id: str | None = None
 
-    def __enter__(self) -> "_HttpSession":
+    def __enter__(self) -> _HttpSession:
         """创建带超时的 httpx 客户端。"""
         self._client = httpx.Client(timeout=self.timeout_seconds)
         return self
@@ -786,7 +786,7 @@ class _SseSession(_MCPSession):
         self._message_url: str | None = None
         self._next_id = 0
 
-    def __enter__(self) -> "_SseSession":
+    def __enter__(self) -> _SseSession:
         """建立 SSE 长连接，从 endpoint 事件拿到消息端点后返回。"""
         self._client = httpx.Client(timeout=httpx.Timeout(self.timeout_seconds, read=None))
         url = str(self.config.get("url") or self.config.get("endpoint") or "").strip()

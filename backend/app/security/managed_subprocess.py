@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 
 class ManagedProcessError(RuntimeError):

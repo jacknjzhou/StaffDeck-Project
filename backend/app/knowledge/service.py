@@ -14,12 +14,12 @@ from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.capability_scope import normalize_capability_scope
 from app import paths
+from app.capability_scope import normalize_capability_scope
 from app.db import engine
 from app.db.models import (
-    KnowledgeBucket,
     KnowledgeBase,
+    KnowledgeBucket,
     KnowledgeChunk,
     KnowledgeConcept,
     KnowledgeDiscoverySuggestion,
@@ -30,14 +30,7 @@ from app.db.models import (
     Tool,
     utc_now,
 )
-from app.knowledge.parser import KnowledgeParseError, extract_text
-from app.llm.model_config_resolver import resolve_model_config_for_runtime
-from app.knowledge.schema import (
-    KnowledgeBucketRead,
-    KnowledgeChunkRead,
-    KnowledgeSearchRequest,
-    KnowledgeSearchResponse,
-)
+from app.knowledge.citations import CITATION_EXCERPT_CHAR_LIMIT
 from app.knowledge.okf import (
     build_okf_for_document,
     okf_citations_for_concepts,
@@ -45,11 +38,17 @@ from app.knowledge.okf import (
     selected_concept_cards,
     upsert_concepts,
 )
-from app.knowledge.citations import CITATION_EXCERPT_CHAR_LIMIT
+from app.knowledge.parser import KnowledgeParseError, extract_text
+from app.knowledge.schema import (
+    KnowledgeBucketRead,
+    KnowledgeChunkRead,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
+)
 from app.llm import LLMClient, LLMError
+from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.observability.spans import llm_operation, observed_span
 from app.skills.skill_schema import SkillCard, SkillGraphEdge, SkillGraphNode
-
 
 PROMPT_DIR = paths.resource_dir() / "app" / "llm" / "prompts"
 BUCKET_PROMPT = PROMPT_DIR / "knowledge_bucket_prompt.md"
@@ -604,7 +603,7 @@ class KnowledgeService:
             self._clear_embedded_content(job)
         except KnowledgeIngestCancelled as exc:
             self._finalize_cancelled_job(job, str(exc) or "入库任务已取消")
-        except Exception as exc:  # noqa: BLE001 - persist stable job failure.
+        except Exception as exc:  # persist stable job failure.
             if job.document_id:
                 document = self.db.get(KnowledgeDocument, job.document_id)
                 if document:

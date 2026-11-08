@@ -486,7 +486,7 @@ def _create_macos_webview_window(AppKit, Foundation, WebKit, target: str):
 
         class StaffDeckWindow(AppKit.NSWindow):
             """自定义 NSWindow:在顶部空白区接管左键拖动,双击时缩放。"""
-            def sendEvent_(self, event):  # noqa: N802
+            def sendEvent_(self, event):
                 """拖动区域内把左键转为窗口拖动或缩放,其余事件交回系统处理。"""
                 if event.type() == AppKit.NSEventTypeLeftMouseDown:
                     location = event.locationInWindow()
@@ -638,7 +638,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
 
     class WebViewNavigationDelegate(AppKit.NSObject):
         """决定 WebView 导航去向:站外链接交系统浏览器,站内继续内嵌加载。"""
-        def webView_decidePolicyForNavigationAction_decisionHandler_(  # noqa: N802
+        def webView_decidePolicyForNavigationAction_decisionHandler_(
             self,
             _webview,
             navigation_action,
@@ -655,7 +655,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
 
     class AppDelegate(AppKit.NSObject):
         """macOS 应用代理:启动服务、装状态栏菜单、管理窗口与 Dock 图标。"""
-        def applicationDidFinishLaunching_(self, _notification):  # noqa: N802
+        def applicationDidFinishLaunching_(self, _notification):
             """启动完成后初始化状态、注册 URL Scheme 与状态栏菜单并启动服务。"""
             self.dock_visible = True
             self.server_started = False
@@ -666,14 +666,14 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             self._start_server()
             print(f"{APP_NAME} 启动中，就绪后将显示应用窗口：{url}/chat/")
 
-        def handleGetURLEvent_withReplyEvent_(self, event, _reply_event):  # noqa: N802
+        def handleGetURLEvent_withReplyEvent_(self, event, _reply_event):
             """处理 staffdeck:// 唤起事件,打印地址并在服务就绪后显示窗口。"""
             direct_object = event.descriptorForKeyword_(_four_char_code("----"))
             deep_link = direct_object.stringValue() if direct_object is not None else ""
             print(f"收到 {APP_NAME} URL Scheme 唤起：{deep_link or '<empty>'}")
             self._show_window_when_ready()
 
-        def applicationShouldHandleReopen_hasVisibleWindows_(self, _app, _flag):  # noqa: N802
+        def applicationShouldHandleReopen_hasVisibleWindows_(self, _app, _flag):
             """点击 Dock 图标时重新显示主窗口并返回 True。"""
             self.showMainWindow_(url + "/chat/")
             return True
@@ -682,17 +682,17 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             """关闭最后一个窗口后不退出应用,服务继续后台运行。"""
             return False
 
-        def applicationShouldTerminate_(self, _app):  # noqa: N802
+        def applicationShouldTerminate_(self, _app):
             """同意退出请求,交给系统立即终止进程。"""
             return AppKit.NSTerminateNow
 
-        def applicationDockMenu_(self, _sender):  # noqa: N802
+        def applicationDockMenu_(self, _sender):
             """右键 Dock 图标时构建并返回控制菜单。"""
             # 右键 Dock 图标时展示同一套控制入口。
             self.dock_context_menu, self.dock_context_dock_item = self._build_control_menu()
             return self.dock_context_menu
 
-        def openStaffDeck_(self, _sender):  # noqa: N802
+        def openStaffDeck_(self, _sender):
             """菜单项入口:打开 StaffDeck 主窗口。"""
             self.showMainWindow_(url + "/chat/")
 
@@ -711,11 +711,11 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
                 self.main_window.makeKeyAndOrderFront_(None)
             AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
 
-        def restartStaffDeck_(self, _sender):  # noqa: N802
+        def restartStaffDeck_(self, _sender):
             """用当前解释器与启动参数重新执行进程以重启服务。"""
-            os.execv(sys.executable, [sys.executable] + sys.argv[1:])
+            os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
 
-        def toggleDockIcon_(self, _sender):  # noqa: N802
+        def toggleDockIcon_(self, _sender):
             """在显示与隐藏 Dock 图标间切换,并同步状态栏菜单标题。"""
             app = AppKit.NSApplication.sharedApplication()
             if self.dock_visible:
@@ -730,7 +730,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
                 if hasattr(self, "status_dock_item"):
                     self.status_dock_item.setTitle_("隐藏 Dock 图标")
 
-        def showAbout_(self, _sender):  # noqa: N802
+        def showAbout_(self, _sender):
             """弹出关于对话框,展示版本号与本地服务地址。"""
             alert = AppKit.NSAlert.alloc().init()
             alert.setMessageText_(APP_NAME)
@@ -738,7 +738,7 @@ def _run_macos_dock_app(cfg: dict, url: str) -> int:
             alert.addButtonWithTitle_("好")
             alert.runModal()
 
-        def quitStaffDeck_(self, _sender):  # noqa: N802
+        def quitStaffDeck_(self, _sender):
             """菜单项入口:终止应用。"""
             AppKit.NSApplication.sharedApplication().terminate_(self)
 

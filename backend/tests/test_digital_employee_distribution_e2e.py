@@ -37,7 +37,7 @@ def _principal(db: Session) -> PublicPrincipal:
 
 def _distribution(db: Session) -> list[AgentProfile]:
     """返回所有非总览（is_overall 为假）的数字员工，即真正参与分发的集合。"""
-    return list(db.exec(select(AgentProfile).where(AgentProfile.is_overall == False)).all())
+    return list(db.exec(select(AgentProfile).where(AgentProfile.is_overall.is_(False))).all())
 
 
 def test_distribution_payload_is_json_serialisable_and_complete():
