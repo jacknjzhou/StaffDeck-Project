@@ -45,7 +45,7 @@ from app.core.harness_recovery import (
 )
 from app.db import engine, init_db
 from app.db.database_path import sqlite_database_path
-from app.db.seed import seed_demo_data
+from app.db.seed import ensure_bootstrap_admin, seed_demo_data
 from app.distributed.lease import RedisLease, acquire_role_lease
 from app.public_api import create_public_api_app
 from app.public_api.jobs import cleanup_public_api_records, recover_public_jobs
@@ -185,10 +185,19 @@ def on_startup() -> None:
 
 def _startup_by_role() -> None:
     """按进程角色初始化数据库，并启动该角色对应的后台线程与 worker。"""
+    settings = get_settings()
     init_db()
     if _role_enables("api"):
         with Session(engine) as db:
-            seed_demo_data(db)
+            if settings.seed_demo_data:
+                generated = seed_demo_data(db)
+            else:
+                generated = ensure_bootstrap_admin(db)
+        if generated:
+            logger.warning(
+                "bootstrap admin password generated; change it after first login: %s",
+                generated,
+            )
         recover_codex_a2a_tasks()
     if _role_enables("worker"):
         start_async_jobs()

@@ -24,6 +24,7 @@ from app.db.models import (
     User,
 )
 from app.db.seed import seed_demo_data
+from app.security.auth import verify_password
 from app.skills.skill_schema import SkillCard
 
 EXPECTED_KNOWLEDGE_COUNTS = {
@@ -62,6 +63,32 @@ def _seeded_session() -> Session:
     seed_demo_data(session)
     session.commit()
     return session
+
+
+def test_staffdeck_seed_creates_admin_without_default_password() -> None:
+    """验证种子写入的管理员不带 admin/admin 默认口令。"""
+    with _seeded_session() as db:
+        admin = db.exec(
+            select(User).where(User.tenant_id == "tenant_demo", User.username == "admin")
+        ).one()
+
+        assert admin.role == "admin"
+        assert not verify_password("admin", admin.password_hash)
+
+
+def test_staffdeck_seed_returns_generated_bootstrap_password() -> None:
+    """验证演示种子把本次生成的引导口令透传给启动流程。"""
+    engine = create_engine("sqlite:///:memory:")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as db:
+        password = seed_demo_data(db)
+        admin = db.exec(
+            select(User).where(User.tenant_id == "tenant_demo", User.username == "admin")
+        ).one()
+
+        assert password
+        assert password != "admin"
+        assert verify_password(password, admin.password_hash)
 
 
 def test_staffdeck_seed_reads_fixture_as_utf8(monkeypatch) -> None:
