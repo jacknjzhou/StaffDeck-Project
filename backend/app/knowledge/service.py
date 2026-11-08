@@ -1176,9 +1176,10 @@ class KnowledgeService:
         }
         try:
             with llm_operation("knowledge.discovery", bucket_count=len(buckets)):
-                raw = LLMClient(model_config).generate_json(
-                    DISCOVERY_PROMPT.read_text(encoding="utf-8"), payload
-                )
+                with LLMClient(model_config) as client:
+                    raw = client.generate_json(
+                        DISCOVERY_PROMPT.read_text(encoding="utf-8"), payload
+                    )
         except (LLMError, Exception):
             return
         self._raise_if_ingest_cancelled(job)
@@ -1252,9 +1253,10 @@ class KnowledgeService:
         }
         try:
             with llm_operation("knowledge.ingest_bucket", section_count=len(section_nodes)):
-                raw = LLMClient(model_config).generate_json(
-                    BUCKET_PROMPT.read_text(encoding="utf-8"), payload
-                )
+                with LLMClient(model_config) as client:
+                    raw = client.generate_json(
+                        BUCKET_PROMPT.read_text(encoding="utf-8"), payload
+                    )
         except (LLMError, Exception):
             return []
         buckets = raw.get("buckets") if isinstance(raw, dict) else None
@@ -1321,9 +1323,10 @@ class KnowledgeService:
         }
         try:
             with llm_operation("knowledge.document_route", candidate_count=len(documents)):
-                raw = LLMClient(model_config).generate_json(
-                    DOCUMENT_ROUTE_PROMPT.read_text(encoding="utf-8"), payload
-                )
+                with LLMClient(model_config) as client:
+                    raw = client.generate_json(
+                        DOCUMENT_ROUTE_PROMPT.read_text(encoding="utf-8"), payload
+                    )
         except (LLMError, Exception) as exc:
             trace.append({"phase": "document_route_failed", "message": str(exc)})
             return None
@@ -1371,9 +1374,10 @@ class KnowledgeService:
         }
         try:
             with llm_operation("knowledge.bucket_route", candidate_count=len(buckets)):
-                raw = LLMClient(model_config).generate_json(
-                    SEARCH_PROMPT.read_text(encoding="utf-8"), payload
-                )
+                with LLMClient(model_config) as client:
+                    raw = client.generate_json(
+                        SEARCH_PROMPT.read_text(encoding="utf-8"), payload
+                    )
         except (LLMError, Exception) as exc:
             trace.append({"phase": "bucket_selection_failed", "message": str(exc)})
             return None

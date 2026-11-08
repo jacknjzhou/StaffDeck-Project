@@ -5,9 +5,10 @@ from collections.abc import Iterator, Mapping
 import copy
 import hashlib
 import json
+import logging
 import math
 import re
-from typing import Any
+from typing import Any, Self
 from urllib.parse import urlsplit
 
 import httpx
@@ -37,6 +38,9 @@ from app.llm.stage_protocol import (
 )
 from app.observability.spans import current_llm_operation, llm_span_attributes, start_llm_call
 from app.security.encryption import decrypt_secret
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMError(Exception):
@@ -111,6 +115,7 @@ class LLMClient:
 
         协议不支持或 API key 缺失时抛出 LLMError,不发起网络请求。
         """
+        self._closed = False
         try:
             protocol = ModelApiProtocol(
                 getattr(model_config, "api_protocol", "openai_chat_completions")
@@ -191,6 +196,24 @@ class LLMClient:
                 self.model,
             )
         )
+
+    def close(self) -> None:
+        """关闭底层 SDK 传输;重复调用安全,且从不向上抛异常。"""
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        try:
+            self.client.close()
+        except Exception as exc:  # noqa: BLE001 - close 绝不能影响主流程
+            logger.debug("LLM client close failed: %s", exc)
+
+    def __enter__(self) -> Self:
+        """进入 with 块,返回自身供调用方发起请求。"""
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """离开 with 块时关闭传输,不吞掉块内抛出的异常。"""
+        self.close()
 
     def generate_text(
         self,

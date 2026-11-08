@@ -401,7 +401,8 @@ def _summarize_session_title_once(
                             )
 
                     with bind_span_sink(persist_title_span), llm_operation("session.title"):
-                        raw = LLMClient(model_config).generate_json(SESSION_TITLE_PROMPT, payload)
+                        with LLMClient(model_config) as client:
+                            raw = client.generate_json(SESSION_TITLE_PROMPT, payload)
                     title = _normalize_auto_title(str(raw.get("title") or ""))
                     if title:
                         title_source = "first_turn_summary"

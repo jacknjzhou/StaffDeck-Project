@@ -123,9 +123,8 @@ class StepAgent:
             operation = "step_agent.repair" if repair_context else "step_agent.run"
             repair_reason = str((repair_context or {}).get("reason") or "") or None
             with llm_operation(operation, repair_reason=repair_reason):
-                raw = LLMClient(model_config).generate_json(
-                    unified_system_prompt(), payload
-                )
+                with LLMClient(model_config) as client:
+                    raw = client.generate_json(unified_system_prompt(), payload)
             result = StepAgentResult.model_validate(raw)
             if not result.action:
                 result.action = _infer_action(result, router_decision)

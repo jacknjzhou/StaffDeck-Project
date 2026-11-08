@@ -1143,8 +1143,8 @@ def _detect_with_llm(
     if not model_config:
         return None
     try:
-        with llm_operation("scheduled_task.detect"):
-            raw = LLMClient(model_config).generate_json(
+        with llm_operation("scheduled_task.detect"), LLMClient(model_config) as client:
+            raw = client.generate_json(
                 SCHEDULE_DRAFT_PROMPT,
                 {
                     "now": _to_local(utc_now(), timezone).isoformat(),

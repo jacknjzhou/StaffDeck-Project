@@ -88,10 +88,8 @@ class ReflectionAgent:
             output_contract=REFLECTION_OUTPUT_SCHEMA,
         )
         try:
-            with llm_operation("reflection.review"):
-                raw = LLMClient(model_config).generate_json(
-                    unified_system_prompt(), payload
-                )
+            with llm_operation("reflection.review"), LLMClient(model_config) as client:
+                raw = client.generate_json(unified_system_prompt(), payload)
             return ReflectionDecision.model_validate(raw)
         except Exception as exc:
             if isinstance(exc, LLMError):

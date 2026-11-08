@@ -1538,9 +1538,10 @@ class AgentLoop:
                 output_contract=(f"只输出一段纯文本摘要，控制在约 {token_budget} tokens 以内。"),
             )
             with llm_operation("context.compact"):
-                return (
-                    LLMClient(model_config).generate_text(unified_system_prompt(), payload).strip()
-                )
+                with LLMClient(model_config) as client:
+                    return client.generate_text(
+                        unified_system_prompt(), payload
+                    ).strip()
 
         return summarize
 

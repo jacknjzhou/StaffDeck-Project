@@ -65,20 +65,22 @@ class SkillEditor:
 
     def rewrite(self, request: SkillRewriteRequest, model_config: ModelConfig) -> SkillRewriteResponse:
         """同步执行一次技能改写，返回合并校验并复查后的草稿、变更路径与告警。"""
-        client = LLMClient(skill_model_config(model_config))
-        payload = self._payload(request)
-        raw = client.generate_json(PROMPT_PATH.read_text(encoding="utf-8"), payload)
-        response = self._normalize_response(raw, request)
-        return reflect_skill_response(
-            client=client,
-            source_kind="rewrite",
-            source_payload=payload,
-            response=response,
-            candidate_skill=response.draft_skill,
-            current_warnings=response.warnings,
-            tool_suggestions=response.tool_suggestions,
-            normalize_response=lambda review_raw: self._normalize_response(review_raw, request),
-        )
+        with LLMClient(skill_model_config(model_config)) as client:
+            payload = self._payload(request)
+            raw = client.generate_json(PROMPT_PATH.read_text(encoding="utf-8"), payload)
+            response = self._normalize_response(raw, request)
+            return reflect_skill_response(
+                client=client,
+                source_kind="rewrite",
+                source_payload=payload,
+                response=response,
+                candidate_skill=response.draft_skill,
+                current_warnings=response.warnings,
+                tool_suggestions=response.tool_suggestions,
+                normalize_response=lambda review_raw: self._normalize_response(
+                    review_raw, request
+                ),
+            )
 
     def stream_text(
         self, request: SkillRewriteRequest, model_config: ModelConfig
@@ -92,51 +94,59 @@ class SkillEditor:
         payload = self._payload(request)
         client = LLMClient(skill_model_config(model_config))
         try:
-            yield {"event": "status", "data": {"text": "模型正在分析改写范围"}}
-            for chunk in client.generate_text_stream(prompt, payload):
-                chunks.append(chunk)
-            yield {"event": "status", "data": {"text": "正在校验局部改写结果"}}
-            response = self._response_from_text("".join(chunks), request)
-        except (LLMError, json.JSONDecodeError, TypeError, ValueError) as exc:
             try:
-                yield {"event": "status", "data": {"text": "模型输出需要修复，正在重试一次"}}
-                repair_text = client.generate_text(
-                    prompt,
-                    {
-                        **payload,
-                        "previous_output": "".join(chunks),
-                        "previous_error": str(exc),
-                        "repair_instruction": (
-                            "请基于 current_skill、instruction 和 target_paths 修复上一次输出。"
-                            "只输出合法 JSON，可以使用 patches 做局部修改，或返回完整 draft_skill。"
-                        ),
-                    },
-                )
-                response = self._response_from_text(repair_text, request)
-            except (LLMError, json.JSONDecodeError, TypeError, ValueError) as repair_exc:
-                yield {"event": "status", "data": {"text": "模型改写失败，正在保留原版本"}}
-                response = SkillRewriteResponse(
-                    draft_skill=request.current_skill,
-                    assistant_message="改写失败，已保留当前技能内容。",
-                    changed_paths=[],
-                    warnings=[f"模型未能完成局部改写：{repair_exc}"],
-                )
-        yield {"event": "status", "data": {"text": "正在校验改写范围与工具接入"}}
-        response = yield from reflect_skill_response_stream(
-            client=client,
-            source_kind="rewrite",
-            source_payload=payload,
-            response=response,
-            candidate_skill=response.draft_skill,
-            current_warnings=response.warnings,
-            tool_suggestions=response.tool_suggestions,
-            normalize_response=lambda review_raw: self._normalize_response(review_raw, request),
-        )
-        yield {"event": "status", "data": {"text": "正在整理校验后的改写结果"}}
-        for chunk in _chunk_text(response.assistant_message):
-            yield {"event": "message_chunk", "data": {"content": chunk}}
-            sleep(STREAM_INTERVAL_SECONDS)
-        yield {"event": "complete", "data": response.model_dump(mode="json")}
+                yield {"event": "status", "data": {"text": "模型正在分析改写范围"}}
+                for chunk in client.generate_text_stream(prompt, payload):
+                    chunks.append(chunk)
+                yield {"event": "status", "data": {"text": "正在校验局部改写结果"}}
+                response = self._response_from_text("".join(chunks), request)
+            except (LLMError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                try:
+                    yield {
+                        "event": "status",
+                        "data": {"text": "模型输出需要修复，正在重试一次"},
+                    }
+                    repair_text = client.generate_text(
+                        prompt,
+                        {
+                            **payload,
+                            "previous_output": "".join(chunks),
+                            "previous_error": str(exc),
+                            "repair_instruction": (
+                                "请基于 current_skill、instruction 和 target_paths 修复上一次输出。"
+                                "只输出合法 JSON，可以使用 patches 做局部修改，或返回完整 draft_skill。"
+                            ),
+                        },
+                    )
+                    response = self._response_from_text(repair_text, request)
+                except (LLMError, json.JSONDecodeError, TypeError, ValueError) as repair_exc:
+                    yield {"event": "status", "data": {"text": "模型改写失败，正在保留原版本"}}
+                    response = SkillRewriteResponse(
+                        draft_skill=request.current_skill,
+                        assistant_message="改写失败，已保留当前技能内容。",
+                        changed_paths=[],
+                        warnings=[f"模型未能完成局部改写：{repair_exc}"],
+                    )
+            yield {"event": "status", "data": {"text": "正在校验改写范围与工具接入"}}
+            response = yield from reflect_skill_response_stream(
+                client=client,
+                source_kind="rewrite",
+                source_payload=payload,
+                response=response,
+                candidate_skill=response.draft_skill,
+                current_warnings=response.warnings,
+                tool_suggestions=response.tool_suggestions,
+                normalize_response=lambda review_raw: self._normalize_response(
+                    review_raw, request
+                ),
+            )
+            yield {"event": "status", "data": {"text": "正在整理校验后的改写结果"}}
+            for chunk in _chunk_text(response.assistant_message):
+                yield {"event": "message_chunk", "data": {"content": chunk}}
+                sleep(STREAM_INTERVAL_SECONDS)
+            yield {"event": "complete", "data": response.model_dump(mode="json")}
+        finally:
+            client.close()
 
     def _response_from_text(self, text: str, request: SkillRewriteRequest) -> SkillRewriteResponse:
         """从模型纯文本中抽出 JSON 对象并归一化；非 JSON 输出直接抛 ValueError。"""

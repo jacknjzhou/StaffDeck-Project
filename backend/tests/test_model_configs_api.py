@@ -101,6 +101,14 @@ def test_failed_verified_create_does_not_leave_disabled_model(tmp_path, monkeypa
             """抛出 LLMError 模拟上游连接失败。"""
             raise LLMError("Connection error")
 
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
+
     monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
     with _db(tmp_path) as db:
         with pytest.raises(HTTPException) as exc_info:
@@ -142,6 +150,14 @@ def test_model_test_returns_structured_provider_diagnostics(tmp_path, monkeypatc
                 upstream_body='{"error":{"code":"invalid_model"}}',
                 request_id="req_123",
             )
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
     with _db(tmp_path) as db:
@@ -343,6 +359,14 @@ def test_failed_verified_update_preserves_existing_model(tmp_path, monkeypatch) 
             """抛出 LLMError 模拟上游连接失败。"""
             raise LLMError("Connection error")
 
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
+
     monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
     with _db(tmp_path) as db:
         db.add(
@@ -523,6 +547,14 @@ def test_verification_runs_bounded_text_stream_and_json_probes(tmp_path, monkeyp
             """返回固定 JSON，表示结构化输出能力探测通过。"""
             calls.append(("json",))
             return {"ok": True}
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", FakeClient)
     with _db(tmp_path) as db:
@@ -776,5 +808,13 @@ def _install_passing_verification_client(monkeypatch) -> None:
         def generate_json(self, _prompt, _payload):  # noqa: ANN001
             """返回固定 JSON，表示结构化输出探测通过。"""
             return {"ok": True}
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", PassingClient)

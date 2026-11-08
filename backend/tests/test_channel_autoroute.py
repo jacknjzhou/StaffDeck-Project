@@ -53,6 +53,14 @@ class FakeLLMClient:
         """保存模型配置，保持与真实客户端一致的构造签名。"""
         self.model_config = model_config
 
+    def __enter__(self):
+        """返回自身，供 with 语句获取客户端。"""
+        return self
+
+    def __exit__(self, *_exc_info):
+        """测试替身不持有真实连接，退出时不做清理。"""
+        return None
+
     def generate_text(self, system_prompt, user_payload, response_format=None):
         """记录系统提示词、载荷与格式要求，再按预设脚本返回或抛错。"""
         type(self).calls.append(

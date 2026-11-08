@@ -88,17 +88,18 @@ class MemoryService:
             agent_id=agent_id,
         )
         with llm_operation("memory.capture", existing_count=len(existing_rows)):
-            raw_delta = LLMClient(model_config).generate_json(
-                PROMPT_PATH.read_text(encoding="utf-8"),
-                {
-                    "conversation_context": {
-                        "messages": conversation_messages
+            with LLMClient(model_config) as client:
+                raw_delta = client.generate_json(
+                    PROMPT_PATH.read_text(encoding="utf-8"),
+                    {
+                        "conversation_context": {
+                            "messages": conversation_messages
+                        },
+                        "existing_memories": _memories_for_model(existing_rows),
+                        "step_result": compact_step_result(step_result.model_dump(mode="json")),
+                        "tool_result": tool_result.model_dump(mode="json") if tool_result else None,
                     },
-                    "existing_memories": _memories_for_model(existing_rows),
-                    "step_result": compact_step_result(step_result.model_dump(mode="json")),
-                    "tool_result": tool_result.model_dump(mode="json") if tool_result else None,
-                },
-            )
+                )
         records: list[MemoryRecord] = []
         for update in _normalize_memory_updates(raw_delta):
             if update["operation"] == "delete":

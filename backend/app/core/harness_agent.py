@@ -225,11 +225,10 @@ class HarnessTaskAgent:
                             task_frame_id=requirement.task_frame_id,
                             iteration=iteration,
                             protocol_attempt=protocol_attempt + 1,
-                        ):
-                            client = _deadline_llm_client(
-                                model_config,
-                                step_deadline_monotonic,
-                            )
+                        ), _deadline_llm_client(
+                            model_config,
+                            step_deadline_monotonic,
+                        ) as client:
                             raw = _generate_harness_action_json(
                                 client,
                                 system_prompt,
@@ -932,7 +931,10 @@ def _deadline_llm_client(
     model_config: ModelConfig,
     deadline_monotonic: float | None,
 ) -> LLMClient:
-    """构造带剩余时长约束的 LLM 客户端，避免单次调用越过单步截止时刻。"""
+    """构造带剩余时长约束的 LLM 客户端，避免单次调用越过单步截止时刻。
+
+    返回的客户端由调用方持有，必须在 with 或 finally 中关闭。
+    """
     if deadline_monotonic is None:
         return LLMClient(model_config)
     remaining = max(deadline_monotonic - time.monotonic(), 0.1)

@@ -494,26 +494,26 @@ def _run_verification_probes(
             # budget.
             max_output_tokens=config.max_output_tokens,
         )
-        probe_client = LLMClient(probe_config)
-        if capability_id == "text":
-            output = probe_client.generate_text(
-                "你是一个连接测试助手。请用一句中文回复连接成功。",
-                {"message": "ping"},
-            )
-        elif capability_id == "stream":
-            stream_text = "".join(
-                probe_client.generate_text_stream(
-                    "你是一个连接测试助手。", {"message": "请回复 stream-ok"}
+        with LLMClient(probe_config) as probe_client:
+            if capability_id == "text":
+                output = probe_client.generate_text(
+                    "你是一个连接测试助手。请用一句中文回复连接成功。",
+                    {"message": "ping"},
                 )
-            )
-            if not stream_text.strip():
-                raise LLMError("MODEL_EMPTY_OUTPUT")
-        else:
-            json_output = probe_client.generate_json(
-                "只返回 JSON object。", {"message": '返回 {"ok": true}'}
-            )
-            if not isinstance(json_output, dict):
-                raise LLMError("MODEL_INVALID_JSON")
+            elif capability_id == "stream":
+                stream_text = "".join(
+                    probe_client.generate_text_stream(
+                        "你是一个连接测试助手。", {"message": "请回复 stream-ok"}
+                    )
+                )
+                if not stream_text.strip():
+                    raise LLMError("MODEL_EMPTY_OUTPUT")
+            else:
+                json_output = probe_client.generate_json(
+                    "只返回 JSON object。", {"message": '返回 {"ok": true}'}
+                )
+                if not isinstance(json_output, dict):
+                    raise LLMError("MODEL_INVALID_JSON")
         capabilities.append(ModelCapabilityTestResult(id=capability_id, success=True))
     return capabilities, output
 

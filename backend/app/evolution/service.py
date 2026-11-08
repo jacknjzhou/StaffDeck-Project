@@ -556,19 +556,20 @@ class EvolutionService:
         model: ModelConfig,
     ) -> EvolutionProposal:
         """让模型按反馈生成通用技能的最小 SKILL.md 修改，组装候选并静态评估。"""
-        raw = LLMClient(model).generate_json(
-            GENERAL_SKILL_EVOLUTION_PROMPT,
-            {
-                "current_skill": {
-                    "slug": skill.slug,
-                    "name": skill.name,
-                    "description": skill.description,
-                    "skill_markdown": skill.skill_markdown,
+        with LLMClient(model) as client:
+            raw = client.generate_json(
+                GENERAL_SKILL_EVOLUTION_PROMPT,
+                {
+                    "current_skill": {
+                        "slug": skill.slug,
+                        "name": skill.name,
+                        "description": skill.description,
+                        "skill_markdown": skill.skill_markdown,
+                    },
+                    "feedback_evidence": evidence,
+                    "additional_instruction": request.instruction or "",
                 },
-                "feedback_evidence": evidence,
-                "additional_instruction": request.instruction or "",
-            },
-        )
+            )
         candidate = {
             "skill_markdown": str(raw.get("skill_markdown") or skill.skill_markdown),
             "description": skill.description,

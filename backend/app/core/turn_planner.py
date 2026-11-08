@@ -82,8 +82,7 @@ class TurnPlanner:
             output_contract=TURN_PLANNER_OUTPUT_SCHEMA,
         )
         try:
-            client = LLMClient(model_config)
-            with llm_operation("turn_planner.plan"):
+            with LLMClient(model_config) as client, llm_operation("turn_planner.plan"):
                 plan = self._generate_validated_plan(
                     client,
                     unified_system_prompt(),
