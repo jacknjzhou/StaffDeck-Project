@@ -25,3 +25,14 @@ def test_development_allows_missing_redis(monkeypatch):
         lambda: type("S", (), {"redis_url": "", "is_production": False})(),
     )
     assert lease.acquire_role_lease("api") is None
+
+
+def test_production_treats_whitespace_redis_url_as_missing(monkeypatch):
+    """只含空白的 REDIS_URL 等同于未配置，不能绕过生产守卫。"""
+    monkeypatch.setattr(
+        lease,
+        "get_settings",
+        lambda: type("S", (), {"redis_url": "   ", "is_production": True})(),
+    )
+    with pytest.raises(RuntimeError, match="REDIS_URL"):
+        lease.acquire_role_lease("api")

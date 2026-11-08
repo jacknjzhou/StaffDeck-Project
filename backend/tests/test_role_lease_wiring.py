@@ -285,6 +285,10 @@ def test_three_consecutive_renew_failures_mark_lease_lost_once(monkeypatch, capl
         # mark_lease_lost 与 logger.error 紧邻，事件置位后日志可能尚未落盘。
         _wait_until(lambda: len(_error_records()) == 1)
         assert len(_error_records()) == 1
+        message = _error_records()[0].getMessage()
+        # 日志里要能区分是哪个租约，不能退化成只有内存地址的 repr。
+        assert "ScriptedLease#0" in message
+        assert "object at 0x" not in message
 
         settled = lease.renewed
         _wait_until(lambda: lease.renewed >= settled + 3)

@@ -71,7 +71,7 @@ def acquire_role_lease(role: str, ttl_seconds: int = 60) -> RedisLease | None:
     `RuntimeError`，调用方据此拒绝启动。
     """
     settings = get_settings()
-    url = settings.redis_url
+    url = str(settings.redis_url or "").strip()
     if not url:
         if settings.is_production:
             raise RuntimeError(

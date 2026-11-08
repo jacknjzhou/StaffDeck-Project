@@ -108,6 +108,15 @@ LEASE_RENEW_MAX_FAILURES = 3
 _lease_renew_failures = 0
 
 
+def _lease_label(lease: RedisLease, index: int) -> str:
+    """为日志生成可读的租约标识：优先 role 属性，否则类型名 + 序号。
+
+    默认对象 repr 只含内存地址，排障时无法区分配置了哪个角色。
+    """
+    role = getattr(lease, "role", "")
+    return str(role) if role else f"{type(lease).__name__}#{index}"
+
+
 def _renew_held_leases_once() -> str:
     """为全部已持有租约续期一轮，返回失败描述；空串表示本轮全部成功。
 
@@ -117,12 +126,13 @@ def _renew_held_leases_once() -> str:
     failures: list[str] = []
     # 取快照再遍历：shutdown 路径可能并发清空 _held_leases。
     held = list(_held_leases)
-    for lease in held:
+    for index, lease in enumerate(held):
+        label = _lease_label(lease, index)
         try:
             if not lease.renew():
-                failures.append(f"{lease}: 租约已被他人持有或已过期")
+                failures.append(f"{label}: 租约已被他人持有或已过期")
         except Exception as exc:  # noqa: BLE001 - 续期失败不应打断进程
-            failures.append(f"{lease}: {exc!r}")
+            failures.append(f"{label}: {exc!r}")
     return "; ".join(failures)
 
 

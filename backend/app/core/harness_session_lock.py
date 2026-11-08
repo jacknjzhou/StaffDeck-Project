@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import uuid
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _BUSY_MESSAGE = "该会话已有一个 Harness 执行正在进行，请等待其结束后重试。"
 _REDIS_KEY_PREFIX = "staffdeck:harness_session:"
@@ -45,7 +48,8 @@ class HarnessSessionLockHandle:
     session_id: str
     backend: str
     token: str = ""
-    memory_lock: Lock | None = None
+    # threading.Lock 是工厂函数而非类型，这里用 Any 表达“任意锁对象”。
+    memory_lock: Any = None
 
 
 class HarnessSessionLock:
@@ -95,17 +99,22 @@ class HarnessSessionLock:
         """释放 acquire 返回的句柄；handle 为 None 时静默返回。
 
         redis 后端只在 token 仍匹配时删键，token 不匹配说明锁已过期并被他人
-        接管，此时不能删掉对方的锁。
+        接管，此时不能删掉对方的锁。释放必须尽力而为：它发生在回合收尾的
+        finally 里，Redis 短暂不可用不能让已经持久化成功的回合变成 500，也不能
+        让进程在 TTL 到期前一直误判会话忙碌，因此异常只记日志、不向外抛。
         """
         if handle is None:
             return
-        if handle.backend == "redis":
-            self._redis_client().eval(
-                _RELEASE_LUA, 1, _redis_key(handle.session_id), handle.token
-            )
-            return
-        if handle.memory_lock is not None:
-            handle.memory_lock.release()
+        try:
+            if handle.backend == "redis":
+                self._redis_client().eval(
+                    _RELEASE_LUA, 1, _redis_key(handle.session_id), handle.token
+                )
+            elif handle.memory_lock is not None:
+                handle.memory_lock.release()
+        except Exception as exc:  # 释放失败不应影响调用方
+            logger.warning("harness session lock release failed: %s", exc)
+            logger.debug("harness session lock release traceback", exc_info=True)
 
     def _acquire_memory(self, session_id: str) -> HarnessSessionLockHandle:
         """进程内字典后端：同一会话复用一把 threading.Lock。"""
@@ -128,15 +137,29 @@ class HarnessSessionLock:
         return HarnessSessionLockHandle(session_id=session_id, backend="redis", token=token)
 
     def _redis_client(self) -> Any:
-        """延迟构造 Redis 客户端；测试可通过 client 参数注入 fakeredis。"""
+        """延迟构造 Redis 客户端；测试可通过 client 参数注入 fakeredis。
+
+        连接与读写都设 2 秒上限：Redis 卡死时应快速失败，而不是把请求线程
+        （含释放路径）一直挂住。
+        """
         if self._client is None:
             from redis import Redis
 
-            self._client = Redis.from_url(str(_settings().redis_url), decode_responses=True)
+            self._client = Redis.from_url(
+                str(_settings().redis_url),
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
         return self._client
 
 
-_default_lock = HarnessSessionLock()
+def _build_default_lock() -> HarnessSessionLock:
+    """构造模块级默认锁；单独成型便于测试断言默认后端按 redis_url 解析。"""
+    return HarnessSessionLock()
+
+
+_default_lock = _build_default_lock()
 
 
 def acquire_harness_session(session_id: str) -> HarnessSessionLockHandle:

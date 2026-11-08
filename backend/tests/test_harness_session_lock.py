@@ -75,3 +75,83 @@ def test_blank_session_id_is_rejected(monkeypatch):
     with pytest.raises(ValueError):
         acquire_harness_session("  ")
     release_harness_session("x", None)
+
+
+def test_default_lock_resolves_redis_when_configured(monkeypatch):
+    """默认锁在配置了 redis_url 时必须解析为 redis，而不是固定 memory。"""
+    monkeypatch.setattr(
+        lock_mod, "_settings", lambda: _settings_with("redis://example:6379/0")
+    )
+    assert isinstance(lock_mod._default_lock, HarnessSessionLock)
+    assert lock_mod._default_lock.backend == "redis"
+    assert lock_mod._build_default_lock().backend == "redis"
+
+
+def test_public_functions_delegate_to_module_default_lock(monkeypatch):
+    """模块级函数必须走 _default_lock 单例，替换默认锁即可观察委托。"""
+    calls: list[tuple[str, object]] = []
+    sentinel = object()
+
+    class _SpyLock:
+        """记录 acquire/release 委托的目标与参数。"""
+
+        def acquire(self, session_id: str):
+            """记录抢占请求并返回哨兵句柄。"""
+            calls.append(("acquire", session_id))
+            return sentinel
+
+        def release(self, handle) -> None:
+            """记录释放请求。"""
+            calls.append(("release", handle))
+
+    monkeypatch.setattr(lock_mod, "_default_lock", _SpyLock())
+    assert acquire_harness_session("session-1") is sentinel
+    release_harness_session("session-1", sentinel)
+    assert calls == [("acquire", "session-1"), ("release", sentinel)]
+
+
+def test_memory_double_release_is_best_effort(caplog):
+    """重复释放进程内锁会抛错，但释放路径必须吞掉并记一条 warning。"""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="app.core.harness_session_lock")
+    lock = HarnessSessionLock("memory")
+    handle = lock.acquire("memory-double-release")
+    lock.release(handle)
+    lock.release(handle)
+
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "app.core.harness_session_lock"
+        and record.levelno == logging.WARNING
+    ]
+    assert len(warnings) == 1
+    assert "harness session lock release failed" in warnings[0].getMessage()
+
+
+def test_redis_client_uses_bounded_timeouts(monkeypatch):
+    """Redis 客户端必须带 2 秒连接/读写超时，避免锁路径无限挂起。"""
+    captured: dict[str, object] = {}
+
+    class _StubClient:
+        """仅用于承接 from_url 返回值的空壳客户端。"""
+
+    def fake_from_url(url: str, **kwargs):
+        """记录构造参数并返回空壳客户端。"""
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return _StubClient()
+
+    monkeypatch.setattr("redis.Redis.from_url", fake_from_url)
+    monkeypatch.setattr(
+        lock_mod, "_settings", lambda: _settings_with("redis://example:6379/0")
+    )
+    lock = HarnessSessionLock("redis")
+    lock._redis_client()
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["decode_responses"] is True
+    assert kwargs["socket_connect_timeout"] == 2
+    assert kwargs["socket_timeout"] == 2
