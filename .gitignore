@@ -24,3 +24,6 @@ packaging/docker/.env
 # Agent/tooling scratch
 .superpowers/
 .workbuddy/
+
+# Local git worktrees
+.worktrees/
