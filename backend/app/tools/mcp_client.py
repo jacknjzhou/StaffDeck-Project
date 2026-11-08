@@ -13,6 +13,7 @@ from typing import Any, TextIO
 
 import httpx
 
+from app.config import get_settings
 from app.security.managed_subprocess import ManagedProcess, ManagedProcessError
 from app.tools.mcp_builtin import (
     BuiltinMCPError,
@@ -49,6 +50,24 @@ def build_stdio_env(config_env: dict[str, str] | None = None) -> dict[str, str]:
     env = {key: os.environ[key] for key in _SAFE_ENV_KEYS if key in os.environ}
     env.update(config_env or {})
     return env
+
+
+def _enforce_stdio_policy(command: list[str]) -> None:
+    """stdio 启动前的部署级门禁：关闭即拒绝，并复核命令白名单。
+
+    这是执行期纵深防御，覆盖历史行、种子行、同步与工具调用等所有 spawn 入口；
+    与 API 层 403、模型层 allowlist 使用同一组配置字段。
+    """
+    settings = get_settings()
+    if not settings.mcp_stdio_enabled:
+        raise ValueError("stdio MCP transport is disabled on this deployment")
+    allowed = {
+        item.strip()
+        for item in settings.mcp_stdio_allowed_commands.split(",")
+        if item.strip()
+    }
+    if Path(command[0]).name not in allowed:
+        raise ValueError(f"stdio command not in allowlist: {command[0]!r}")
 
 
 # --------------------------------------------------------------------------- #
@@ -496,6 +515,7 @@ class _StdioSession(_MCPSession):
         启动失败会区分工作目录不存在、命令缺失、权限不足等情况，统一抛 MCPClientError。
         """
         command = _stdio_command(self.config)
+        _enforce_stdio_policy(command)
         raw_env = self.config.get("env")
         config_env = (
             {str(key): str(value) for key, value in raw_env.items()}

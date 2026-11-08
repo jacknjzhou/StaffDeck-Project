@@ -49,6 +49,7 @@ def _allow_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr("app.tools.tool_schema.get_settings", lambda: settings)
     monkeypatch.setattr("app.api.tools.get_settings", lambda: settings)
+    monkeypatch.setattr("app.tools.mcp_client.get_settings", lambda: settings)
 
 
 def _admin_user() -> User:
@@ -108,8 +109,9 @@ def test_discover_stdio_mcp_server_lists_tools(monkeypatch) -> None:
         assert {"echo", "sum", "product_lookup"} <= names
 
 
-def test_mcp_apps_negotiation_preserves_metadata_and_resource() -> None:
+def test_mcp_apps_negotiation_preserves_metadata_and_resource(monkeypatch) -> None:
     """验证 MCP Apps 协商后保留 app 元数据、只读注解与工具结果 meta，并能读取资源。"""
+    _allow_stdio(monkeypatch)
     config = {
         "transport": "stdio",
         "command": sys.executable,
@@ -134,8 +136,9 @@ def test_mcp_apps_negotiation_preserves_metadata_and_resource() -> None:
     assert resource["contents"][0]["mimeType"] == "text/html;profile=mcp-app"
 
 
-def test_mcp_apps_capability_is_not_advertised_when_disabled() -> None:
+def test_mcp_apps_capability_is_not_advertised_when_disabled(monkeypatch) -> None:
     """验证关闭 apps_mode 时不会对外声明 MCP Apps 扩展能力。"""
+    _allow_stdio(monkeypatch)
     discovery = discover_mcp_server(
         {
             "transport": "stdio",

@@ -12,7 +12,7 @@ from app.api.tools import mcp_router
 from app.db import get_session
 from app.db.models import MCPServer, Tenant, User
 from app.security.auth import get_current_user
-from app.tools.mcp_client import build_stdio_env
+from app.tools.mcp_client import _StdioSession, build_stdio_env
 from app.tools.tool_schema import MCPServerConnection
 
 
@@ -105,3 +105,38 @@ def test_create_stdio_server_returns_403_when_disabled(monkeypatch):
     assert response.json()["detail"] == "stdio MCP 未在本部署启用"
     with Session(engine) as db:
         assert db.exec(select(MCPServer)).all() == []
+
+
+def test_stdio_session_refuses_spawn_when_disabled(monkeypatch):
+    """纵深防御：即使绕过 API，禁用状态下 stdio 会话也不得拉起任何子进程。"""
+    monkeypatch.setattr(
+        "app.tools.mcp_client.get_settings",
+        lambda: SimpleNamespace(mcp_stdio_enabled=False),
+    )
+    session = _StdioSession(
+        {
+            "transport": "stdio",
+            "command": "staffdeck-command-that-does-not-exist",
+            "args": [],
+        },
+        timeout_seconds=1,
+    )
+    with pytest.raises(ValueError, match="disabled on this deployment"), session:
+        pass
+
+
+def test_stdio_session_rechecks_allowlist(monkeypatch):
+    """纵深防御：进入会话时重新校验白名单，历史行也绕不过执行期门禁。"""
+    monkeypatch.setattr(
+        "app.tools.mcp_client.get_settings",
+        lambda: SimpleNamespace(
+            mcp_stdio_enabled=True,
+            mcp_stdio_allowed_commands="npx,uvx,node,python3,uv",
+        ),
+    )
+    session = _StdioSession(
+        {"transport": "stdio", "command": "/bin/sh", "args": ["-c", "id"]},
+        timeout_seconds=1,
+    )
+    with pytest.raises(ValueError, match="allowlist"), session:
+        pass
