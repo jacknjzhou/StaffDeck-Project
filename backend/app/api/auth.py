@@ -237,6 +237,7 @@ class UserRead(BaseModel):
     display_name: Optional[str] = None
     role: Literal["admin", "member"]
     source: str = "web"
+    status: str = "active"
     # 仅 /me 与 /login 带出:头像资源指针(存在性标识),不内联二进制——
     # 完整 data_url 可达 2.67MB,内联会把登录/会话刷新响应与前端 localStorage 撑爆
     avatar_url: Optional[str] = None
@@ -721,6 +722,7 @@ def _user_read(
         display_name=user.display_name,
         role=user.role,
         source=user.source,
+        status=getattr(user, "status", "active"),
         avatar_url=avatar_url,
         created_at=user.created_at.isoformat() if user.created_at else None,
         updated_at=user.updated_at.isoformat() if user.updated_at else None,

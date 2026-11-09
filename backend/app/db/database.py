@@ -247,6 +247,11 @@ def _migrate_sqlite_skill_schema() -> None:
                 conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'member'"))
             if "source" not in user_columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN source VARCHAR NOT NULL DEFAULT 'web'"))
+            if "status" not in user_columns:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN status VARCHAR NOT NULL DEFAULT 'active'")
+                )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_status ON users (status)"))
             if "display_name" in user_columns:
                 conn.execute(
                     text(

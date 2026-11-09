@@ -1,5 +1,9 @@
+from pathlib import Path
+
+from alembic.config import Config
 from sqlmodel import text
 
+from alembic import command
 from app.db.database import build_engine
 from app.db.migrations import run_migrations
 
@@ -27,4 +31,41 @@ def test_alembic_baseline_upgrades_empty_postgres(pg_url: str):
         assert "agent_profiles" in tables
         assert "skills" in tables
         assert "sessions" in tables
+    eng.dispose()
+
+
+def test_user_status_revision_round_trips_on_postgres(pg_url: str):
+    """0003 可在 PostgreSQL 上降级再升级:回退删列,重升补列,重复升级幂等。"""
+    eng = build_engine(pg_url)
+    with eng.connect() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+        conn.commit()
+    run_migrations(pg_url)
+
+    alembic_dir = Path(__file__).resolve().parents[1] / "alembic"
+    cfg = Config(str(alembic_dir / "alembic.ini"))
+    cfg.set_main_option("script_location", str(alembic_dir))
+    cfg.set_main_option("sqlalchemy.url", pg_url)
+
+    command.downgrade(cfg, "0002")
+    with eng.connect() as conn:
+        columns = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'")
+            )
+        }
+    assert "status" not in columns
+
+    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "head")
+    with eng.connect() as conn:
+        columns = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'")
+            )
+        }
+    assert "status" in columns
     eng.dispose()
