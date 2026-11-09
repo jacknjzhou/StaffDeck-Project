@@ -982,7 +982,7 @@ Expected: FAIL — `AccountStatusBadge` 未导出。
 
 `docs/server-deployment.md` §5 升级顺序补一句：
 
-> 含 `0003_user_status` 之后，未执行迁移的库会让 `api` 启动即失败（`assert_schema_current`）。升级必须先迁移再重建 api。
+> 含 `0003_user_status` 之后：`api` 容器启动时会先自动执行迁移（`STAFFDECK_RUN_MIGRATIONS=1`）。仅当关闭自动迁移（`STAFFDECK_RUN_MIGRATIONS=0`）或绕过 `entrypoint.sh` 直接启动 uvicorn 时，未迁移的库才会被 `assert_schema_current` 拒绝启动。升级仍建议先迁移再重建 api。
 
 - [ ] **Step 4: Run tests to verify they pass**
 

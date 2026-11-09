@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { User } from 'lucide-react';
 
@@ -40,20 +40,31 @@ import type { EnterpriseAuthUser } from '../auth';
 import { useClientPagination } from '../hooks/useClientPagination';
 import { StatusBadge } from './scheduled-tasks/StatusBadge';
 
+type AccountStatus = 'active' | 'pending' | 'rejected';
+
 type EmployeeAccount = {
   id: string;
   tenant_id: string;
   username: string;
   display_name?: string;
   role: 'admin' | 'member';
-  status: 'active' | 'pending' | 'rejected';
+  status: AccountStatus;
   created_at?: string;
   updated_at?: string;
 };
 
-type AccountStatusFilter = 'all' | EmployeeAccount['status'];
+type AccountStatusFilter = 'all' | AccountStatus;
 
 type AccountStatusTarget = 'active' | 'rejected';
+
+/** 审核动作：文案与要写入的目标状态。 */
+type StatusAction = { label: string; status: AccountStatusTarget };
+
+const STATUS_LABELS: Record<AccountStatus, string> = {
+  active: '正常',
+  pending: '待审核',
+  rejected: '已拒绝',
+};
 
 type AccountDraft = {
   displayName: string;
@@ -80,14 +91,46 @@ export function AccountRoleBadge({ role }: { role: EmployeeAccount['role'] }) {
 }
 
 /**
+ * 归并任意状态字符串为三种有效状态。
+ *
+ * `pending` / `rejected` 原样保留，其余（含缺失、未知值）一律视为 `active`，
+ * 保证徽标、筛选与操作门控对同一行的判断一致。
+ */
+export function effectiveStatus(status?: string): AccountStatus {
+  if (status === 'pending') return 'pending';
+  if (status === 'rejected') return 'rejected';
+  return 'active';
+}
+
+/**
+ * 按有效状态给出审核动作：待审核可「通过 / 拒绝」，已拒绝可「通过」，正常无动作。
+ */
+export function statusActions(status?: string): StatusAction[] {
+  const current = effectiveStatus(status);
+  if (current === 'pending') {
+    return [
+      { label: '通过', status: 'active' },
+      { label: '拒绝', status: 'rejected' },
+    ];
+  }
+  if (current === 'rejected') return [{ label: '通过', status: 'active' }];
+  return [];
+}
+
+const STATUS_TONES: Record<AccountStatus, 'green' | 'orange' | 'red'> = {
+  active: 'green',
+  pending: 'orange',
+  rejected: 'red',
+};
+
+/**
  * 账号状态徽标：正常绿色、待审核橙色、已拒绝红色。
  *
- * 未知或缺失状态按「正常」渲染，兼容尚未下发 `status` 的旧接口。
+ * 未知或缺失状态按「正常」渲染，与筛选、操作门控共用 `effectiveStatus`。
  */
-export function AccountStatusBadge({ status }: { status?: EmployeeAccount['status'] }) {
-  if (status === 'pending') return <StatusBadge tone="orange">待审核</StatusBadge>;
-  if (status === 'rejected') return <StatusBadge tone="red">已拒绝</StatusBadge>;
-  return <StatusBadge tone="green">正常</StatusBadge>;
+export function AccountStatusBadge({ status }: { status?: string }) {
+  const current = effectiveStatus(status);
+  return <StatusBadge tone={STATUS_TONES[current]}>{STATUS_LABELS[current]}</StatusBadge>;
 }
 
 /**
@@ -119,15 +162,22 @@ export default function AccountsPage({
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<EmployeeAccount | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [statusPendingId, setStatusPendingId] = useState<string | null>(null);
+
+  /** 列表请求序号：只接受最新一次请求的结果，避免旧快照覆盖新数据。 */
+  const loadTokenRef = useRef(0);
 
   /** 拉取当前租户的账号列表，并维护 loading 状态与失败提示。 */
   async function load() {
+    const token = ++loadTokenRef.current;
     setLoading(true);
     try {
       const result = await api.get<EmployeeAccount[]>(`/api/auth/users?tenant_id=${TENANT_ID}`);
-      setRows(result);
+      if (token === loadTokenRef.current) setRows(result);
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : '加载账号失败');
+      if (token === loadTokenRef.current) {
+        notify.error(error instanceof Error ? error.message : '加载账号失败');
+      }
     } finally {
       setLoading(false);
     }
@@ -140,7 +190,7 @@ export default function AccountsPage({
   const filteredRows = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
     return rows.filter((row) => {
-      if (statusFilter !== 'all' && (row.status ?? 'active') !== statusFilter) return false;
+      if (statusFilter !== 'all' && effectiveStatus(row.status) !== statusFilter) return false;
       if (!keyword) return true;
       return [row.username, row.display_name || '', row.role === 'admin' ? '管理员' : '普通成员']
         .some((value) => value.toLowerCase().includes(keyword));
@@ -237,29 +287,42 @@ export default function AccountsPage({
   }
 
   /**
-   * 审核账号：调用状态接口通过或拒绝后刷新列表；失败时保留当前列表并提示错误。
+   * 审核账号：调用状态接口，用返回的账号就地更新该行。
+   *
+   * 不重新拉取列表；同时作废更新前后发出的列表请求，避免旧快照把新状态覆盖回去。
+   * 失败时保留当前列表并提示错误。
    */
   async function changeStatus(row: EmployeeAccount, status: AccountStatusTarget) {
+    if (statusPendingId === row.id) return;
+    setStatusPendingId(row.id);
+    // 作废更新前发出的列表请求。
+    loadTokenRef.current += 1;
     try {
-      await api.put(`/api/auth/users/${row.id}/status`, { tenant_id: TENANT_ID, status });
-      void load();
+      const updated = await api.put<{ status?: string }>(`/api/auth/users/${row.id}/status`, {
+        tenant_id: TENANT_ID,
+        status,
+      });
+      // 更新期间可能又有刷新发出，再次作废以保住本次就地更新。
+      loadTokenRef.current += 1;
+      setRows((prev) =>
+        prev.map((item) =>
+          item.id === row.id
+            ? { ...item, status: effectiveStatus(updated.status ?? status) }
+            : item,
+        ),
+      );
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : '保存账号失败');
+      notify.error(error instanceof Error ? error.message : '操作失败');
+    } finally {
+      setStatusPendingId(null);
     }
   }
 
   /** 渲染行操作菜单：审核入口 + 编辑入口 + 删除入口（管理员账号不可删除）。 */
   function renderActions(row: EmployeeAccount) {
     const isProtected = row.role === 'admin';
-    const statusActions: { label: string; status: AccountStatusTarget }[] =
-      row.status === 'pending'
-        ? [
-            { label: '通过', status: 'active' },
-            { label: '拒绝', status: 'rejected' },
-          ]
-        : row.status === 'rejected'
-          ? [{ label: '通过', status: 'active' }]
-          : [];
+    const actions = statusActions(row.status);
+    const statusBusy = statusPendingId === row.id;
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -269,16 +332,17 @@ export default function AccountsPage({
           <IconMore className="size-3.5" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className={MENU_CONTENT_CLASS}>
-          {statusActions.map((action) => (
+          {actions.map((action) => (
             <DropdownMenuItem
               key={action.label}
               className={MENU_ITEM_CLASS}
+              disabled={statusBusy}
               onSelect={() => void changeStatus(row, action.status)}
             >
               {action.label}
             </DropdownMenuItem>
           ))}
-          {statusActions.length > 0 && (
+          {actions.length > 0 && (
             <DropdownMenuSeparator className="my-[2px] bg-[#eef0f4]" />
           )}
           <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => openEdit(row)}>
