@@ -3393,5 +3393,16 @@
   "Provider 返回 taskId 后由 StaffDeck 轮询状态；配置外部回调地址后也可接收带任务密钥的回调。": "After the provider returns a taskId, StaffDeck polls its status. When an external callback URL is configured, StaffDeck can also receive callbacks authenticated with a per-task token.",
   "提交后当前对话立即结束；普通会话通过任务号查询，SOP 会在任务结束后从持久化检查点继续。": "The current turn ends immediately after submission. Regular conversations query by task ID, while SOPs continue from their durable checkpoint after the task finishes.",
   "客服账号名称": "Customer Service Account Name",
-  "(?:参考来源|参考资料|引用来源|资料来源)": "(?:References|Reference Materials|Citation Sources|Sources)"
+  "(?:参考来源|参考资料|引用来源|资料来源)": "(?:References|Reference Materials|Citation Sources|Sources)",
+  "修改密码": "Change password",
+  "当前密码不正确，请重试": "Current password is incorrect. Try again.",
+  "新密码不能与当前密码相同": "New password must differ from the current password.",
+  "新密码需为 8-128 位": "New password must be 8-128 characters.",
+  "修改密码失败，请稍后重试": "Could not change password. Try again later.",
+  "新密码至少 8 位": "New password must be at least 8 characters.",
+  "新密码最多 128 位": "New password must be at most 128 characters.",
+  "密码已修改": "Password changed",
+  "请输入当前密码以确认身份，新密码至少 8 位。": "Enter your current password to confirm, and choose a new password of at least 8 characters.",
+  "当前密码": "Current password",
+  "确认修改": "Confirm change"
 }

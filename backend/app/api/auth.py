@@ -168,6 +168,13 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    """自助改密请求体：当前口令用于确认身份，新口令限制 8-128 位。"""
+
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class UserCreateRequest(BaseModel):
     """管理员创建账号的请求体，role 缺省为 member。"""
 
@@ -301,6 +308,31 @@ def login(
 def me(user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> UserRead:
     """返回当前登录用户的账号信息与头像资源指针。"""
     return _user_read(user, _avatar_pointer_for(db, user.id))
+
+
+@router.post("/change-password", status_code=204)
+def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> Response:
+    """当前登录用户自助改密：先校验当前口令，拒绝复用旧口令后落库。
+
+    账号一律取自登录态而非请求参数，错误口令统一 403，不暴露账号是否存在；
+    新口令与当前口令相同时返回 400。JWT 无吊销列表，改密不会使旧 token 立即失效。
+    """
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=403, detail="current password is incorrect")
+    if verify_password(payload.new_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="new password must differ from the current password",
+        )
+    current_user.password_hash = hash_password(payload.new_password)
+    current_user.updated_at = utc_now()
+    db.add(current_user)
+    db.commit()
+    return Response(status_code=204)
 
 
 MAX_AVATAR_BYTES = 2 * 1024 * 1024

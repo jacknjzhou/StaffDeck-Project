@@ -177,8 +177,11 @@ STAFFDECK_DATABASE_URL="postgresql+psycopg://user:pass@host:5432/staffdeck" \
 - 对外 API `/api/v1`：Bearer `sd_live_*` 密钥（账号密钥 / 员工运行密钥 / API Client 密钥）。
 - **租户由凭证推导**，不再依赖请求参数：`tenant_id` 查询参数已改为可选，
   省略时以 JWT 为准；显式传入且不匹配仍返回 403。
-- 管理员重置密码：`PUT /api/auth/users/{user_id}`；当前没有用户自助改密页面，
-  引导管理员改密需由管理员操作或直接更新数据库（见任务 2 的改密端点）。
+- 自助改密：任一登录用户可从右上角账户菜单「修改密码」调用
+  `POST /api/auth/change-password`（需当前口令，成功返回 204）；管理员重置他人密码仍用
+  `PUT /api/auth/users/{user_id}`。
+- **已知限制**：JWT 没有吊销列表，用户改密后已签发的旧 token 在 14 天有效期内仍然可用。
+  口令泄露场景应同时让管理员禁用/重置该账号，或在后续版本引入 token 版本号校验。
 
 ### OIDC SSO（可选）
 
