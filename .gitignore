@@ -30,3 +30,8 @@ packaging/docker/.env
 
 # Database backups produced by scripts/backup_db.sh
 backups/
+
+# local tooling caches and runtime artifacts
+frontend-enterprise/.npm-cache/
+backend/.runtime_venv/
+frontend-enterprise/tsconfig.tsbuildinfo
