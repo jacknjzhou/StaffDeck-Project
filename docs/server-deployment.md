@@ -150,6 +150,9 @@ STAFFDECK_DATABASE_URL="postgresql+psycopg://user:pass@host:5432/staffdeck" \
 升级顺序：[备份](backup-restore.md) → 停 `worker`/`connector` → 跑迁移 →
 重建 `api` → 重建其余容器。
 
+> **含 `0003_user_status` 之后**：未执行迁移的库会让 `api` 启动即失败
+> （`assert_schema_current`）。升级必须先迁移再重建 `api`。
+
 ---
 
 ## 6. 依赖版本锁定（重要）
