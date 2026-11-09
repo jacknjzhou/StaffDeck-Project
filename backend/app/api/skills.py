@@ -235,7 +235,11 @@ def _validate_handoff_assignees(db: Session, content: SkillCard, tenant_id: str)
         )
     ).all()
     found_ids = {row.id for row in rows}
-    internal_ids = {row.id for row in rows if row.source == "web"}
+    internal_ids = {
+        row.id
+        for row in rows
+        if row.source == "web" and getattr(row, "status", "active") == "active"
+    }
     missing = assignee_ids - found_ids
     if missing:
         raise HTTPException(

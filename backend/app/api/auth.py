@@ -254,6 +254,13 @@ class UserUpdateRequest(BaseModel):
     role: Optional[Literal["admin", "member"]] = None
 
 
+class UserStatusUpdateRequest(BaseModel):
+    """账号状态变更请求体：只允许通过审核或拒绝/停用。"""
+
+    tenant_id: str
+    status: Literal["active", "rejected"]
+
+
 class UserChannelIdentity(BaseModel):
     """账号已绑定的渠道身份摘要，供处理人选择器判断可达性。"""
 
@@ -608,7 +615,11 @@ def list_users(
     statement = select(User).where(User.tenant_id == tenant_id)
     # 非管理员只需要为处理人选择器读取内部成员。不能依赖前端过滤，否则
     # include_channel=true 会把渠道客户及群聊虚拟账号暴露给任意租户成员。
-    if not is_admin_user(current_user) or not include_channel:
+    if not is_admin_user(current_user):
+        statement = statement.where(User.source == "web")
+        # 待审核/已拒绝账号不参与处理人选择器，避免把未开通的账号派给客户。
+        statement = statement.where(User.status == "active")
+    elif not include_channel:
         statement = statement.where(User.source == "web")
     rows = db.exec(statement.order_by(User.created_at.desc())).all()
     if include_channel:
@@ -780,6 +791,32 @@ def update_user(
         if user.id == current_user.id:
             raise HTTPException(status_code=400, detail="Cannot change your own account role")
         user.role = request.role
+    user.updated_at = utc_now()
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return _user_read(user)
+
+
+@router.put("/users/{user_id}/status", response_model=UserRead)
+def update_user_status(
+    user_id: str,
+    request: UserStatusUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> UserRead:
+    """管理员审核注册申请：通过(active)或拒绝/停用(rejected)。
+
+    禁止管理员把自己改为 rejected，避免唯一管理员自锁；
+    pending 只能由注册产生，不能通过本端点回设。
+    """
+    _require_admin(current_user, request.tenant_id)
+    user = db.get(User, user_id)
+    if not user or user.tenant_id != request.tenant_id:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if user.id == current_user.id and request.status == "rejected":
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+    user.status = request.status
     user.updated_at = utc_now()
     db.add(user)
     db.commit()

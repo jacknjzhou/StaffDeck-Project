@@ -38,7 +38,8 @@ def _client(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     SQLModel.metadata.create_all(engine)
-    with Session(engine) as db:
+    # expire_on_commit=False:种子用户提交后仍可读取属性,供 _token 直接签发 Bearer 头
+    with Session(engine, expire_on_commit=False) as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         for user in users or []:
             db.add(user)
@@ -271,3 +272,93 @@ def test_get_current_user_rejects_inactive_account() -> None:
         with pytest.raises(HTTPException) as exc:
             get_current_user(credentials=credentials, db=db)
         assert exc.value.status_code == 401
+
+
+def test_admin_can_approve_pending_account(monkeypatch) -> None:
+    """管理员把 pending 改为 active 后返回 200,且账号可登录。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    pending = User(id="user_p", tenant_id="tenant_demo", username="zhangsan",
+                   password_hash=hash_password("secret123"), status="pending")
+    client, _ = _client(monkeypatch, users=[admin, pending])
+    response = client.put(
+        "/api/auth/users/user_p/status",
+        json={"tenant_id": "tenant_demo", "status": "active"},
+        headers=_token(admin),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    login = client.post("/api/auth/login", json={
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123",
+    })
+    assert login.status_code == 200
+
+
+def test_non_admin_cannot_change_status(monkeypatch) -> None:
+    """非管理员调用审核端点返回 403。"""
+    member = User(id="user_m", tenant_id="tenant_demo", username="zhangsan",
+                  password_hash=hash_password("secret123"), status="active")
+    target = User(id="user_t", tenant_id="tenant_demo", username="lisi",
+                  password_hash=hash_password("secret123"), status="pending")
+    client, _ = _client(monkeypatch, users=[member, target])
+    response = client.put(
+        "/api/auth/users/user_t/status",
+        json={"tenant_id": "tenant_demo", "status": "active"},
+        headers=_token(member),
+    )
+    assert response.status_code == 403
+
+
+def test_admin_cannot_reject_self(monkeypatch) -> None:
+    """管理员不能把自己改为 rejected,避免唯一管理员自锁。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    client, _ = _client(monkeypatch, users=[admin])
+    response = client.put(
+        "/api/auth/users/user_admin/status",
+        json={"tenant_id": "tenant_demo", "status": "rejected"},
+        headers=_token(admin),
+    )
+    assert response.status_code == 400
+
+
+def test_status_endpoint_rejects_pending_value(monkeypatch) -> None:
+    """审核端点不接受把账号设回 pending(422,由 Literal 约束兜底)。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    target = User(id="user_t", tenant_id="tenant_demo", username="lisi",
+                  password_hash=hash_password("secret123"), status="active")
+    client, _ = _client(monkeypatch, users=[admin, target])
+    response = client.put(
+        "/api/auth/users/user_t/status",
+        json={"tenant_id": "tenant_demo", "status": "pending"},
+        headers=_token(admin),
+    )
+    assert response.status_code == 422
+
+
+def test_list_users_hides_pending_accounts_from_members(monkeypatch) -> None:
+    """非管理员的账号列表只含 active 的 web 账号,待审核账号不进处理人选择器。"""
+    member = User(id="user_m", tenant_id="tenant_demo", username="zhangsan",
+                  password_hash=hash_password("secret123"), status="active")
+    pending = User(id="user_p", tenant_id="tenant_demo", username="lisi",
+                   password_hash=hash_password("secret123"), status="pending")
+    client, _ = _client(monkeypatch, users=[member, pending])
+    response = client.get("/api/auth/users?tenant_id=tenant_demo", headers=_token(member))
+    assert response.status_code == 200
+    assert [row["username"] for row in response.json()] == ["zhangsan"]
+
+
+def test_list_users_shows_pending_accounts_to_admin(monkeypatch) -> None:
+    """管理员必须能看到待审核账号,否则审核页没有数据可审。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    pending = User(id="user_p", tenant_id="tenant_demo", username="lisi",
+                   password_hash=hash_password("secret123"), status="pending")
+    client, _ = _client(monkeypatch, users=[admin, pending])
+    response = client.get("/api/auth/users?tenant_id=tenant_demo", headers=_token(admin))
+    assert response.status_code == 200
+    assert {row["username"]: row["status"] for row in response.json()} == {
+        "admin": "active",
+        "lisi": "pending",
+    }
