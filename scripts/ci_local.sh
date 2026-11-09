@@ -36,6 +36,6 @@ echo "==> npm build (frontend-enterprise)"
 npm --prefix frontend-enterprise run build
 
 echo "==> npm test (frontend-enterprise)"
-npm --prefix frontend-enterprise test -- --run
+npm --prefix frontend-enterprise test
 
 echo "ci_local: all gates passed"

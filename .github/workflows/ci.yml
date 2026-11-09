@@ -5,14 +5,37 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   backend:
-    name: Backend (ruff + pytest)
+    name: Backend (ruff + pytest, PostgreSQL)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # PostgreSQL 集成用例是门禁的一部分而不是可选项：服务容器无条件启动，
+      # 作业级 STAFFDECK_TEST_PG_URL 固定指向它。工作流无法按条件声明 service，
+      # 因此不做「有仓库变量才跑 PG」的分支；本地没有该变量时用例仍然跳过。
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: staffdeck_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # conftest_pg.pg_url 在 CI 下缺少该变量会直接失败，避免 PG 路径静默退化成跳过。
+      STAFFDECK_TEST_PG_URL: postgresql+psycopg://postgres:postgres@localhost:5432/staffdeck_test
     steps:
       - uses: actions/checkout@v4
 
@@ -30,18 +53,13 @@ jobs:
       - name: Ruff
         run: ruff check backend
 
-      # PostgreSQL 集成用例是可选项：仓库变量 STAFFDECK_TEST_PG_URL 为空时
-      # conftest_pg.pg_url 会 skip 这些用例，默认不依赖任何数据库服务。
-      # 需要跑 PG 用例时，把该变量指向可用的 PostgreSQL（例如本地 compose
-      # 服务或其 CI 环境），无需改动工作流。
       - name: Pytest
-        env:
-          STAFFDECK_TEST_PG_URL: ${{ vars.STAFFDECK_TEST_PG_URL }}
         run: pytest backend/tests -q --timeout=120
 
   frontend:
     name: Frontend (build + vitest)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -58,4 +76,4 @@ jobs:
         run: npm --prefix frontend-enterprise run build
 
       - name: Vitest
-        run: npm --prefix frontend-enterprise test -- --run
+        run: npm --prefix frontend-enterprise test

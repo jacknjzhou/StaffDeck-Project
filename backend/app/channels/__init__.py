@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import threading
@@ -181,14 +182,22 @@ def channel_services_enabled() -> bool:
     return get_settings().staffdeck_role in {"all", "connector"}
 
 
+_ADAPTER_MODULES = (
+    "app.channels.adapters.dingtalk",
+    "app.channels.adapters.feishu",
+    "app.channels.adapters.wechat",
+    "app.channels.adapters.wechat_kf",
+    "app.channels.adapters.wecom",
+)
+
+
 def _ensure_adapters_registered() -> None:
     """导入各渠道适配器模块，触发模块级的适配器自注册。"""
-    # 各适配器模块导入即自注册(模块级 register_channel_adapter)
-    import app.channels.adapters.dingtalk
-    import app.channels.adapters.feishu
-    import app.channels.adapters.wechat
-    import app.channels.adapters.wechat_kf
-    import app.channels.adapters.wecom  # noqa: F401
+    # 各适配器模块导入即自注册(模块级 register_channel_adapter)。这里用
+    # import_module 而不是 import 语句：目的就是副作用，写成 import 会触发
+    # 「未使用导入」告警，只能靠 noqa 掩盖。
+    for module_name in _ADAPTER_MODULES:
+        importlib.import_module(module_name)
 
 
 def start_binding_ingress(channel: str, binding_id: str) -> None:
