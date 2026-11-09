@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import {
   BrowserRouter,
   Navigate,
@@ -39,37 +48,73 @@ import {
 } from "./employee";
 import AccountsPage from "./pages/AccountsPage";
 import AgentsPage from "./pages/AgentsPage";
-import ChannelsPage from "./pages/ChannelsPage";
-import ChatPage from "./pages/chat/ChatPage";
-import ChatGalleryPage from "./pages/chat/ChatGalleryPage";
-import DashboardPage from "./pages/dashboard/DashboardPage";
 import EmptyEmployeeState from "./components/EmptyEmployeeState";
-import DistillPage from "./pages/DistillPage";
-import GeneralSkillsPage, {
-  GeneralSkillEditPage,
-  GeneralSkillNewPage,
-} from "./pages/GeneralSkillsPage";
-import KnowledgeManagePage, { KnowledgeAddPage } from "./pages/KnowledgePage";
 import LoginPage from "./pages/LoginPage";
 import ModelsPage from "./pages/ModelsPage";
 import RuntimeSettingsPage from "./pages/RuntimeSettingsPage";
 import OpenPlatformPage from "./pages/OpenPlatformPage";
 import PersonaPage from "./pages/PersonaPage";
-import SkillsPage from "./pages/SkillsPage";
-import TeamChatPage from "./pages/TeamChatPage";
-import TeamDetailPage from "./pages/TeamDetailPage";
 import TeamsPage from "./pages/TeamsPage";
 import {
   ScheduledTaskEditPage,
   ScheduledTaskNewPage,
 } from "./pages/dashboard/ScheduledTasksTab";
-import ToolsPage, {
-  McpServerEditPage,
-  McpServerNewPage,
-  ToolEditPage,
-  ToolNewPage,
-  ToolTestPage,
-} from "./pages/ToolsPage";
+import { Skeleton } from "@/components/ui/skeleton";
+import { queryClient } from "./api/queryClient";
+import { useAgents } from "./api/useAgents";
+
+// 重路由组件按需加载，避免首屏把聊天、蒸馏与工具页面全部打进主包。
+const ChatPage = lazy(() => import("./pages/chat/ChatPage"));
+const ChatGalleryPage = lazy(() => import("./pages/chat/ChatGalleryPage"));
+const ChannelsPage = lazy(() => import("./pages/ChannelsPage"));
+const DashboardPage = lazy(() => import("./pages/dashboard/DashboardPage"));
+const DistillPage = lazy(() => import("./pages/DistillPage"));
+const GeneralSkillsPage = lazy(() => import("./pages/GeneralSkillsPage"));
+const GeneralSkillEditPage = lazy(() =>
+  import("./pages/GeneralSkillsPage").then((module) => ({
+    default: module.GeneralSkillEditPage,
+  })),
+);
+const GeneralSkillNewPage = lazy(() =>
+  import("./pages/GeneralSkillsPage").then((module) => ({
+    default: module.GeneralSkillNewPage,
+  })),
+);
+const KnowledgeManagePage = lazy(() => import("./pages/KnowledgePage"));
+const KnowledgeAddPage = lazy(() =>
+  import("./pages/KnowledgePage").then((module) => ({
+    default: module.KnowledgeAddPage,
+  })),
+);
+const SkillsPage = lazy(() => import("./pages/SkillsPage"));
+const TeamChatPage = lazy(() => import("./pages/TeamChatPage"));
+const TeamDetailPage = lazy(() => import("./pages/TeamDetailPage"));
+const ToolsPage = lazy(() => import("./pages/ToolsPage"));
+const ToolNewPage = lazy(() =>
+  import("./pages/ToolsPage").then((module) => ({
+    default: module.ToolNewPage,
+  })),
+);
+const ToolEditPage = lazy(() =>
+  import("./pages/ToolsPage").then((module) => ({
+    default: module.ToolEditPage,
+  })),
+);
+const ToolTestPage = lazy(() =>
+  import("./pages/ToolsPage").then((module) => ({
+    default: module.ToolTestPage,
+  })),
+);
+const McpServerNewPage = lazy(() =>
+  import("./pages/ToolsPage").then((module) => ({
+    default: module.McpServerNewPage,
+  })),
+);
+const McpServerEditPage = lazy(() =>
+  import("./pages/ToolsPage").then((module) => ({
+    default: module.McpServerEditPage,
+  })),
+);
 import { useIsMobile } from "./hooks/use-mobile";
 import {
   Dialog,
@@ -125,6 +170,22 @@ const EMPTY_AGENT_FORM: AgentCreateFormState = {
   copyFromAgentId: "",
 };
 
+/** 路由懒加载期间的内容区占位，避免主框架闪烁。 */
+function PageSkeleton() {
+  const { t } = useI18n();
+  return (
+    <div
+      className="flex flex-1 flex-col gap-[12px] p-[24px]"
+      role="status"
+      aria-label={t("页面加载中")}
+    >
+      <Skeleton className="h-[28px] w-[220px]" />
+      <Skeleton className="h-[180px] w-full" />
+      <Skeleton className="h-[180px] w-full" />
+    </div>
+  );
+}
+
 /**
  * 企业控制台主框架：承载侧边栏、数字员工作用域、模型配置提示与全部路由分发。
  *
@@ -143,8 +204,15 @@ function Shell({
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useI18n();
-  const [agents, setAgents] = useState<AgentProfileRead[]>([]);
-  const [agentsLoaded, setAgentsLoaded] = useState(false);
+  const {
+    data: agentsData,
+    isFetched: agentsFetched,
+    refetch: refetchAgents,
+  } = useAgents(TENANT_ID);
+  const agents = useMemo(() => agentsData ?? [], [agentsData]);
+  // 与旧实现一致：无论请求成功或失败，首次请求结束后即视为已加载。
+  const agentsLoaded = agentsFetched;
+  const [preferredAgentId, setPreferredAgentId] = useState("");
   const [scopeTeams, setScopeTeams] = useState<TeamRead[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState(
     () => window.localStorage.getItem(ENTERPRISE_AGENT_STORAGE_KEY) || "",
@@ -197,7 +265,6 @@ function Shell({
   }, [isDistillRoute, location.search]);
 
   useEffect(() => {
-    loadAgents();
     loadTeams();
   }, []);
 
@@ -247,7 +314,7 @@ function Shell({
 
   useEffect(() => {
     const onAgentRefresh = () => {
-      void loadAgents();
+      void refetchAgents();
     };
     window.addEventListener(
       "ultrarag-enterprise-agent-scope-refresh",
@@ -271,7 +338,10 @@ function Shell({
         const knownSelectableAgent = agents.some(
           (item) => item.id === nextAgentId && canUseAgentScope(item),
         );
-        if (!knownSelectableAgent) void loadAgents(nextAgentId);
+        if (!knownSelectableAgent) {
+          setPreferredAgentId(nextAgentId);
+          void refetchAgents();
+        }
       }
       setSelectedAgentId(nextAgentId);
     };
@@ -304,50 +374,45 @@ function Shell({
       .catch(() => setScopeTeams([]));
   }
 
-  /**
-   * 拉取数字员工列表，并据此校正当前选中的员工作用域。
-   *
-   * - 优先保留 preferredAgentId 或当前选中项；团队作用域不会被覆盖。
-   * - 选中项失效时按管理员/普通用户优先级回退，并同步持久化与广播事件。
-   * - 无论请求成功或失败，最终都会把 agentsLoaded 置为 true。
-   */
-  function loadAgents(preferredAgentId = "") {
-    return api
-      .get<AgentProfileRead[]>(`/api/enterprise/agents?tenant_id=${TENANT_ID}`)
-      .then((rows) => {
-        setAgents(rows);
-        const selectableRows = rows.filter((item) => canUseAgentScope(item));
-        setSelectedAgentId((current) => {
-          // A team scope is not part of the employee roster; keep it untouched.
-          if (isTeamScope(current)) return current;
-          const requestedAgentId = preferredAgentId || current;
-          if (
-            requestedAgentId &&
-            selectableRows.some((item) => item.id === requestedAgentId)
-          ) {
-            persistSharedAgentScope(requestedAgentId, auth.user.id);
-            return requestedAgentId;
-          }
-          const manageableRows = selectableRows.filter((item) =>
-            canManageEmployeeAgent(item, auth.user),
-          );
-          const next = isAdmin
-            ? preferredEmployeeAgent(selectableRows)?.id || ""
-            : preferredEmployeeAgent(manageableRows)?.id ||
-              preferredEmployeeAgent(selectableRows)?.id ||
-              "";
-          if (next) {
-            persistSharedAgentScope(next, auth.user.id);
-            if (next !== current) {
-              emitAgentScopeChange(next);
-            }
-          }
-          return next;
-        });
-      })
-      .catch(() => setAgents([]))
-      .finally(() => setAgentsLoaded(true));
-  }
+  // 员工列表更新后校正当前作用域：优先保留 preferredAgentId 或当前选中项，
+  // 团队作用域不会被覆盖，失效选中项按管理员/普通用户优先级回退。
+  useEffect(() => {
+    if (!agentsFetched) return;
+    if (agentsData === undefined) {
+      // 拉取失败时不做选中校正，但要丢弃一次性偏好，避免下次成功时覆盖用户的新选择。
+      if (preferredAgentId) setPreferredAgentId("");
+      return;
+    }
+    const selectableRows = agentsData.filter((item) => canUseAgentScope(item));
+    setSelectedAgentId((current) => {
+      // A team scope is not part of the employee roster; keep it untouched.
+      if (isTeamScope(current)) return current;
+      const requestedAgentId = preferredAgentId || current;
+      if (
+        requestedAgentId &&
+        selectableRows.some((item) => item.id === requestedAgentId)
+      ) {
+        persistSharedAgentScope(requestedAgentId, auth.user.id);
+        return requestedAgentId;
+      }
+      const manageableRows = selectableRows.filter((item) =>
+        canManageEmployeeAgent(item, auth.user),
+      );
+      const next = isAdmin
+        ? preferredEmployeeAgent(selectableRows)?.id || ""
+        : preferredEmployeeAgent(manageableRows)?.id ||
+          preferredEmployeeAgent(selectableRows)?.id ||
+          "";
+      if (next) {
+        persistSharedAgentScope(next, auth.user.id);
+        if (next !== current) {
+          emitAgentScopeChange(next);
+        }
+      }
+      return next;
+    });
+    if (preferredAgentId) setPreferredAgentId("");
+  }, [agentsData, agentsFetched, preferredAgentId, auth.user, isAdmin]);
 
   /** 判断该数字员工在当前用户下是否可作为作用域选中（仅限启用中的员工）。 */
   function canUseAgentScope(agent: AgentProfileRead): boolean {
@@ -507,7 +572,7 @@ function Shell({
             : baseMetadata,
         },
       );
-      await loadAgents();
+      await refetchAgents();
       changeAgentScope(created.id);
       setAgentCreateOpen(false);
       notify.success("数字员工创建成功");
@@ -581,12 +646,14 @@ function Shell({
                 : "persistent-distill hidden"
             }
           >
-            <DistillPage
-              active={isDistillRoute}
-              searchParamsOverride={distillSearchParams}
-              currentUser={auth.user}
-              onLogout={onLogout}
-            />
+            <Suspense fallback={isDistillRoute ? <PageSkeleton /> : null}>
+              <DistillPage
+                active={isDistillRoute}
+                searchParamsOverride={distillSearchParams}
+                currentUser={auth.user}
+                onLogout={onLogout}
+              />
+            </Suspense>
           </div>
           {!isDistillRoute && showEmployeeEmptyState && (
             <EmptyEmployeeState
@@ -596,6 +663,7 @@ function Shell({
             />
           )}
           {!isDistillRoute && !showEmployeeEmptyState && (
+            <Suspense fallback={<PageSkeleton />}>
             <Routes>
               <Route
                 path="/enterprise"
@@ -855,6 +923,7 @@ function Shell({
                 element={<Navigate to="/enterprise/dashboard" replace />}
               />
             </Routes>
+            </Suspense>
           )}
         </div>
       </div>
@@ -1042,19 +1111,21 @@ function AuthedApp({
   }
   if (location.pathname.startsWith(EnterpriseRoute.Workspace)) {
     return (
-      <Routes>
-        <Route
-          path="/workspace"
-          element={<Navigate to="/workspace/gallery" replace />}
-        />
-        <Route path="/workspace/gallery" element={<ChatGalleryPage />} />
-        <Route path="/workspace/chat" element={<ChatPage />} />
-        <Route
-          path="/workspace/chat/draft/:draftAgentId"
-          element={<ChatPage />}
-        />
-        <Route path="/workspace/chat/:sessionId" element={<ChatPage />} />
-      </Routes>
+      <Suspense fallback={<PageSkeleton />}>
+        <Routes>
+          <Route
+            path="/workspace"
+            element={<Navigate to="/workspace/gallery" replace />}
+          />
+          <Route path="/workspace/gallery" element={<ChatGalleryPage />} />
+          <Route path="/workspace/chat" element={<ChatPage />} />
+          <Route
+            path="/workspace/chat/draft/:draftAgentId"
+            element={<ChatPage />}
+          />
+          <Route path="/workspace/chat/:sessionId" element={<ChatPage />} />
+        </Routes>
+      </Suspense>
     );
   }
   return <Shell auth={auth} onLogout={onLogout} guidesCompleted={guidesCompleted} />;
@@ -1120,9 +1191,11 @@ export default function App() {
     setAuthChecked(true);
   }
 
+  // 生产入口 main.tsx 已注入同一 client；这里再包一层，保证测试直接渲染 <App /> 时也有查询上下文。
   return (
-    <TooltipProvider>
-      <BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <BrowserRouter>
         <Routes>
           <Route
             path="/*"
@@ -1144,6 +1217,7 @@ export default function App() {
         {auth && authChecked ? <UpdateReminder enabled={guidesCompleted} /> : null}
       </BrowserRouter>
       <Toaster richColors closeButton position="top-center" />
-    </TooltipProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
