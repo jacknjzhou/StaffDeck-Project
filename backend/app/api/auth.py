@@ -210,12 +210,16 @@ class ChangePasswordRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    """自助注册请求体：租户、账号、显示名与口令。"""
+    """自助注册请求体：租户、账号、显示名与口令。
+
+    口令不设 Field 长度约束：FastAPI 的校验错误体会原样回显 ``input``，
+    对一个未认证端点来说等于把提交的口令写回响应。长度在路由里自行校验。
+    """
 
     tenant_id: str
     username: str = Field(min_length=1, max_length=64)
     display_name: Optional[str] = Field(default=None, max_length=80)
-    password: str = Field(min_length=8, max_length=128)
+    password: str
 
     @field_validator("username", "password", mode="before")
     @classmethod
@@ -335,11 +339,25 @@ def register(
     拒绝后不允许自助重新注册，否则「拒绝」形同虚设。
     """
     _rate_limit_register(_request_host(request))
+    # 口令长度在这里校验而非 Pydantic:框架的 422 会把提交值原样回显在 input 字段。
+    if not 8 <= len(payload.password) <= 128:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_PASSWORD", "message": "password must be 8-128 characters"},
+        )
     ensure_tenant(db, payload.tenant_id)
     username = payload.username.strip()
     existing = db.exec(
         select(User).where(User.tenant_id == payload.tenant_id, User.username == username)
     ).first()
+    if not existing:
+        # login() 允许用唯一的 display_name 当登录名;注册必须一并占用,
+        # 否则匿名注册者能劫持他人的别名登录(200 变 401/403)。
+        existing = db.exec(
+            select(User).where(
+                User.tenant_id == payload.tenant_id, User.display_name == username
+            )
+        ).first()
     if existing:
         status = getattr(existing, "status", "active")
         code = {

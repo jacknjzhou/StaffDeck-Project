@@ -86,25 +86,85 @@ def test_register_rejects_duplicate_username(monkeypatch) -> None:
         "tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123",
     })
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "REGISTRATION_PENDING"
+    detail = response.json()["detail"]
+    assert set(detail) == {"code", "message"}
+    assert detail["code"] == "REGISTRATION_PENDING"
+
+
+def test_register_rejected_account_reports_rejected_code(monkeypatch) -> None:
+    """同名账号已被拒绝时返回 REGISTRATION_REJECTED,而不是笼统的已存在。"""
+    existing = User(id="user_r", tenant_id="tenant_demo", username="zhangsan",
+                    password_hash=hash_password("secret"), status="rejected")
+    client, _ = _client(monkeypatch, users=[existing])
+    response = client.post("/api/auth/register", json={
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123",
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "REGISTRATION_REJECTED"
+
+
+def test_register_active_account_reports_account_exists(monkeypatch) -> None:
+    """同名 active 账号返回 ACCOUNT_EXISTS,与待审核/已拒绝可区分。"""
+    existing = User(id="user_ok", tenant_id="tenant_demo", username="zhangsan",
+                    password_hash=hash_password("secret"), status="active")
+    client, _ = _client(monkeypatch, users=[existing])
+    response = client.post("/api/auth/register", json={
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123",
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ACCOUNT_EXISTS"
+
+
+def test_register_cannot_shadow_display_name_alias(monkeypatch) -> None:
+    """注册不得占用他人 display_name:否则登录别名会被劫持。"""
+    existing = User(id="user_li", tenant_id="tenant_demo", username="li.si",
+                    display_name="zhangsan", password_hash=hash_password("secret123"),
+                    status="active")
+    client, _ = _client(monkeypatch, users=[existing])
+    response = client.post("/api/auth/register", json={
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123",
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ACCOUNT_EXISTS"
+    # 别名登录必须仍然可用:注册不能把它变成 401/403。
+    login = client.post("/api/auth/login", json={
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123",
+    })
+    assert login.status_code == 200
 
 
 def test_register_rejects_unknown_tenant(monkeypatch) -> None:
-    """租户不存在时返回 404,不建任何账号。"""
+    """租户不存在时返回 404,并带上租户缺失的具体原因,不建任何账号。"""
     client, _ = _client(monkeypatch)
     response = client.post("/api/auth/register", json={
         "tenant_id": "tenant_missing", "username": "zhangsan", "password": "secret123",
     })
     assert response.status_code == 404
+    # 单看 404 无法区分「路由缺失」与「租户不存在」,必须断言具体原因。
+    assert "Tenant not found" in response.json()["detail"]
 
 
 def test_register_rejects_short_password(monkeypatch) -> None:
-    """口令少于 8 位返回 422(由 Pydantic 约束兜底)。"""
+    """口令少于 8 位返回 422,且响应体不得回显提交的口令。"""
     client, _ = _client(monkeypatch)
     response = client.post("/api/auth/register", json={
-        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "short",
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "s3cr3t",
     })
     assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INVALID_PASSWORD"
+    assert "s3cr3t" not in response.text
+
+
+def test_register_rejects_overlong_password_without_echo(monkeypatch) -> None:
+    """口令超过 128 位返回 422,且不得在响应体里回显整段口令。"""
+    client, _ = _client(monkeypatch)
+    secret = "s3cr3t-" + "x" * 200
+    response = client.post("/api/auth/register", json={
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": secret,
+    })
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INVALID_PASSWORD"
+    assert secret not in response.text
 
 
 def test_register_is_rate_limited(monkeypatch) -> None:
@@ -114,3 +174,34 @@ def test_register_is_rate_limited(monkeypatch) -> None:
     assert client.post("/api/auth/register", json=payload).status_code == 201
     assert client.post("/api/auth/register", json={**payload, "username": "a2"}).status_code == 201
     assert client.post("/api/auth/register", json={**payload, "username": "a3"}).status_code == 429
+
+
+def test_register_quota_is_independent_from_login_quota(monkeypatch) -> None:
+    """注册窗口与登录窗口互不占用:打满登录配额后注册仍可成功。"""
+    user = User(id="user_a", tenant_id="tenant_demo", username="zhangsan",
+                password_hash=hash_password("secret123"), status="active")
+    client, _ = _client(monkeypatch, limit=2, users=[user])
+    bad_login = {
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "wrong-pass",
+    }
+    assert client.post("/api/auth/login", json=bad_login).status_code == 401
+    assert client.post("/api/auth/login", json=bad_login).status_code == 401
+    assert client.post("/api/auth/login", json=bad_login).status_code == 429
+    register = {"tenant_id": "tenant_demo", "username": "lisi", "password": "secret123"}
+    assert client.post("/api/auth/register", json=register).status_code == 201
+
+
+def test_login_quota_is_independent_from_register_quota(monkeypatch) -> None:
+    """反向同样成立:打满注册配额后登录仍可成功。"""
+    user = User(id="user_a", tenant_id="tenant_demo", username="zhangsan",
+                password_hash=hash_password("secret123"), status="active")
+    client, _ = _client(monkeypatch, limit=2, users=[user])
+    register = {"tenant_id": "tenant_demo", "username": "lisi", "password": "secret123"}
+    assert client.post("/api/auth/register", json=register).status_code == 201
+    second = {**register, "username": "wangwu"}
+    third = {**register, "username": "zhaoliu"}
+    assert client.post("/api/auth/register", json=second).status_code == 201
+    assert client.post("/api/auth/register", json=third).status_code == 429
+    login = {"tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123"}
+    assert client.post("/api/auth/login", json=login).status_code == 200
+
