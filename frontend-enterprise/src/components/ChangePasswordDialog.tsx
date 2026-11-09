@@ -28,9 +28,13 @@ function errorMessage(error: unknown): string {
     case 403:
       return '当前密码不正确，请重试';
     case 400:
-      return '新密码不能与当前密码相同';
+      return error instanceof Error && error.message.includes('no local password')
+        ? '账户未设置本地密码，请联系管理员或使用单点登录'
+        : '新密码不能与当前密码相同';
     case 422:
       return '新密码需为 8-128 位';
+    case 429:
+      return '尝试过于频繁，请稍后再试';
     default:
       return error instanceof Error && error.message
         ? error.message
@@ -69,11 +73,12 @@ export default function ChangePasswordDialog({
     event.preventDefault();
     if (submitting) return;
     setError('');
-    if (newPassword.length < 8) {
+    const trimmedPassword = newPassword.trim();
+    if (trimmedPassword.length < 8) {
       setError('新密码至少 8 位');
       return;
     }
-    if (newPassword.length > 128) {
+    if (trimmedPassword.length > 128) {
       setError('新密码最多 128 位');
       return;
     }
@@ -81,7 +86,7 @@ export default function ChangePasswordDialog({
     try {
       await api.post('/api/auth/change-password', {
         current_password: currentPassword,
-        new_password: newPassword,
+        new_password: trimmedPassword,
       });
       notify.success('密码已修改');
       onClose();
@@ -101,7 +106,6 @@ export default function ChangePasswordDialog({
     >
       <DialogContent
         aria-describedby="change-password-description"
-        data-i18n-ignore
         className="w-[calc(100%-2rem)] gap-0 overflow-hidden rounded-[18px] border-0 bg-white p-0 shadow-[0_28px_80px_rgba(24,31,46,0.20)] sm:max-w-[420px]"
       >
         <DialogHeader className="border-b border-[#e9ecf2] px-[26px] py-[22px]">
@@ -127,6 +131,7 @@ export default function ChangePasswordDialog({
               <Input
                 id="change-password-current"
                 type="password"
+                autoComplete="current-password"
                 value={currentPassword}
                 onChange={(event) => setCurrentPassword(event.target.value)}
                 disabled={submitting}
@@ -141,6 +146,7 @@ export default function ChangePasswordDialog({
               <Input
                 id="change-password-new"
                 type="password"
+                autoComplete="new-password"
                 value={newPassword}
                 onChange={(event) => setNewPassword(event.target.value)}
                 disabled={submitting}

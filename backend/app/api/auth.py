@@ -9,7 +9,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from redis.exceptions import RedisError
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -34,7 +34,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # 登录限速(成功与失败都计数):固定窗口 60 秒。配置了 Redis 时跨进程共享,
 # 否则退化为进程内计数;身份键同时带来源 IP 与用户名,避免 NAT 放大或换用户名绕过。
-_LOGIN_RATE_KEY_PREFIX = "staffdeck:login:"
+_RATE_LIMIT_KEY_ROOT = "staffdeck:"
+_LOGIN_RATE_KEY_PREFIX = f"{_RATE_LIMIT_KEY_ROOT}login:"
 _LOGIN_RATE_WINDOW_SECONDS = 60
 # 进程内窗口的键上限:超过后先清理过期项,防止伪造用户名把字典撑大。
 _LOGIN_RATE_WINDOW_MAX_KEYS = 1024
@@ -115,12 +116,12 @@ def _hit_memory_window(identity: str) -> int:
         return count
 
 
-def _rate_limit_login(identity: str) -> None:
-    """固定窗口登录限速,超限抛 429。
+def _rate_limit(identity: str, *, redis_prefix: str, detail: str) -> None:
+    """固定窗口限速,超限抛 429;Redis 不可用时降级为进程内窗口。
 
     配置 Redis 时用 INCR + EXPIRE 跨进程共享;每次 INCR 后补一次 NX 过期,
     修复历史上缺失 TTL 的键。Redis 异常只记日志并降级到进程内窗口,
-    登录接口绝不能因此 500。密码与凭据永远不写日志。
+    限速层绝不能因此让业务接口 500。密码与凭据永远不写日志。
     """
     settings = _settings()
     limit = int(settings.login_rate_limit_per_minute or 0)
@@ -131,14 +132,14 @@ def _rate_limit_login(identity: str) -> None:
     if url:
         try:
             client = _login_redis(url)
-            key = f"{_LOGIN_RATE_KEY_PREFIX}{identity}"
+            key = f"{redis_prefix}{identity}"
             count = int(client.incr(key))
             # NX: 只在键还没有 TTL 时补,避免把已有窗口续期;同时修复
             # INCR 成功后进程崩溃留下的永久键。
             client.expire(key, _LOGIN_RATE_WINDOW_SECONDS, nx=True)
         except (RedisError, OSError):
             logger.exception(
-                "login rate limit: redis unavailable, falling back to memory"
+                "rate limit: redis unavailable, falling back to memory"
             )
             count = None
     if count is None:
@@ -146,9 +147,27 @@ def _rate_limit_login(identity: str) -> None:
     if count > limit:
         raise HTTPException(
             status_code=429,
-            detail="too many login attempts",
+            detail=detail,
             headers={"Retry-After": str(_LOGIN_RATE_WINDOW_SECONDS)},
         )
+
+
+def _rate_limit_login(identity: str) -> None:
+    """登录限速:成功与失败都计数,独立窗口,超限抛 429。"""
+    _rate_limit(
+        identity,
+        redis_prefix=_LOGIN_RATE_KEY_PREFIX,
+        detail="too many login attempts",
+    )
+
+
+def _rate_limit_change_password(user_id: str) -> None:
+    """自助改密限速:按账号独立计数,不占用登录接口的配额。"""
+    _rate_limit(
+        f"change-password:{user_id}",
+        redis_prefix=_RATE_LIMIT_KEY_ROOT,
+        detail="too many password change attempts",
+    )
 
 
 def _reset_login_rate_limit_state() -> None:
@@ -173,6 +192,12 @@ class ChangePasswordRequest(BaseModel):
 
     current_password: str
     new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password", mode="before")
+    @classmethod
+    def _strip_new_password(cls, value: object) -> object:
+        """先去掉首尾空白再做长度校验，纯空白口令会因不足 8 位被拒绝。"""
+        return value.strip() if isinstance(value, str) else value
 
 
 class UserCreateRequest(BaseModel):
@@ -319,8 +344,13 @@ def change_password(
     """当前登录用户自助改密：先校验当前口令，拒绝复用旧口令后落库。
 
     账号一律取自登录态而非请求参数，错误口令统一 403，不暴露账号是否存在；
-    新口令与当前口令相同时返回 400。JWT 无吊销列表，改密不会使旧 token 立即失效。
+    新口令与当前口令相同时返回 400，OIDC 账号明确提示未设置本地口令。
+    JWT 无吊销列表，改密不会使旧 token 立即失效。
     """
+    if current_user.source == "oidc" or current_user.password_hash == "oidc":
+        raise HTTPException(status_code=400, detail="account has no local password")
+    # 先计数再校验口令:错误口令也计入窗口,避免绕过限速无限尝试。
+    _rate_limit_change_password(current_user.id)
     if not verify_password(payload.current_password, current_user.password_hash):
         raise HTTPException(status_code=403, detail="current password is incorrect")
     if verify_password(payload.new_password, current_user.password_hash):

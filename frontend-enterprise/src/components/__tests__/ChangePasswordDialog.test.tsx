@@ -31,7 +31,10 @@ beforeEach(() => {
   mocks.notifySuccess.mockReset();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.localStorage.removeItem('staffdeck_locale');
+});
 
 /** 渲染带 i18n 上下文的改密弹窗（Input 内部依赖该上下文）。 */
 function renderDialog(onClose = vi.fn()) {
@@ -77,6 +80,36 @@ describe('ChangePasswordDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  /** 验证 400（新口令与旧口令相同）映射为复用提示，不关闭弹窗。 */
+  it('shows the reuse message on 400', async () => {
+    mocks.post.mockRejectedValue(
+      Object.assign(new Error('new password must differ from the current password'), {
+        status: 400,
+      }),
+    );
+    const onClose = renderDialog();
+
+    await submitPasswords('old-pass-123', 'old-pass-123');
+
+    expect(await screen.findByText('新密码不能与当前密码相同')).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  /** 验证 OIDC 账号的 400 展示“未设置本地密码”，而不是复用提示。 */
+  it('shows the no-local-password message for OIDC accounts', async () => {
+    mocks.post.mockRejectedValue(
+      Object.assign(new Error('account has no local password'), { status: 400 }),
+    );
+    const onClose = renderDialog();
+
+    await submitPasswords('old-pass-123', 'new-pass-123');
+
+    expect(
+      await screen.findByText('账户未设置本地密码，请联系管理员或使用单点登录'),
+    ).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   /** 验证成功后调用接口并关闭弹窗。 */
   it('submits the new password and closes on success', async () => {
     mocks.post.mockResolvedValue({});
@@ -89,5 +122,15 @@ describe('ChangePasswordDialog', () => {
       current_password: 'old-pass-123',
       new_password: 'new-pass-123',
     });
+  });
+
+  /** 验证英文环境下弹窗文案会被运行时翻译（不再被 data-i18n-ignore 挡住）。 */
+  it('localizes the dialog when English is selected', async () => {
+    window.localStorage.setItem('staffdeck_locale', 'en-US');
+    renderDialog();
+
+    expect(await screen.findByText('Change password')).toBeTruthy();
+    expect(await screen.findByLabelText('Current password')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Confirm change' })).toBeTruthy();
   });
 });

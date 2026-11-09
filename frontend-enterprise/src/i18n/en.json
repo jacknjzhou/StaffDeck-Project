@@ -3404,5 +3404,7 @@
   "密码已修改": "Password changed",
   "请输入当前密码以确认身份，新密码至少 8 位。": "Enter your current password to confirm, and choose a new password of at least 8 characters.",
   "当前密码": "Current password",
-  "确认修改": "Confirm change"
+  "确认修改": "Confirm change",
+  "账户未设置本地密码，请联系管理员或使用单点登录": "This account has no local password. Contact an administrator or use single sign-on.",
+  "尝试过于频繁，请稍后再试": "Too many attempts. Try again later."
 }
