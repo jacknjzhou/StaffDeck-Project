@@ -131,13 +131,17 @@ docker compose exec -T postgres dropdb -U staffdeck staffdeck_restore
    若数据库已损坏到 `pg_dump` 连不上，退而冷备数据卷（先停 postgres 保证文件一致）：
 
    ```bash
-   cd packaging/docker
+   REPO_ROOT="$(git rev-parse --show-toplevel)"
+   cd "${REPO_ROOT}/packaging/docker"
    docker compose stop postgres
    volume=$(docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' "$(docker compose ps -aq postgres)")
-   docker run --rm -v "${volume}:/data:ro" -v "$PWD":/backup alpine \
+   docker run --rm -v "${volume}:/data:ro" -v "${REPO_ROOT}/backups:/backup" alpine \
      tar czf "/backup/pgdata-$(date +%F-%H%M%S).tar.gz" -C /data .
    docker compose start postgres
    ```
+
+   快照落在仓库的 `backups/`（已被 `.gitignore` 与 `.dockerignore` 排除），与其他备份同一处，
+   不要留在 `packaging/docker` 里污染构建上下文。
 
    数据卷快照是字节级冷备，只在 `pg_dump` 不可用时使用：恢复时整卷回填，不能按表查询。
 
@@ -165,7 +169,7 @@ docker compose exec -T postgres dropdb -U staffdeck staffdeck_restore
    ```bash
    cd "$(git rev-parse --show-toplevel)"   # 回到仓库根目录，保证 -f 路径正确
    docker compose -f packaging/docker/docker-compose.yml run --rm --no-deps \
-     --entrypoint "python -m app.db.migrations_cli upgrade" api
+     --entrypoint python api -m app.db.migrations_cli upgrade
    ```
 
    必须用 `--entrypoint` 直接跑迁移 CLI，不要用 `-e STAFFDECK_RUN_MIGRATIONS=1 api`：
@@ -189,5 +193,5 @@ docker compose exec -T postgres dropdb -U staffdeck staffdeck_restore
 | `backup dir does not exist` | 备份目录未创建或挂载失败 | `mkdir -p <dir>` 后重跑；检查挂载点 |
 | `pg_dump: error: connection to server ... failed` | postgres 容器未运行或密码不符 | `docker compose ps`；核对 `.env` 中的 `STAFFDECK_PG_PASSWORD` |
 | 恢复后应用 503 且 `database=false` | 恢复未完成或库名/角色不符 | 查 `/api/ready` 与 postgres 日志 |
-| 恢复后 `alembic_version` 落后 | 备份早于最近一次迁移 | 在仓库根目录执行 `docker compose -f packaging/docker/docker-compose.yml run --rm --no-deps --entrypoint "python -m app.db.migrations_cli upgrade" api` |
+| 恢复后 `alembic_version` 落后 | 备份早于最近一次迁移 | 在仓库根目录执行 `docker compose -f packaging/docker/docker-compose.yml run --rm --no-deps --entrypoint python api -m app.db.migrations_cli upgrade` |
 | 备份文件明显偏小 | `pg_dump` 中途失败被 `gzip -t` 拦下 | 不会生成正式文件；查磁盘空间与容器日志 |

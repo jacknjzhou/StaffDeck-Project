@@ -76,3 +76,26 @@ def test_probe_engine_does_not_share_the_app_pool():
     assert isinstance(probe.pool, NullPool)
     assert probe.url == main.engine.url
     assert probe.pool._pre_ping is False
+
+
+def test_probe_engine_is_disposed_on_shutdown(monkeypatch):
+    """关闭钩子尽力释放探针引擎，避免进程级单例留下未关闭的池句柄。"""
+
+    class _DisposableEngine:
+        """记录 dispose 调用的替身引擎。"""
+
+        def __init__(self) -> None:
+            """初始化未释放状态。"""
+            self.disposed = False
+
+        def dispose(self) -> None:
+            """标记已释放。"""
+            self.disposed = True
+
+    probe = _DisposableEngine()
+    monkeypatch.setattr(main, "_probe_engine", probe)
+
+    main._dispose_probe_engine()
+
+    assert probe.disposed is True
+    assert main._probe_engine is None

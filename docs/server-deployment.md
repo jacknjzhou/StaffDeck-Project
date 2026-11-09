@@ -62,16 +62,17 @@ PORT=8080 bash scripts/compose_smoke.sh  # 换端口
 - [ ] PostgreSQL 与 Redis **没有**映射到公网端口；compose 默认只在容器网络内暴露。
 - [ ] nginx 前面有 TLS 终止（云负载均衡或宿主 nginx），并强制 HTTPS；`APP_SECRET`
       与 OIDC secret 只存在于服务端环境变量。
-- [ ] 已配置 `pg_dump` 定时备份，并至少完成一次恢复演练；备份文件与
-      `STAFFDECK_APP_SECRET` 分开保管。
+- [ ] 已配置 `pg_dump` 定时备份（见[备份与恢复](backup-restore.md)），并至少完成一次
+      恢复演练；备份文件与 `STAFFDECK_APP_SECRET` 分开保管。
 - [ ] `STAFFDECK_RUN_MIGRATIONS=1` 只在 `api` 容器上；升级时先备份，再滚动重建。
 - [ ] 已确认 `curl -fsS http://<host>/api/health` 返回 200，且日志无租约冲突。
 - [ ] 若启用 OIDC，`OIDC_REDIRECT_URI` 与 `FRONTEND_BASE_URL` 都指向对外域名，
       且 IdP 侧回调地址完全一致。
 
-> 当前版本的 `APP_SECRET` 仍有内置默认值，服务不会因默认值拒绝启动；管理员
-> 账号也仍会在空库初始化时创建。**在上述门禁落地前，必须人工完成前两项检查**，
-> 不能把“能启动”当作“可上线”。对应加固任务见优化计划的任务 1–2。
+> **生产环境启动时即校验 `APP_SECRET`**：内置默认值、短于 32 字符，或包含
+> `change-me`/`changeme`/`replace-me`/`example` 等占位片段，都会直接拒绝启动
+> （实现见 `backend/app/config.py`）。管理员账号仍会在空库初始化时创建，因此
+> “能启动”不等于“可上线”：密钥强度、默认口令替换与 TLS 仍需人工确认。
 
 ---
 
@@ -146,7 +147,8 @@ STAFFDECK_DATABASE_URL="postgresql+psycopg://user:pass@host:5432/staffdeck" \
 > 的 schema 变更应以迁移为准，否则新建表/列不会在其他实例上线。启动时的 schema
 > 版本校验与 PostgreSQL 增量迁移是优化计划的任务 4。
 
-升级顺序：备份 → 停 `worker`/`connector` → 跑迁移 → 重建 `api` → 重建其余容器。
+升级顺序：[备份](backup-restore.md) → 停 `worker`/`connector` → 跑迁移 →
+重建 `api` → 重建其余容器。
 
 ---
 
@@ -290,3 +292,4 @@ SQLite → PostgreSQL 没有自动迁移工具。推荐路径：
 - 服务端化总体设计：`docs/superpowers/specs/2026-10-22-staffdeck-server-side-design.md`
 - deepchat 接入方案：`docs/superpowers/specs/2026-10-22-deepchat-side-integration-design.md`
 - 公开 API 使用说明：`docs/open-api-v1.md`
+- 备份与恢复：[docs/backup-restore.md](backup-restore.md)

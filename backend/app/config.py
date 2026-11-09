@@ -126,16 +126,30 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_production_secrets(self) -> "Settings":
-        """生产环境拒绝默认或过短的 APP_SECRET，把配置错误提前到进程启动阶段。"""
+        """生产环境拒绝默认、占位或过短的 APP_SECRET，把配置错误提前到进程启动阶段。"""
         if not self.is_production:
             return self
-        if self.app_secret == "change-me-in-development" or len(self.app_secret) < 32:
+        lower_secret = self.app_secret.lower()
+        placeholder_hits = [
+            token for token in _PLACEHOLDER_SECRET_TOKENS if token in lower_secret
+        ]
+        if (
+            self.app_secret == "change-me-in-development"
+            or placeholder_hits
+            or len(self.app_secret) < 32
+        ):
             raise ValueError(
-                "APP_SECRET must be set to a random value of at least 32 characters "
-                "in production; generate one with `python -c \"import secrets;"
+                "APP_SECRET must be a random value of at least 32 characters in production, "
+                "not the built-in default or a placeholder such as 'change-me'/'example'; "
+                "generate one with `python -c \"import secrets;"
                 "print(secrets.token_urlsafe(48))\"`"
             )
         return self
+
+
+# 复制模板后仍能通过长度检查的占位值：出现这些片段即视为未完成上线配置。
+# 定义在类之后：校验器在调用时解析模块全局，导入期顺序不影响。
+_PLACEHOLDER_SECRET_TOKENS = ("change-me", "changeme", "replace-me", "example")
 
 
 @lru_cache

@@ -48,10 +48,13 @@ services:
     healthcheck:
       # /api/ready 同时校验数据库与角色租约：容器 healthy 才代表真的能服务，
       # 而不只是进程还在。unhealthy 只影响 compose 的依赖门控与 `docker compose ps`，
-      # 不会自动摘流量或重启容器——流量摘除由 nginx/上层负载均衡负责。
+      # 不会自动摘流量，随附的 nginx 也不读探针。真正的止损靠进程自身：续期发现
+      # 租约被他人接管（renew() 返回 False）会直接退出，由 restart policy 重启并
+      # 重新竞争 api 租约；db/redis 抖动只降级为 unhealthy，不退出。
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5173/api/ready')\""]
       interval: 10s
-      timeout: 5s
+      # 探针最坏约 6s（建连 3s + statement_timeout 3s），再留容器内 python 启动余量。
+      timeout: 10s
       # 首次迁移可能很慢（大表加列/回填），给足超时；健康后才放行 worker/connector。
       retries: 30
       start_period: 120s

@@ -14,3 +14,6 @@ frontend-enterprise/dist
 packaging/docker/.env
 docs
 staffdeck-architecture-report
+
+# 本机数据库备份（scripts/backup_db.sh 的输出）不得进入构建上下文
+backups/

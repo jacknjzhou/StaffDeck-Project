@@ -1,5 +1,7 @@
 """生产配置门禁：生产环境必须显式提供强 APP_SECRET，开发环境保留默认值。"""
 
+from pathlib import Path
+
 import pytest
 
 from app.config import Settings
@@ -28,6 +30,34 @@ def test_production_rejects_short_secret(monkeypatch):
     """生产环境的 APP_SECRET 少于 32 字符时拒绝启动。"""
     with pytest.raises(ValueError, match="APP_SECRET"):
         _settings(monkeypatch, environment="production", app_secret="short-secret")
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "change-me-long-random-replace-with-32-chars-min",
+        "changeme-changeme-changeme-changeme",
+        "replace-me-please-with-a-real-secret-value",
+        "example-secret-example-secret-0123",
+        "ExAmPlE-Secret-0123456789abcdef",
+    ],
+)
+def test_production_rejects_placeholder_secrets(monkeypatch, secret):
+    """模板/占位片段即使长度达标也必须被拒绝：复制 .env.example 不能启动生产。"""
+    with pytest.raises(ValueError, match="APP_SECRET"):
+        _settings(monkeypatch, environment="production", app_secret=secret)
+
+
+def test_production_rejects_packaged_env_example_secret(monkeypatch):
+    """打包模板里的 STAFFDECK_APP_SECRET 原样复制到生产环境必须拒绝启动。"""
+    example = Path(__file__).resolve().parents[2] / "packaging/docker/.env.example"
+    value = next(
+        line.split("=", 1)[1].strip()
+        for line in example.read_text(encoding="utf-8").splitlines()
+        if line.startswith("STAFFDECK_APP_SECRET=")
+    )
+    with pytest.raises(ValueError, match="APP_SECRET"):
+        _settings(monkeypatch, environment="production", app_secret=value)
 
 
 def test_production_accepts_strong_secret(monkeypatch):

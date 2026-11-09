@@ -29,17 +29,59 @@ if [[ ! -d "${BACKUP_DIR}" ]]; then
   exit 1
 fi
 
-# 上次被 kill -9 或断电留下的半成品：超过 1 小时仍存在就不是并发备份，删掉即可。
+# 同一备份目录只允许一个实例：拿到锁后才会清理残留、写文件，避免把并发备份正在写的
+# .partial 当残留删掉，也避免两次 pg_dump 抢同一秒的文件名。
+# 优先 flock（进程被 kill -9 时内核自动释放）；macOS 默认没有 flock，退化为原子 mkdir
+# 锁目录，并对超过 6 小时的陈旧锁自动接管，避免一次 kill -9 永久堵死备份。
+LOCK_FILE="${BACKUP_DIR}/.backup.lock"
+LOCK_DIR="${BACKUP_DIR}/.backup.lock.d"
+lock_held=""
+tmp=""
+
+cleanup() {
+  if [[ -n "${tmp}" ]]; then
+    rm -f "${tmp}"
+  fi
+  if [[ "${lock_held}" == "dir" ]]; then
+    rmdir "${LOCK_DIR}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+# 收到 INT/TERM 时先退出，再由 EXIT trap 清掉半成品与锁；退出码保留“被信号终止”的语义。
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"${LOCK_FILE}"
+  if ! flock -n 9; then
+    printf 'another backup is already running (lock: %s)\n' "${LOCK_FILE}" >&2
+    exit 1
+  fi
+else
+  if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+    stale="$(find "${LOCK_DIR}" -maxdepth 0 -mmin +360 2>/dev/null || true)"
+    if [[ -z "${stale}" ]]; then
+      printf 'another backup is already running (lock: %s)\n' "${LOCK_DIR}" >&2
+      exit 1
+    fi
+    printf 'warning: reclaiming stale backup lock older than 6h: %s\n' "${LOCK_DIR}" >&2
+    rmdir "${LOCK_DIR}" 2>/dev/null || true
+    mkdir "${LOCK_DIR}" 2>/dev/null || {
+      printf 'cannot reclaim backup lock: %s\n' "${LOCK_DIR}" >&2
+      exit 1
+    }
+  fi
+  lock_held="dir"
+fi
+
+# 上次被 kill -9 或断电留下的半成品：超过 1 小时仍存在就不是并发备份（锁保证没有
+# 正在跑的本脚本实例），删掉即可。
 find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'staffdeck-*.sql.gz.partial' \
   -mmin +60 -delete || printf 'warning: failed to sweep stale partial backups\n' >&2
 
 target="${BACKUP_DIR}/staffdeck-$(date +%F-%H%M%S).sql.gz"
 # 先写临时文件再改名：pg_dump 中途失败时不会留下一个看起来完整的 .sql.gz。
 tmp="${target}.partial"
-trap 'rm -f "${tmp}"' EXIT
-# 收到 INT/TERM 时先退出，再由 EXIT trap 清掉半成品；退出码保留“被信号终止”的语义。
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 docker compose -f "${COMPOSE_FILE}" exec -T postgres \
   pg_dump -U staffdeck staffdeck | gzip > "${tmp}"
@@ -53,7 +95,8 @@ gzip -t "${tmp}"
 
 mv "${tmp}" "${target}"
 chmod 600 "${target}"
-trap - EXIT
+# 已落盘，清掉临时文件路径；EXIT trap 继续负责释放锁。
+tmp=""
 
 # 保留最近 N 天的备份；find 的 -mtime 以 24 小时为单位向上取整，14 即约两周。
 # 清理失败（只读挂载、权限不足）不能影响本次备份的成功返回。
