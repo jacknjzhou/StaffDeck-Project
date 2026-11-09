@@ -125,4 +125,47 @@ describe('LoginPage', () => {
     expect(JSON.parse(window.localStorage.getItem(ENTERPRISE_AUTH_STORAGE_KEY) || 'null'))
       .toEqual(session);
   });
+
+  it('提交注册申请后展示等待审核提示', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse({ status: 'pending', username: 'zhangsan' }, 201),
+    ));
+    renderLogin();
+    await user.click(screen.getByRole('button', { name: '注册' }));
+    await user.type(screen.getByLabelText('账号'), 'zhangsan');
+    await user.type(screen.getByLabelText('显示名'), '张三');
+    await user.type(screen.getByLabelText('密码'), 'secret123');
+    await user.click(screen.getByRole('button', { name: '提交注册申请' }));
+    expect(await screen.findByText('注册申请已提交，请等待管理员审核')).toBeTruthy();
+  });
+
+  it('待审核账号登录时展示审核提示而非密码错误', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      detail: { code: 'ACCOUNT_PENDING_APPROVAL', message: 'account is not approved for login' },
+    }, 403)));
+    renderLogin();
+    await showFormAndEnterCredentials(user, 'zhangsan', 'secret123');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+    expect(await screen.findByText('账号正在等待管理员审核')).toBeTruthy();
+    expect(screen.queryByText('密码输入错误')).toBeNull();
+  });
+
+  /** 验证被拒绝账号的 403 同样走提示条，而不是落进字段级「密码输入错误」。 */
+  it('被拒绝账号登录时展示拒绝提示而非密码错误', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      detail: {
+        code: 'ACCOUNT_REGISTRATION_REJECTED',
+        message: 'account registration was rejected',
+      },
+    }, 403)));
+    renderLogin();
+    await showFormAndEnterCredentials(user, 'zhangsan', 'secret123');
+    await user.click(screen.getByRole('button', { name: '登录' }));
+    expect(await screen.findByText('注册申请未通过，请联系管理员')).toBeTruthy();
+    expect(screen.queryByText('密码输入错误')).toBeNull();
+    expect(screen.queryByText('账号输入错误')).toBeNull();
+  });
 });

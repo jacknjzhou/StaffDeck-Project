@@ -1336,7 +1336,7 @@
   "先选一个低风险但流程密集的岗位，例如售后服务、导购、运营巡检或内部知识助手。": "Choose a low-risk, process-heavy role first, such as after-sales support, commerce assistant, operations inspection, or internal knowledge assistant.",
   "显示流程": "Show Flow",
   "显示密码": "Show Password",
-  "显示名": "Show",
+  "显示名": "Display name",
   "显示名：": "Show:",
   "显示源码": "Show Source Code",
   "详情": "Details",
@@ -3406,5 +3406,11 @@
   "当前密码": "Current password",
   "确认修改": "Confirm change",
   "账户未设置本地密码，请联系管理员或使用单点登录": "This account has no local password. Contact an administrator or use single sign-on.",
-  "尝试过于频繁，请稍后再试": "Too many attempts. Try again later."
+  "尝试过于频繁，请稍后再试": "Too many attempts. Try again later.",
+  "注册": "Sign up",
+  "提交注册申请": "Submit request",
+  "已有账号？去登录": "Already have an account? Sign in",
+  "注册申请已提交，请等待管理员审核": "Registration submitted. An administrator will review it.",
+  "账号正在等待管理员审核": "This account is awaiting administrator approval.",
+  "注册申请未通过，请联系管理员": "Your registration was rejected. Please contact an administrator."
 }
