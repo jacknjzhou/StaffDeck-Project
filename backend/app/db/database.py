@@ -102,16 +102,18 @@ def _alembic_head_revisions() -> set[str]:
 def assert_schema_current(engine: Engine) -> None:
     """生产库必须由 Alembic 管理:版本表缺失或落后于 head 时抛错快速失败。
 
-    只在生产环境、非 SQLite 且进程角色为 api 时生效:
+    只在生产环境、非 SQLite 且进程角色为 api 或 all 时生效:
     - 开发/测试用 init_db() 直接建表,本地 SQLite 库也没有 alembic_version,不能因此拒绝启动;
-    - worker/connector 不执行迁移,且 compose 里只等 api 启动(不等迁移完成),逐进程校验会让
-      它们在每次带迁移的发版中崩溃重启;迁移由 api 角色的 entrypoint 负责,故只由 api 把关
-      (角色为 all 的单体部署同样不校验,避免多进程共享库时互相卡启动顺序)。
+    - worker/connector 不执行迁移,由 compose 的 service_healthy 门控到 api 就绪后才启动,
+      逐进程校验只会让它们在发版时多一次崩溃重启;迁移由 api 角色的 entrypoint 负责,故只由
+      api 把关;
+    - 角色为 all 的单体部署自己负责迁移(同样在 init_db 里 create_all),必须和生产 api
+      一样校验版本,否则未纳管的库会先建表再暴露问题。
     """
     settings = get_settings()
     if not settings.is_production or engine.dialect.name == "sqlite":
         return
-    if settings.process_role != "api":
+    if settings.process_role not in {"api", "all"}:
         return
     with engine.connect() as conn:
         has_version_table = inspect(conn).has_table("alembic_version")

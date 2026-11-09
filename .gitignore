@@ -27,3 +27,6 @@ packaging/docker/.env
 
 # Local git worktrees
 .worktrees/
+
+# Database backups produced by scripts/backup_db.sh
+backups/

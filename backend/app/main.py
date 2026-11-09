@@ -7,7 +7,9 @@ import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.pool import NullPool
 from sqlmodel import Session
 
 from app.a2a import recover_codex_a2a_tasks, stop_codex_a2a_tasks
@@ -126,53 +128,80 @@ def _lease_label(lease: RedisLease, index: int) -> str:
     return str(role) if role else f"{type(lease).__name__}#{index}"
 
 
-def _renew_held_leases_once() -> str:
-    """为全部已持有租约续期一轮，返回失败描述；空串表示本轮全部成功。
+def _renew_held_leases_once() -> tuple[bool, str]:
+    """为全部已持有租约续期一轮，返回 (fencing_lost, 失败描述)。
 
+    fencing_lost 表示至少一个租约的 renew() 明确返回 False：租约已被其他进程
+    持有或已过期，本进程不再具备互斥保证，必须立即置为 not-ready。非空描述而
+    fencing_lost 为 False 表示本轮的失败都是异常（Redis 暂时不可达等），可重试。
     单个租约的异常不打断其余租约，也不让续期线程退出：租约丢失的处理是
     “标记未就绪”，而不是杀掉进程。
     """
+    fencing_lost = False
     failures: list[str] = []
     # 取快照再遍历：shutdown 路径可能并发清空 _held_leases。
     held = list(_held_leases)
     for index, lease in enumerate(held):
         label = _lease_label(lease, index)
         try:
-            if not lease.renew():
-                failures.append(f"{label}: 租约已被他人持有或已过期")
+            renewed = lease.renew()
         except Exception as exc:  # 续期失败不应打断进程
             failures.append(f"{label}: {exc!r}")
-    return "; ".join(failures)
+            continue
+        # 只有明确的 False 才算 fencing 丢失；None/异常留给下面的重试计数。
+        if renewed is False:
+            fencing_lost = True
+            failures.append(f"{label}: 租约已被他人持有或已过期")
+    return fencing_lost, "; ".join(failures)
+
+
+def _latch_lease_lost(reason: str) -> None:
+    """置位 not-ready，并且只在状态翻转时记录一条警告日志。
+
+    日志不逐轮刷屏：lost 置位后重复调用直接返回，恢复时由
+    _record_lease_renew_success() 打一条恢复日志。
+    """
+    if runtime_state.is_lease_lost():
+        return
+    runtime_state.mark_lease_lost()
+    logger.warning("角色租约丢失，本进程转为 not-ready：%s", reason)
 
 
 def _record_lease_renew_failure(reason: str) -> None:
-    """累计连续失败轮数；达到阈值后置位 lost 并只记录一条错误日志。"""
+    """累计连续异常轮数；达到阈值即置位 not-ready（fencing 未确认时保守处理）。"""
     global _lease_renew_failures
     _lease_renew_failures += 1
     if _lease_renew_failures < LEASE_RENEW_MAX_FAILURES:
         return
-    if runtime_state.is_lease_lost():
-        return
-    runtime_state.mark_lease_lost()
-    logger.error(
-        "角色租约连续 %d 轮续期失败，本进程已标记为 not-ready：%s",
-        _lease_renew_failures,
-        reason,
-    )
+    _latch_lease_lost(f"连续 {_lease_renew_failures} 轮续期异常：{reason}")
 
 
 def _reset_lease_renew_failures() -> None:
-    """续期成功后清零连续失败计数。"""
+    """清零连续失败计数（启动装配与续期成功路径共用）。"""
     global _lease_renew_failures
     _lease_renew_failures = 0
+
+
+def _record_lease_renew_success() -> None:
+    """续期成功后清零失败计数；若此前已置位，则解除 not-ready 并记录恢复。
+
+    只治临时故障：一次 Redis 抖动或重启后，下一轮成功续期就会让探针恢复 200，
+    而不是把进程永久钉在 not-ready 上。
+    """
+    _reset_lease_renew_failures()
+    if runtime_state.is_lease_lost():
+        runtime_state.clear_lease_lost()
+        logger.warning("角色租约续期恢复，本进程转回 ready")
 
 
 def _start_lease_renewer() -> None:
     """为已持有的角色租约周期续期。
 
     租约 TTL 很短，崩溃的进程不会永久占用角色，因此存活进程必须续期；否则
-    超过 LEASE_TTL_SECONDS 后租约静默过期，互斥保证随之失效。连续
-    LEASE_RENEW_MAX_FAILURES 轮失败后把进程标记为未就绪，但不退出进程。
+    超过 LEASE_TTL_SECONDS 后租约静默过期，互斥保证随之失效。renew() 明确
+    返回 False（租约已不属于本进程）时立即置为未就绪；连续
+    LEASE_RENEW_MAX_FAILURES 轮异常后同样置为未就绪，但不退出进程。恢复一次
+    成功续期即清除未就绪状态。
     """
     global _lease_renew_thread
     if not _held_leases:
@@ -183,11 +212,13 @@ def _start_lease_renewer() -> None:
     def renew_loop() -> None:
         """后台循环：每次间隔结束后为全部已持有租约续期一次。"""
         while not _lease_renew_stop.wait(LEASE_RENEW_INTERVAL_SECONDS):
-            reason = _renew_held_leases_once()
-            if reason:
+            fencing_lost, reason = _renew_held_leases_once()
+            if fencing_lost:
+                _latch_lease_lost(reason)
+            elif reason:
                 _record_lease_renew_failure(reason)
             else:
-                _reset_lease_renew_failures()
+                _record_lease_renew_success()
 
     _lease_renew_thread = threading.Thread(
         target=renew_loop, name="staffdeck-lease-renewer", daemon=True
@@ -305,14 +336,51 @@ def health() -> dict[str, str]:
     return {"status": "ok", "app": "StaffDeck"}
 
 
+_probe_engine: Engine | None = None
+
+
+def _probe_connect_args(backend: str) -> dict[str, object]:
+    """按方言给探针连接加客户端超时，保证单次探测有明确上界。"""
+    if backend.startswith("postgresql"):
+        # connect_timeout 限制建连；statement_timeout 防止 SELECT 1 排在长事务后面。
+        return {"connect_timeout": 3, "options": "-c statement_timeout=3000"}
+    if backend == "sqlite":
+        return {"timeout": 3}
+    return {}
+
+
+def _build_probe_engine() -> Engine:
+    """为就绪探针单独建一个引擎，不与应用共享连接池。
+
+    探针绝不能排在应用连接池后面：池被慢查询占满时复用 engine.connect() 会让
+    /api/ready 一起阻塞，编排层只能等到超时才判定 not-ready。NullPool 让每次
+    探测新建连接，pre_ping 关闭（探测本身就是一条查询），客户端超时兜底。
+    """
+    probe_url = engine.url
+    return create_engine(
+        probe_url,
+        poolclass=NullPool,
+        pool_pre_ping=False,
+        connect_args=_probe_connect_args(probe_url.get_backend_name()),
+    )
+
+
+def _get_probe_engine() -> Engine:
+    """懒加载并缓存探针引擎；进程生命周期内数据库 URL 不变，无需失效逻辑。"""
+    global _probe_engine
+    if _probe_engine is None:
+        _probe_engine = _build_probe_engine()
+    return _probe_engine
+
+
 def _check_database() -> bool:
-    """探测数据库连通性。
+    """探测数据库连通性，连接与查询都有客户端超时上界。
 
     探针的职责是报告状态而不是制造故障：连接或查询失败统一收敛成 False，
     由调用方转成 503；这里不抛异常，也不重试，编排层靠重试间隔兜底。
     """
     try:
-        with engine.connect() as conn:
+        with _get_probe_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception:
         return False

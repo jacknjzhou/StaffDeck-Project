@@ -6,6 +6,8 @@
 """
 
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.pool import NullPool
 
 from app import main
 
@@ -39,3 +41,38 @@ def test_ready_reports_lost_lease(monkeypatch):
 
     assert response.status_code == 503
     assert response.json() == {"status": "degraded", "database": True, "lease": False}
+
+
+def test_ready_reports_both_failures(monkeypatch):
+    """两项同时失效时仍要分别上报，排障不能只看到笼统的 degraded。"""
+    response = _client(monkeypatch, database_ok=False, lease_lost=True).get("/api/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "degraded", "database": False, "lease": False}
+
+
+def test_check_database_returns_false_when_connection_fails(monkeypatch):
+    """连接层异常（拒绝连接、超时）必须收敛成 False，而不是让探针抛错。"""
+
+    class _BrokenEngine:
+        """模拟探针引擎在取连接时直接抛 OperationalError。"""
+
+        def connect(self):
+            raise OperationalError("SELECT 1", {}, RuntimeError("connection refused"))
+
+    monkeypatch.setattr(main, "_probe_engine", _BrokenEngine())
+    monkeypatch.setattr(main, "is_lease_lost", lambda: False)
+
+    assert main._check_database() is False
+    response = TestClient(main.app).get("/api/ready")
+    assert response.status_code == 503
+    assert response.json()["database"] is False
+
+
+def test_probe_engine_does_not_share_the_app_pool():
+    """探针必须用独立连接池，否则应用池耗尽时 readiness 会一起阻塞。"""
+    probe = main._build_probe_engine()
+
+    assert isinstance(probe.pool, NullPool)
+    assert probe.url == main.engine.url
+    assert probe.pool._pre_ping is False

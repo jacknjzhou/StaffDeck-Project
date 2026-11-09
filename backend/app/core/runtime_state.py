@@ -17,3 +17,12 @@ def mark_lease_lost() -> None:
 def is_lease_lost() -> bool:
     """返回本进程是否已确认丢失角色租约。"""
     return lease_lost.is_set()
+
+
+def clear_lease_lost() -> None:
+    """清除租约丢失状态，用于续期恢复后让探针重新返回就绪。
+
+    只由续期线程在成功续期后调用：它证明本进程重新握住了租约，此前的
+    fencing 丢失只是一次可恢复的抖动。
+    """
+    lease_lost.clear()

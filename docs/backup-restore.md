@@ -23,8 +23,11 @@ bash scripts/backup_db.sh              # 打印生成的备份路径
 
 - 通过 `docker compose -f packaging/docker/docker-compose.yml exec -T postgres
   pg_dump -U staffdeck staffdeck | gzip` 生成逻辑备份；
-- 先写 `.partial` 临时文件，`gzip -t` 校验通过后才改名，中途失败不会留下看似完整的备份；
-- 默认保留 14 天，按文件名前缀 `staffdeck-*.sql.gz` 清理更早的备份；
+- 以 `umask 077` 创建文件，最终备份再 `chmod 600`：备份含全部业务数据，默认只允许属主读取；
+- 先写 `.partial` 临时文件，`gzip -t` 校验通过后才改名；失败、INT、TERM 都会清掉半成品，
+  启动时顺带清理超过 1 小时的残留 `.partial`；
+- 默认保留 14 天，按文件名前缀 `staffdeck-*.sql.gz` 清理更早的备份；清理失败只告警，
+  不影响本次备份的成功返回；
 - 备份目录不存在时直接退出（退出码 1），避免磁盘没挂上时把备份写进容器层。
 
 可用环境变量覆盖默认值：
@@ -66,18 +69,16 @@ zcat "$latest" | grep -c "CREATE TABLE"  # 表数量应大于 0
 
 演练在临时库进行，不触碰生产库。全程在 `packaging/docker` 下执行 compose 命令。
 
-### 2.1 暂停写入方
+### 2.1 准备（无需停机）
 
-```bash
-cd packaging/docker
-docker compose stop api worker connector
-```
-
-只停应用容器，**保留** `postgres` 与 `redis`。停机窗口内前端不可用，演练应安排在维护窗口。
+演练回放到独立数据库 `staffdeck_restore`，与生产库 `staffdeck` 互不影响，**不需要**停止
+api/worker/connector。若担心回放期间的 IO 争抢影响线上，可把演练安排在维护窗口，选择性
+执行 `docker compose stop api worker connector`，演练结束后在 2.4 重新 start。
 
 ### 2.2 恢复到临时库
 
 ```bash
+cd packaging/docker
 docker compose exec -T postgres createdb -U staffdeck staffdeck_restore
 gzip -dc ../../backups/staffdeck-2026-11-09-031500.sql.gz \
   | docker compose exec -T postgres psql -U staffdeck -d staffdeck_restore
@@ -110,7 +111,8 @@ docker compose exec -T postgres psql -U staffdeck -d staffdeck_restore \
 
 ```bash
 docker compose exec -T postgres dropdb -U staffdeck staffdeck_restore
-docker compose start api worker connector
+# 若 2.1 选择停过应用容器，这里恢复：
+# docker compose start api worker connector
 ```
 
 ## 3. 真实恢复（破坏性）
@@ -118,11 +120,26 @@ docker compose start api worker connector
 仅在确认生产库损坏且已有可用备份时执行。**第 1 步不可跳过**：先备份当前（哪怕已损坏的）
 库，保留事后取证与二次尝试的机会。
 
-1. 再次备份现状：
+1. 先保住现状（**不可跳过**）：
+
+   首选再次执行逻辑备份：
 
    ```bash
    bash scripts/backup_db.sh
    ```
+
+   若数据库已损坏到 `pg_dump` 连不上，退而冷备数据卷（先停 postgres 保证文件一致）：
+
+   ```bash
+   cd packaging/docker
+   docker compose stop postgres
+   volume=$(docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' "$(docker compose ps -aq postgres)")
+   docker run --rm -v "${volume}:/data:ro" -v "$PWD":/backup alpine \
+     tar czf "/backup/pgdata-$(date +%F-%H%M%S).tar.gz" -C /data .
+   docker compose start postgres
+   ```
+
+   数据卷快照是字节级冷备，只在 `pg_dump` 不可用时使用：恢复时整卷回填，不能按表查询。
 
 2. 停止所有写入方（api 会跑迁移，必须先停）：
 
@@ -146,14 +163,19 @@ docker compose start api worker connector
 4. 校验迁移版本与关键表行数（同 2.3），必要时补迁移：
 
    ```bash
-   docker compose run --rm -e STAFFDECK_RUN_MIGRATIONS=1 api
+   cd "$(git rev-parse --show-toplevel)"   # 回到仓库根目录，保证 -f 路径正确
+   docker compose -f packaging/docker/docker-compose.yml run --rm --no-deps \
+     --entrypoint "python -m app.db.migrations_cli upgrade" api
    ```
 
-   `api` 启动时若 `STAFFDECK_RUN_MIGRATIONS=1` 会自动执行 `alembic upgrade head`。
+   必须用 `--entrypoint` 直接跑迁移 CLI，不要用 `-e STAFFDECK_RUN_MIGRATIONS=1 api`：
+   后者仍走默认 entrypoint，迁移完成后会 `exec uvicorn` 常驻，并尝试获取 api 角色租约——
+   在 api 已停机等待恢复的场景里会一直挂着，看起来像卡住。
 
 5. 启动应用并确认就绪：
 
    ```bash
+   cd packaging/docker
    docker compose start api worker connector
    curl -fsS http://localhost:5173/api/ready   # {"status":"ok","database":true,"lease":true}
    ```
@@ -167,5 +189,5 @@ docker compose start api worker connector
 | `backup dir does not exist` | 备份目录未创建或挂载失败 | `mkdir -p <dir>` 后重跑；检查挂载点 |
 | `pg_dump: error: connection to server ... failed` | postgres 容器未运行或密码不符 | `docker compose ps`；核对 `.env` 中的 `STAFFDECK_PG_PASSWORD` |
 | 恢复后应用 503 且 `database=false` | 恢复未完成或库名/角色不符 | 查 `/api/ready` 与 postgres 日志 |
-| 恢复后 `alembic_version` 落后 | 备份早于最近一次迁移 | 用 `STAFFDECK_RUN_MIGRATIONS=1` 跑一次 api |
+| 恢复后 `alembic_version` 落后 | 备份早于最近一次迁移 | 在仓库根目录执行 `docker compose -f packaging/docker/docker-compose.yml run --rm --no-deps --entrypoint "python -m app.db.migrations_cli upgrade" api` |
 | 备份文件明显偏小 | `pg_dump` 中途失败被 `gzip -t` 拦下 | 不会生成正式文件；查磁盘空间与容器日志 |

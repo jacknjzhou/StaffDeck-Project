@@ -139,16 +139,30 @@ def test_assert_schema_current_accepts_head_revision(monkeypatch):
     database.assert_schema_current(engine)  # 不抛异常即通过
 
 
-def test_assert_schema_current_is_noop_for_non_api_roles(monkeypatch):
+@pytest.mark.parametrize("role", ["worker", "connector"])
+def test_assert_schema_current_is_noop_for_non_api_roles(monkeypatch, role):
     """worker/connector 不跑迁移又依赖 api 启动顺序,校验只会让它们发版时崩溃重启。"""
     engine = create_engine("sqlite://")  # 故意不带 alembic_version
     monkeypatch.setattr(engine.dialect, "name", "postgresql")
     monkeypatch.setattr(
         database,
         "get_settings",
-        lambda: SimpleNamespace(is_production=True, process_role="worker"),
+        lambda: SimpleNamespace(is_production=True, process_role=role),
     )
     database.assert_schema_current(engine)  # 不抛异常即通过
+
+
+def test_assert_schema_current_enforced_for_monolith_all_role(monkeypatch):
+    """单体部署(role=all)自己负责迁移,必须和生产 api 一样校验库版本。"""
+    engine = create_engine("sqlite://")  # 故意不带 alembic_version
+    monkeypatch.setattr(engine.dialect, "name", "postgresql")
+    monkeypatch.setattr(
+        database,
+        "get_settings",
+        lambda: SimpleNamespace(is_production=True, process_role="all"),
+    )
+    with pytest.raises(RuntimeError, match="alembic_version"):
+        database.assert_schema_current(engine)
 
 
 def test_init_db_checks_schema_before_creating_tables(monkeypatch):
