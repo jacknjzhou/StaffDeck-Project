@@ -70,8 +70,25 @@ def test_user_status_revision_round_trips_on_postgres(pg_url: str, monkeypatch):
     command.downgrade(cfg, "0002")
     assert "status" not in _user_columns(eng)
 
+    # 回滚到 0002 后写入一条旧账号,升级时 0003 必须把它的 status 回填为 active,
+    # 且不能顺手丢掉 users 的其他列(§7-8 要求「回退不丢其他列」)。
+    with eng.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO users (id, tenant_id, username, display_name, role, source,"
+                " password_hash, created_at, updated_at) VALUES"
+                " ('u_legacy', 'tenant_legacy', 'legacy', 'Legacy User', 'member', 'web',"
+                " 'hash', now(), now())"
+            )
+        )
+
     command.upgrade(cfg, "head")
     assert "status" in _user_columns(eng)
+    assert {"username", "display_name", "role", "source", "password_hash"} <= _user_columns(eng)
+    with eng.connect() as conn:
+        assert conn.execute(
+            text("SELECT status FROM users WHERE id = 'u_legacy'")
+        ).scalar_one() == "active"
 
     # stamp 回 0002 但保留 status 列(模拟中断或手工改过的库):再次 upgrade 时
     # 0003 的 inspector 守卫必须跳过已存在的列与索引,而不是撞 add_column 报错。
