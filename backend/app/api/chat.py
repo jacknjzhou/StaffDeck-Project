@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import mimetypes
@@ -7,11 +8,11 @@ import re
 import threading
 import time
 import traceback
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import timedelta
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, or_, update
@@ -21,6 +22,11 @@ from starlette.background import BackgroundTask
 from app.agents.branching import model_for_agent, visible_published_skills
 from app.channels.service_outbox import stage_channel_delivery
 from app.core import AgentLoop
+from app.core.body_limit import (
+    CHAT_UPLOAD_BODY_LIMIT,
+    MAX_CHAT_ATTACHMENT_BYTES,
+    MAX_CHAT_ATTACHMENTS,
+)
 from app.core.cancellation import cancel_chat_turn, is_chat_turn_cancelled
 from app.core.capability_manifest import CapabilityManifestBuilder
 from app.core.harness_session_cleanup import harness_task_workspace_path
@@ -31,8 +37,8 @@ from app.db.models import (
     AgentEvent,
     AgentProfile,
     ChatSession,
-    HarnessTurnRecord,
     HarnessTaskFrameRecord,
+    HarnessTurnRecord,
     HumanHandoffRequest,
     Message,
     MessageFeedback,
@@ -71,12 +77,12 @@ from app.session.cleanup import (
     remove_chat_session_workspace,
 )
 from app.session.helpers import public_session
+from app.session.message_read import message_read
 from app.session.message_visibility import (
     internal_message_turn_ids,
     visible_message_content,
     visible_message_rows,
 )
-from app.session.message_read import message_read
 from app.session.origin import pilotdeck_origin_session_ids
 from app.session.session_schema import (
     ChatAttachmentRead,
@@ -101,8 +107,28 @@ STREAM_RELAY_POLL_SECONDS = 0.08
 STREAM_RELAY_HEARTBEAT_SECONDS = 5.0
 STREAM_RELAY_IDLE_TIMEOUT_SECONDS = 660.0
 STREAM_INTERRUPTED_TRACEBACK_CHAR_LIMIT = 6000
-MAX_CHAT_ATTACHMENT_BYTES = 12 * 1024 * 1024
-MAX_CHAT_ATTACHMENTS = 8
+
+
+def _parse_content_length(value: str | None) -> int | None:
+    """把 content-length 头解析为整数;缺失或非法时返回 None 交由分片校验兜底。"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _reject_oversized_upload(content_length: int | None, limit: int) -> None:
+    """声明长度超限时立即 413。
+
+    中间件已在 multipart 解析前做过权威拦截,这里是端点内的纵深防御;
+    长度缺失或非法时放行,真正的上限仍由逐文件读取校验保证。
+    """
+    if content_length is not None and content_length > limit:
+        raise HTTPException(status_code=413, detail="请求体超过上传大小限制")
+
+
 SESSION_TITLE_SUMMARY_EVENT = "session_title_summarized"
 SCHEDULE_WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 EVENT_PAYLOAD_META_KEYS = {"id", "event", "type", "event_type", "created_at", "data"}
@@ -355,16 +381,18 @@ def _summarize_session_title_once(
                     title_turn_id = next((row.id for row in messages if row.role == "user"), "")
 
                     def persist_title_span(
-                        event_type: str, event_payload: dict[str, object]
+                        event_type: str,
+                        event_payload: dict[str, object],
+                        turn_id: str = title_turn_id,
                     ) -> None:
                         """把标题生成过程中的 span 事件写入当前会话的事件表。
                         补齐 turn_id 与 user_message_id，便于 trace 按轮次归组；使用独立 Session
                         写库，避免与标题落库共用事务。
                         """
                         traced_payload = dict(event_payload)
-                        if title_turn_id:
-                            traced_payload.setdefault("turn_id", title_turn_id)
-                            traced_payload.setdefault("user_message_id", title_turn_id)
+                        if turn_id:
+                            traced_payload.setdefault("turn_id", turn_id)
+                            traced_payload.setdefault("user_message_id", turn_id)
                         with Session(engine) as span_db:
                             _persist_relay_only_event(
                                 span_db,
@@ -375,7 +403,8 @@ def _summarize_session_title_once(
                             )
 
                     with bind_span_sink(persist_title_span), llm_operation("session.title"):
-                        raw = LLMClient(model_config).generate_json(SESSION_TITLE_PROMPT, payload)
+                        with LLMClient(model_config) as client:
+                            raw = client.generate_json(SESSION_TITLE_PROMPT, payload)
                     title = _normalize_auto_title(str(raw.get("title") or ""))
                     if title:
                         title_source = "first_turn_summary"
@@ -1031,6 +1060,7 @@ def list_slash_commands(
 
 @router.post("/attachments", response_model=list[ChatAttachmentRead])
 async def upload_chat_attachments(
+    request: Request,
     tenant_id: str = Query(...),
     files: list[UploadFile] = File(...),
     current_user: User = Depends(get_current_user),
@@ -1038,8 +1068,13 @@ async def upload_chat_attachments(
 ) -> list[ChatAttachmentRead]:
     """接收并暂存本轮聊天附件，返回前端可回传的附件描述。
     数量超过 MAX_CHAT_ATTACHMENTS 返回 400，单个文件超过大小上限返回 413。
+    请求体声明长度明显超限时在读取文件前直接 413。
     """
     _ensure_request_tenant(tenant_id, current_user)
+    _reject_oversized_upload(
+        _parse_content_length(request.headers.get("content-length")),
+        limit=CHAT_UPLOAD_BODY_LIMIT,
+    )
     ensure_tenant(db, tenant_id)
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
@@ -1049,7 +1084,7 @@ async def upload_chat_attachments(
     from app.session.attachment_store import stage_chat_attachment
 
     for file in files:
-        data = await file.read()
+        data = await file.read(MAX_CHAT_ATTACHMENT_BYTES + 1)
         if len(data) > MAX_CHAT_ATTACHMENT_BYTES:
             raise HTTPException(status_code=413, detail=f"{file.filename or '文件'} 超过上传大小限制")
         attachment = parse_chat_attachment(
@@ -1482,75 +1517,91 @@ def chat_stream(
 
     threading.Thread(target=run_stream_worker, daemon=True).start()
 
-    def stream_events() -> Iterator[str]:
-        """按游标轮询事件表，把新增事件转成 SSE 文本输出。
-        跳过 internal 可见性轮次的事件；收到终止事件后等 worker 结束再关闭连接，
-        长时间没有事件时发心跳，空闲超时则落一条中断事件后继续等待。
-        """
-        nonlocal initial_cursor
-        relay_ready.wait(15)
-        deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
-        last_heartbeat_at = time.monotonic()
-        terminal_sent = False
-        internal_relay_turn_ids: set[str] = set()
-        while True:
-            session_id = source_session_id["value"]
-            emitted = False
-            if session_id:
-                with Session(engine) as relay_db:
-                    rows = _events_after_cursor(relay_db, request.tenant_id, session_id, initial_cursor)
-                for row in rows:
-                    payload = row.payload_json or {}
-                    row_turn_ids = {
-                        str(payload.get(key) or "").strip()
-                        for key in ("turn_id", "user_message_id", "message_id", "client_turn_id")
-                        if str(payload.get(key) or "").strip()
-                    }
-                    if payload.get("message_visibility") == "internal":
-                        internal_relay_turn_ids.update(row_turn_ids)
-                    event_name, data = _relay_event_payload(row)
-                    initial_cursor = (row.created_at, row.id)
-                    emitted = True
-                    if row_turn_ids & internal_relay_turn_ids:
-                        continue
-                    yield _sse(event_name, data, row.id)
-                    if event_name in STREAM_RELAY_TERMINAL_EVENTS:
-                        terminal_sent = True
-                if emitted:
-                    deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
-                    last_heartbeat_at = time.monotonic()
-            if terminal_sent and worker_done.is_set() and not emitted:
-                return
-            if worker_done.is_set() and not emitted:
-                return
-            if time.monotonic() > deadline:
-                if session_id:
-                    with Session(engine) as timeout_db:
-                        chat_session = timeout_db.get(ChatSession, session_id)
-                        if chat_session:
-                            _persist_chat_turn_interrupted(
-                                timeout_db,
-                                request.tenant_id,
-                                chat_session,
-                                request.client_turn_id or "",
-                                "stream relay timed out waiting for terminal event",
-                            )
-                            timeout_db.commit()
-                    continue
-                return
-            now = time.monotonic()
-            if now - last_heartbeat_at >= STREAM_RELAY_HEARTBEAT_SECONDS:
-                last_heartbeat_at = now
-                yield _sse(
-                    "heartbeat",
-                    {
-                        "phase": "relay",
-                        "sessionId": session_id or request.session_id or "",
-                    },
-                )
-            time.sleep(STREAM_RELAY_POLL_SECONDS)
+    return StreamingResponse(
+        stream_events(
+            tenant_id=request.tenant_id,
+            fallback_session_id=request.session_id or "",
+            client_turn_id=request.client_turn_id or "",
+            session_id_ref=source_session_id,
+            initial_cursor=initial_cursor,
+            relay_ready=relay_ready,
+            worker_done=worker_done,
+        ),
+        media_type="text/event-stream",
+    )
 
-    return StreamingResponse(stream_events(), media_type="text/event-stream")
+
+async def stream_events(
+    *,
+    tenant_id: str,
+    fallback_session_id: str,
+    client_turn_id: str,
+    session_id_ref: dict[str, str],
+    initial_cursor: tuple[object, str] | None,
+    relay_ready: threading.Event,
+    worker_done: threading.Event,
+) -> AsyncIterator[str]:
+    """按游标轮询事件表，把新增事件转成 SSE 文本输出。
+    跳过 internal 可见性轮次的事件；收到终止事件后等 worker 结束再关闭连接，
+    长时间没有事件时发心跳，空闲超时则落一条中断事件后继续等待。
+    事件表读取与超时落库都放线程池，事件循环只负责等待与写流。
+    """
+    await asyncio.to_thread(relay_ready.wait, 15)
+    cursor = initial_cursor
+    deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
+    last_heartbeat_at = time.monotonic()
+    terminal_sent = False
+    internal_relay_turn_ids: set[str] = set()
+    while True:
+        session_id = session_id_ref["value"]
+        emitted = False
+        if session_id:
+            rows = await asyncio.to_thread(_read_relay_rows, tenant_id, session_id, cursor)
+            for row in rows:
+                payload = row.payload_json or {}
+                row_turn_ids = {
+                    str(payload.get(key) or "").strip()
+                    for key in ("turn_id", "user_message_id", "message_id", "client_turn_id")
+                    if str(payload.get(key) or "").strip()
+                }
+                if payload.get("message_visibility") == "internal":
+                    internal_relay_turn_ids.update(row_turn_ids)
+                event_name, data = _relay_event_payload(row)
+                cursor = (row.created_at, row.id)
+                emitted = True
+                if row_turn_ids & internal_relay_turn_ids:
+                    continue
+                yield _sse(event_name, data, row.id)
+                if event_name in STREAM_RELAY_TERMINAL_EVENTS:
+                    terminal_sent = True
+            if emitted:
+                deadline = time.monotonic() + STREAM_RELAY_IDLE_TIMEOUT_SECONDS
+                last_heartbeat_at = time.monotonic()
+        if terminal_sent and worker_done.is_set() and not emitted:
+            return
+        if worker_done.is_set() and not emitted:
+            return
+        if time.monotonic() > deadline:
+            if session_id:
+                await asyncio.to_thread(
+                    _persist_relay_idle_timeout,
+                    tenant_id,
+                    session_id,
+                    client_turn_id,
+                )
+                continue
+            return
+        now = time.monotonic()
+        if now - last_heartbeat_at >= STREAM_RELAY_HEARTBEAT_SECONDS:
+            last_heartbeat_at = now
+            yield _sse(
+                "heartbeat",
+                {
+                    "phase": "relay",
+                    "sessionId": session_id or fallback_session_id,
+                },
+            )
+        await asyncio.sleep(STREAM_RELAY_POLL_SECONDS)
 
 
 @router.post("/sessions/{session_id}/cancel")
@@ -2072,6 +2123,35 @@ def _events_after_cursor(
             )
         )
     return db.exec(statement.order_by(AgentEvent.created_at, AgentEvent.id).limit(200)).all()
+
+
+def _read_relay_rows(
+    tenant_id: str,
+    session_id: str,
+    cursor: tuple[object, str] | None,
+) -> list[AgentEvent]:
+    """在线程池中读取游标之后的一批事件，避免阻塞事件循环。"""
+    with Session(engine) as relay_db:
+        return _events_after_cursor(relay_db, tenant_id, session_id, cursor)
+
+
+def _persist_relay_idle_timeout(
+    tenant_id: str,
+    session_id: str,
+    client_turn_id: str,
+) -> None:
+    """空闲超时后落一条中断事件；在线程池中执行，避免阻塞事件循环。"""
+    with Session(engine) as timeout_db:
+        chat_session = timeout_db.get(ChatSession, session_id)
+        if chat_session:
+            _persist_chat_turn_interrupted(
+                timeout_db,
+                tenant_id,
+                chat_session,
+                client_turn_id,
+                "stream relay timed out waiting for terminal event",
+            )
+            timeout_db.commit()
 
 
 def _latest_event_cursor(db: Session, tenant_id: str, session_id: str) -> tuple[object, str] | None:

@@ -7,10 +7,14 @@ from time import sleep
 
 from sqlmodel import Session
 
+from app.config import get_settings
 from app.db import engine, init_db
 from app.db.seed import seed_demo_data
-from app.scheduled_tasks.service import WORKER_SLEEP_SECONDS, due_scheduled_tasks, execute_scheduled_task
-
+from app.scheduled_tasks.service import (
+    WORKER_SLEEP_SECONDS,
+    due_scheduled_tasks,
+    execute_scheduled_task,
+)
 
 _stopped = False
 _background_thread: threading.Thread | None = None
@@ -28,8 +32,9 @@ def run_worker(*, once: bool = False, poll_seconds: float = WORKER_SLEEP_SECONDS
     `once=True` 时只扫描执行一轮便返回；相邻两轮之间至少间隔 1 秒。
     """
     init_db()
-    with Session(engine) as db:
-        seed_demo_data(db)
+    if get_settings().seed_demo_data:
+        with Session(engine) as db:
+            seed_demo_data(db)
     while not _stopped:
         with Session(engine) as db:
             due = due_scheduled_tasks(db)

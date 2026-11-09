@@ -16,7 +16,6 @@ from app.config import get_settings
 from app.db import get_session
 from app.db.models import User
 
-
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 14
 security = HTTPBearer(auto_error=False)
 
@@ -69,6 +68,10 @@ def get_current_user(
     user = db.get(User, payload.get("user_id", ""))
     if not user or user.tenant_id != payload.get("tenant_id"):
         raise HTTPException(status_code=401, detail="Invalid user token")
+    # 返回 401 而非 403:前端只在 isAuthError()(401)时清会话跳登录页,
+    # 用 403 会让被停用用户停留在应用里反复报错。
+    if getattr(user, "status", "active") != "active":
+        raise HTTPException(status_code=401, detail="Account is not active")
     return user
 
 

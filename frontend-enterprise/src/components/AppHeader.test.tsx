@@ -61,6 +61,7 @@ describe('AppHeader', () => {
     await user.click(screen.getByRole('button', { name: '账户菜单' }));
 
     expect(await screen.findByText('API 全量密钥')).toBeTruthy();
+    expect(screen.getByText('修改密码')).toBeTruthy();
     expect(screen.getByText('普通成员')).toBeTruthy();
   });
 });

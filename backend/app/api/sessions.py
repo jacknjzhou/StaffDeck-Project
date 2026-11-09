@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from app.api.chat import _build_turn_traces, session_read
-from app.session.message_read import message_read
 from app.core.harness_session_cleanup import stage_harness_session_execution_reset
 from app.db import get_session
 from app.db.models import (
@@ -29,6 +28,7 @@ from app.observability.session_timings import enrich_turn_traces_with_timings
 from app.security.auth import get_current_user
 from app.security.permissions import agent_owned_by_user, is_admin_user
 from app.security.tenant import ensure_tenant
+from app.session.message_read import message_read
 from app.session.message_visibility import visible_message_content, visible_message_rows
 
 router = APIRouter(prefix="/api/enterprise/sessions", tags=["enterprise:sessions"])

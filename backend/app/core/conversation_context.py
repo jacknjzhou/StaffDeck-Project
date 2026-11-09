@@ -5,7 +5,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-
 DEFAULT_CONTEXT_TOKEN_BUDGET = 32_000
 COMPACTION_TRIGGER_RATIO = 0.70
 RECENT_ROUND_LIMIT = 6

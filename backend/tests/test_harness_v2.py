@@ -91,6 +91,7 @@ from app.scheduled_tasks.service import (
     _skip_misfired_run,
     due_scheduled_tasks,
 )
+from app.session.attachment_store import stage_chat_attachment
 from app.session.session_schema import (
     ChatAttachmentRead,
     ChatTurnRequest,
@@ -101,10 +102,26 @@ from app.session.session_schema import (
     TeamPlannerMember,
     TurnPlan,
 )
-from app.session.attachment_store import stage_chat_attachment
 from app.skills.nesting import expand_sop_for_execution
 from app.skills.skill_schema import SkillCapabilityRefs
 from app.tools.tool_schema import ToolResult
+
+
+def _context_managed_client(fake_client_cls: type) -> type:
+    """把测试替身包装为支持 with 的客户端，匹配生产代码的生命周期协议。"""
+
+    class _ManagedClient(fake_client_cls):  # type: ignore[misc]
+        """在测试替身基础上补齐 __enter__/__exit__ 的包装类。"""
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
+
+    return _ManagedClient
 
 
 def test_first_harness_turn_derives_a_recoverable_session_id() -> None:
@@ -190,7 +207,7 @@ def test_agent_loop_has_no_legacy_runtime_switch(monkeypatch) -> None:
     """验证 AgentLoop 不再有旧运行时开关，各渠道统一走 Harness v2 引擎。"""
     calls: list[tuple[str, str]] = []
 
-    def fake_run(self, request):  # noqa: ANN001
+    def fake_run(self, request):
         """替换引擎 run 方法，记录渠道与交互模式作为调度证据。"""
         calls.append((request.channel, request.interaction_mode))
         return request.message
@@ -805,7 +822,7 @@ def test_turn_planner_retries_schema_invalid_json(monkeypatch) -> None:
             payloads.append(deepcopy(payload))
             return next(outputs)
 
-    monkeypatch.setattr(turn_planner_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(turn_planner_module, "LLMClient", _context_managed_client(FakeLLMClient))
 
     plan = TurnPlanner().plan(
         "你好",
@@ -863,7 +880,7 @@ def test_turn_planner_exposes_sops_but_not_runtime_capabilities(monkeypatch) -> 
                 ],
             }
 
-    monkeypatch.setattr(turn_planner_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(turn_planner_module, "LLMClient", _context_managed_client(FakeLLMClient))
 
     plan = TurnPlanner().plan(
         "我要退款",
@@ -2157,7 +2174,7 @@ def test_large_external_json_result_uses_sandbox_reference_and_auto_resolves(
     }
     sink_arguments: list[dict[str, object]] = []
 
-    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):  # noqa: ANN001
+    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):
         """按工具名返回预设结果，并记录落地调用的参数。"""
         if tool_call.name == large_tool.name:
             return ToolResult(tool_name=tool_call.name, success=True, data=large_data)
@@ -2269,7 +2286,7 @@ def test_mcp_app_descriptor_is_host_only_and_emitted_as_trace(
         "initial_meta": {"ui": {"render": True}},
     }
 
-    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):  # noqa: ANN001
+    def fake_execute(_self, _tenant_id, tool_call, **_kwargs):
         """返回带 MCP App 描述符的工具结果。"""
         return ToolResult(
             tool_name=tool_call.name,
@@ -3062,7 +3079,7 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
             payloads.append(deepcopy(payload))
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     invoked: list[tuple[str, dict[str, object]]] = []
     trace_events: list[tuple[str, dict[str, object]]] = []
 
@@ -3168,7 +3185,7 @@ def test_harness_agent_adapts_bare_json_after_loading_general_skill(
             """返回下一段预置动作。"""
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     invoked: list[tuple[str, dict[str, object]]] = []
     trace_events: list[tuple[str, dict[str, object]]] = []
 
@@ -3259,7 +3276,7 @@ def test_harness_agent_does_not_adapt_bare_json_without_loaded_general_skill(
                 "params": '{"I_ENAME":"张三","I_BS":"1"}',
             }
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
 
     result = HarnessTaskAgent().run(
         TaskRequirement(
@@ -3315,7 +3332,7 @@ def test_harness_agent_repairs_invalid_tool_action_envelope_once(
             payloads.append(deepcopy(payload))
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     invoked: list[str] = []
     trace_events: list[tuple[str, dict[str, object]]] = []
 
@@ -3392,7 +3409,7 @@ def test_harness_agent_executes_consecutive_json_actions_in_order(
             """返回下一批预置动作序列。"""
             return next(outputs)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     invoked: list[tuple[str, dict[str, object]]] = []
     trace_events: list[tuple[str, dict[str, object]]] = []
 
@@ -3487,7 +3504,7 @@ def test_resumed_agent_sees_latest_user_reply(monkeypatch) -> None:
             payloads.append(deepcopy(payload))
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     requirement = TaskRequirement(
         task_frame_id="task-resume",
         kind="sop",
@@ -3577,7 +3594,7 @@ def test_harness_agent_blocks_repeated_non_retryable_action(
             """返回下一段预置动作。"""
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     invoked: list[tuple[str, dict[str, object]]] = []
 
     def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
@@ -3652,7 +3669,7 @@ def test_harness_agent_does_not_restore_non_retryable_failures_from_checkpoint(
             """返回下一段预置动作。"""
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     invoked: list[tuple[str, dict[str, object]]] = []
 
     result = HarnessTaskAgent().run(
@@ -3725,7 +3742,7 @@ def test_harness_agent_activates_described_capability_for_current_revision(
             """返回下一段预置动作。"""
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     invoked: list[str] = []
 
     def invoke_tool(name: str, _arguments: dict[str, object]) -> dict[str, object]:
@@ -3837,7 +3854,7 @@ def test_harness_agent_keeps_knowledge_results_and_citations_linked(
             """返回下一段预置动作。"""
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     evidence = {
         "evidence_pack": [
             {
@@ -3941,7 +3958,7 @@ def test_harness_agent_limits_successful_knowledge_searches_to_two(
             """返回下一段预置动作。"""
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
 
     def invoke_tool(_name: str, arguments: dict[str, object]) -> dict[str, object]:
         """按查询词返回对应的知识检索证据。"""
@@ -4048,7 +4065,7 @@ def test_harness_agent_projects_only_validated_current_turn_images(
                 "task_summary": "图片分析完成。",
             }
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     assert descriptors[0]["vision_available"] is True
     assert data_url not in json.dumps(descriptors, ensure_ascii=False)
     image_payloads = validated_task_image_payloads(
@@ -4164,7 +4181,7 @@ def test_harness_agent_drops_tampered_image_data_url(
                 "task_summary": "图片校验失败。",
             }
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     HarnessTaskAgent().run(
         TaskRequirement(
             task_frame_id="task-image",
@@ -4248,7 +4265,7 @@ def test_harness_agent_cannot_skip_required_sop_tool(
         calls.append((name, arguments))
         return {"success": True, "data": {"text": "OCR result"}}
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     requirement = TaskRequirement(
         task_frame_id="task-required-tool",
         kind="sop",
@@ -4333,7 +4350,7 @@ def test_harness_agent_blocks_failed_finish_without_attempting_required_tool(
         calls.append(name)
         return {"success": False, "error": {"code": "SERVER_REJECTED"}}
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     requirement = TaskRequirement(
         task_frame_id="task-submit-node",
         kind="sop",
@@ -4410,7 +4427,7 @@ def test_harness_agent_requires_the_configured_knowledge_base(monkeypatch) -> No
         calls.append(arguments)
         return {"success": True, "data": {"chunks": []}}
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     requirement = TaskRequirement(
         task_frame_id="task-required-knowledge",
         kind="sop",
@@ -4680,7 +4697,7 @@ def test_harness_agent_checkpoint_restores_transcript_across_activation(
             payloads.append(payload)
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     requirement = TaskRequirement(
         task_frame_id="task-checkpoint",
         kind="conversation",
@@ -4756,7 +4773,7 @@ def test_multi_step_detached_task_resumes_agent_after_external_result(monkeypatc
             """返回下一段预置动作。"""
             return next(actions)
 
-    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(harness_agent_module, "LLMClient", _context_managed_client(FakeLLMClient))
     requirement = TaskRequirement(
         task_frame_id="order-frame",
         kind="sop",

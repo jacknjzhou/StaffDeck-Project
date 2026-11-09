@@ -28,20 +28,36 @@ services:
     environment: &app_env
       DATABASE_URL: postgresql+psycopg://staffdeck:${STAFFDECK_PG_PASSWORD}@postgres:5432/staffdeck
       APP_SECRET: ${STAFFDECK_APP_SECRET:?STAFFDECK_APP_SECRET must be set}
+      ENVIRONMENT: ${STAFFDECK_ENVIRONMENT:-production}
+      BOOTSTRAP_ADMIN_PASSWORD: ${STAFFDECK_BOOTSTRAP_ADMIN_PASSWORD:-}
       REDIS_URL: redis://redis:6379/0
+      # uvicorn 默认只信任 127.0.0.1 的 X-Forwarded-*;nginx 在另一个容器,
+      # 不放开这里会导致所有登录都记为 nginx 的地址。api 端口未发布,
+      # 仅信任 Docker 子网与回环即可,生产禁止改成 `*`。
+      FORWARDED_ALLOW_IPS: ${STAFFDECK_FORWARDED_ALLOW_IPS:-172.16.0.0/12,127.0.0.1}
       PROCESS_ROLE: api
       STAFFDECK_RUN_MIGRATIONS: "1"
+      # 通用技能运行环境放在可写的 HOME 下：镜像内 /app 归 root 且只读，默认的
+      # /app/backend/.runtime_venv 在降权后首次安装依赖会 permission denied。
+      GENERAL_SKILL_RUNTIME_VENV: /home/app/.local/share/StaffDeck/skill-runtime
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5173/api/health')\""]
+      # /api/ready 同时校验数据库与角色租约：容器 healthy 才代表真的能服务，
+      # 而不只是进程还在。unhealthy 只影响 compose 的依赖门控与 `docker compose ps`，
+      # 不会自动摘流量，随附的 nginx 也不读探针。真正的止损靠进程自身：续期发现
+      # 租约被他人接管（renew() 返回 False）会直接退出，由 restart policy 重启并
+      # 重新竞争 api 租约；db/redis 抖动只降级为 unhealthy，不退出。
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5173/api/ready')\""]
       interval: 10s
-      timeout: 5s
-      retries: 18
-      start_period: 30s
+      # 探针最坏约 6s（建连 3s + statement_timeout 3s），再留容器内 python 启动余量。
+      timeout: 10s
+      # 首次迁移可能很慢（大表加列/回填），给足超时；健康后才放行 worker/connector。
+      retries: 30
+      start_period: 120s
     restart: unless-stopped
 
   worker:
@@ -54,7 +70,8 @@ services:
       STAFFDECK_RUN_MIGRATIONS: "0"
     depends_on:
       api:
-        condition: service_started
+        # worker 只消费 api 已就绪的消息；api 未就绪时启动会反复撞 503/连接失败。
+        condition: service_healthy
     restart: unless-stopped
 
   connector:
@@ -67,7 +84,7 @@ services:
       STAFFDECK_RUN_MIGRATIONS: "0"
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   nginx:

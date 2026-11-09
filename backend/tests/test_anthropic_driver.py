@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import ClassVar
 
-from anthropic import Anthropic
 import httpx
+from anthropic import Anthropic
 
 from app.llm.client import LLMClient
 from app.llm.model_protocols import ModelApiProtocol
@@ -12,13 +13,13 @@ from app.llm.protocol_drivers import AnthropicMessagesDriver, CancellationToken,
 
 class _Messages:
     """记录 create 调用的桩对象，按是否流式返回预设响应或事件列表。"""
-    def __init__(self, response=None, events=None) -> None:  # noqa: ANN001
+    def __init__(self, response=None, events=None) -> None:
         """保存响应与事件，并初始化调用记录。"""
         self.calls = []
         self.response = response
         self.events = events or []
 
-    def create(self, **kwargs):  # noqa: ANN003
+    def create(self, **kwargs):
         """记录本次请求参数，流式时返回事件列表，否则返回完整响应。"""
         self.calls.append(kwargs)
         return self.events if kwargs.get("stream") else self.response
@@ -26,7 +27,7 @@ class _Messages:
 
 class _ClosableEvents(list):
     """可关闭的事件序列，用于断言流结束后适配器确实释放资源。"""
-    def __init__(self, values) -> None:  # noqa: ANN001
+    def __init__(self, values) -> None:
         """初始化事件列表并标记为未关闭。"""
         super().__init__(values)
         self.closed = False
@@ -121,7 +122,7 @@ def test_anthropic_driver_preserves_provider_error_diagnostics() -> None:
         """模拟 Anthropic SDK 抛出的带状态码、请求 id 与响应体的异常。"""
         status_code = 422
         request_id = "req_anthropic"
-        body = {
+        body: ClassVar[dict] = {
             "error": {
                 "type": "invalid_request_error",
                 "message": "unknown model",
@@ -131,7 +132,7 @@ def test_anthropic_driver_preserves_provider_error_diagnostics() -> None:
 
     class FailingMessages:
         """create 必定抛错的消息桩，用于触发驱动层的错误映射。"""
-        def create(self, **_kwargs):  # noqa: ANN003
+        def create(self, **_kwargs):
             """抛出预设的供应商异常。"""
             raise ProviderError("request rejected")
 
@@ -236,7 +237,7 @@ def test_anthropic_json_uses_prompt_instead_of_openai_response_format(monkeypatc
     client.api_protocol = ModelApiProtocol.ANTHROPIC_MESSAGES
     calls = []
 
-    def fake_generate_text(system_prompt, payload, response_format=None):  # noqa: ANN001
+    def fake_generate_text(system_prompt, payload, response_format=None):
         """记录调用参数并返回预设 JSON 文本。"""
         calls.append((system_prompt, payload, response_format))
         return '{"ok": true}'
@@ -252,7 +253,7 @@ def test_llm_client_builds_anthropic_sdk(monkeypatch) -> None:
     """验证 LLMClient 按配置构建 Anthropic 驱动，base_url 与重试次数正确。"""
     captured = {}
 
-    def fake_anthropic(**kwargs):  # noqa: ANN003
+    def fake_anthropic(**kwargs):
         """捕获构造参数并返回带消息桩的假 SDK 客户端。"""
         captured.update(kwargs)
         return SimpleNamespace(messages=_Messages())
@@ -282,7 +283,7 @@ def test_llm_client_adapts_anthropic_v1_api_root_for_sdk(monkeypatch) -> None:
     """验证以 /v1/ 结尾的 base_url 被裁剪为 SDK 期望的根地址。"""
     captured = {}
 
-    def fake_anthropic(**kwargs):  # noqa: ANN003
+    def fake_anthropic(**kwargs):
         """捕获构造参数并返回带消息桩的假 SDK 客户端。"""
         captured.update(kwargs)
         return SimpleNamespace(messages=_Messages())
@@ -310,7 +311,7 @@ def test_llm_client_adapts_anthropic_full_messages_endpoint(monkeypatch) -> None
     """验证传入完整 /v1/messages 端点时裁剪为根地址，避免路径重复。"""
     captured = {}
 
-    def fake_anthropic(**kwargs):  # noqa: ANN003
+    def fake_anthropic(**kwargs):
         """捕获构造参数并返回带消息桩的假 SDK 客户端。"""
         captured.update(kwargs)
         return SimpleNamespace(messages=_Messages())

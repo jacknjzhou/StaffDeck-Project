@@ -105,7 +105,7 @@ def test_parse_code_in_bold_not_reparsed():
     blocks = parse_markdown("**`x`**")
     spans = blocks[0].spans
     # 粗体包裹，内部代码不应被二次拆为 code span，而是粗体文本
-    assert any(set(s.styles) == {"bold"} and s.text == "`x`" or s.text == "x"
+    assert any((set(s.styles) == {"bold"} and s.text == "`x`") or s.text == "x"
                for s in spans)
 
 

@@ -55,7 +55,7 @@ def _member_user() -> User:
     )
 
 
-def probe_tool(request: ToolProbeRequest, db: Session):  # noqa: ANN201
+def probe_tool(request: ToolProbeRequest, db: Session):
     """以普通成员身份调用工具探测接口，避免每个用例重复构造用户。"""
     return _probe_tool(request, db, _member_user())
 
@@ -717,8 +717,15 @@ def test_probe_mcp_tool_error_is_stable() -> None:
         assert result.error.code == "MCP_ERROR"
 
 
-def test_probe_stdio_mcp_tool_success_infers_output_schema() -> None:
+def test_probe_stdio_mcp_tool_success_infers_output_schema(monkeypatch) -> None:
     """验证 stdio MCP 工具探测成功，并推断数值型输出字段。"""
+    monkeypatch.setattr(
+        "app.tools.mcp_client.get_settings",
+        lambda: SimpleNamespace(
+            mcp_stdio_enabled=True,
+            mcp_stdio_allowed_commands=f"npx,uvx,node,python3,uv,{Path(sys.executable).name}",
+        ),
+    )
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()

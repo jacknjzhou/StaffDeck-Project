@@ -29,8 +29,8 @@ from app.api.tools import (
 from app.capability_scope import normalize_capability_scope
 from app.db.database import _migrate_capability_scope_schema
 from app.db.models import (
-    AgentProfile,
     AgentKnowledgeBranch,
+    AgentProfile,
     GeneralSkill,
     KnowledgeBase,
     KnowledgeBaseVersion,

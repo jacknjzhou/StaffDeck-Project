@@ -17,7 +17,6 @@ from app.db.models import (
 )
 from app.session.session_schema import PlannedTaskFrame, TurnPlan
 
-
 TERMINAL_FRAME_STATUSES = {"completed", "cancelled", "failed"}
 DEPENDENCY_WAITING_ERROR_CODES = {
     "DEPENDENCY_BLOCKED",  # compatibility with the first Harness v2 scheduler

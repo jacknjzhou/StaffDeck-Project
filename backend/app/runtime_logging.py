@@ -12,7 +12,6 @@ from pathlib import Path
 
 from app import paths
 
-
 LOG_FILE_NAME = "staffdeck.log"
 MAX_LOG_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5

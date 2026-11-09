@@ -83,9 +83,10 @@ def classify_intent(
         "candidates": candidates,
     }
     try:
-        text = LLMClient(model_config).generate_text(
-            SYSTEM_PROMPT, payload, response_format={"type": "json_object"}
-        )
+        with LLMClient(model_config) as client:
+            text = client.generate_text(
+                SYSTEM_PROMPT, payload, response_format={"type": "json_object"}
+            )
         data = json.loads(text)
         if not isinstance(data, dict):
             stay.error = "分类响应不是 JSON 对象"

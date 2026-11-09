@@ -5,7 +5,11 @@ from datetime import datetime, timedelta
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.api.feedback import get_feedback_session_detail, get_feedback_summary, list_feedback_sessions
+from app.api.feedback import (
+    get_feedback_session_detail,
+    get_feedback_summary,
+    list_feedback_sessions,
+)
 from app.api.sessions import get_session_detail, list_sessions
 from app.db.models import AgentEvent, ChatSession, Message, MessageFeedback, Tenant, User
 

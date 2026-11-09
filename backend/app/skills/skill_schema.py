@@ -19,7 +19,7 @@ class SkillCapabilityRefs(BaseModel):
     required_knowledge_base_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_required_refs(self) -> "SkillCapabilityRefs":
+    def validate_required_refs(self) -> SkillCapabilityRefs:
         """校验 required_* 必选能力都包含在对应已选能力列表中，否则抛 ValueError。"""
         pairs = (
             ("required_general_skill_ids", self.required_general_skill_ids, self.general_skill_ids),
@@ -99,7 +99,7 @@ class SkillCard(BaseModel):
     interruption_policy: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_graph(self) -> "SkillCard":
+    def validate_graph(self) -> SkillCard:
         """写入时校验图结构不变量。
 
         要求至少一个节点、node_id 唯一、起点与终态节点存在、边两端均存在；

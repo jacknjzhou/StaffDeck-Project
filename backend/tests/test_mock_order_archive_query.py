@@ -10,10 +10,10 @@ from app.api.mock import (
     MockProductPurchaseRequest,
     mock_fulfillment_reroute_plan,
     mock_member_benefit_reconcile,
-    mock_product_price_query,
     mock_order_add,
     mock_order_archive_query,
     mock_order_query,
+    mock_product_price_query,
     mock_product_purchase,
 )
 from app.db.seed import DEMO_TOOLS

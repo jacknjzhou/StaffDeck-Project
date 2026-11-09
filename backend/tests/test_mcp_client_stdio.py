@@ -7,6 +7,7 @@ import textwrap
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,22 @@ from app.tools.mcp_client import (
     execute_mcp_tool,
     list_mcp_tools,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stdio_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认部署关闭 stdio；本文件直接验证 stdio 会话，需在执行期显式开启。"""
+    allowed = (
+        "npx,uvx,node,python3,uv,"
+        f"{Path(sys.executable).name},staffdeck-command-that-does-not-exist"
+    )
+    monkeypatch.setattr(
+        "app.tools.mcp_client.get_settings",
+        lambda: SimpleNamespace(
+            mcp_stdio_enabled=True,
+            mcp_stdio_allowed_commands=allowed,
+        ),
+    )
 
 
 class _PagedToolSession(_MCPSession):

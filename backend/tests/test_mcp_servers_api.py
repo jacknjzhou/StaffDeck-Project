@@ -9,8 +9,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.api.tools import (
     MCP_APP_RESOURCE_MAX_BYTES,
     _extract_app_resource,
-    create_mcp_server,
     call_mcp_app_tool,
+    create_mcp_server,
     delete_mcp_server,
     discover_mcp_tools,
     discover_mcp_tools_adhoc,
@@ -18,23 +18,37 @@ from app.api.tools import (
     list_tools,
     sync_mcp_tools,
 )
-from app.db.models import MCPServer, Tenant, Tool, User
-from app.db.models import AgentProfile, AgentResourceBinding
-from app.tools.tool_executor import ToolExecutor
+from app.config import get_settings
+from app.db.models import AgentProfile, AgentResourceBinding, MCPServer, Tenant, Tool, User
 from app.tools.mcp_client import (
     MCPClientError,
     discover_mcp_server,
     execute_mcp_tool_result,
     read_mcp_resource,
 )
+from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import (
-    MCPDiscoverRequest,
     MCPAppToolCallRequest,
+    MCPDiscoverRequest,
     MCPServerConnection,
     MCPServerCreateRequest,
     MCPSyncRequest,
     ToolCall,
 )
+
+
+def _allow_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
+    """测试内开启 stdio，并把当前解释器加入白名单，便于启动真实 mock 子进程。"""
+    allowed = f"npx,uvx,node,python3,uv,{Path(sys.executable).name}"
+    settings = get_settings().model_copy(
+        update={
+            "mcp_stdio_enabled": True,
+            "mcp_stdio_allowed_commands": allowed,
+        }
+    )
+    monkeypatch.setattr("app.tools.tool_schema.get_settings", lambda: settings)
+    monkeypatch.setattr("app.api.tools.get_settings", lambda: settings)
+    monkeypatch.setattr("app.tools.mcp_client.get_settings", lambda: settings)
 
 
 def _admin_user() -> User:
@@ -69,8 +83,9 @@ def test_discover_builtin_mcp_server_lists_tools() -> None:
         assert echo.input_schema["properties"]["text"]["type"] == "string"
 
 
-def test_discover_stdio_mcp_server_lists_tools() -> None:
+def test_discover_stdio_mcp_server_lists_tools(monkeypatch) -> None:
     """验证通过 stdio 子进程启动的 MCP 服务也能被发现并列出工具。"""
+    _allow_stdio(monkeypatch)
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.commit()
@@ -93,8 +108,9 @@ def test_discover_stdio_mcp_server_lists_tools() -> None:
         assert {"echo", "sum", "product_lookup"} <= names
 
 
-def test_mcp_apps_negotiation_preserves_metadata_and_resource() -> None:
+def test_mcp_apps_negotiation_preserves_metadata_and_resource(monkeypatch) -> None:
     """验证 MCP Apps 协商后保留 app 元数据、只读注解与工具结果 meta，并能读取资源。"""
+    _allow_stdio(monkeypatch)
     config = {
         "transport": "stdio",
         "command": sys.executable,
@@ -119,8 +135,9 @@ def test_mcp_apps_negotiation_preserves_metadata_and_resource() -> None:
     assert resource["contents"][0]["mimeType"] == "text/html;profile=mcp-app"
 
 
-def test_mcp_apps_capability_is_not_advertised_when_disabled() -> None:
+def test_mcp_apps_capability_is_not_advertised_when_disabled(monkeypatch) -> None:
     """验证关闭 apps_mode 时不会对外声明 MCP Apps 扩展能力。"""
+    _allow_stdio(monkeypatch)
     discovery = discover_mcp_server(
         {
             "transport": "stdio",
@@ -166,8 +183,9 @@ def test_mcp_app_resource_limit_is_ten_mib() -> None:
         )
 
 
-def test_synced_mcp_app_renders_and_calls_read_only_tool() -> None:
+def test_synced_mcp_app_renders_and_calls_read_only_tool(monkeypatch) -> None:
     """验证同步后的 MCP App 工具可渲染卡片资源，并能在应用内调用只读工具。"""
+    _allow_stdio(monkeypatch)
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(

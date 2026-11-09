@@ -6,7 +6,7 @@ from app.skills.skill_schema import SkillDistillRequest
 
 def _normalize(raw: dict, request: SkillDistillRequest):
     """把构造的模型原始响应转成图谱结构后交给 distiller 规范化，供断言使用。"""
-    return SkillDistiller()._normalize_response(_graph_raw(raw), request)  # noqa: SLF001
+    return SkillDistiller()._normalize_response(_graph_raw(raw), request)
 
 
 def _graph_raw(raw: dict) -> dict:
@@ -63,7 +63,7 @@ def test_fallback_card_is_not_domain_hardcoded_for_commerce_text() -> None:
         ],
     )
 
-    card = SkillDistiller()._fallback_card(request)  # noqa: SLF001
+    card = SkillDistiller()._fallback_card(request)
 
     assert card.skill_id != "purchase_product"
     assert card.required_info == []
@@ -105,8 +105,8 @@ def test_model_input_uses_plain_text_and_compacts_available_tools() -> None:
     )
     distiller = SkillDistiller()
 
-    payload = distiller._payload(request)  # noqa: SLF001
-    model_input = distiller._model_input(request, payload)  # noqa: SLF001
+    payload = distiller._payload(request)
+    model_input = distiller._model_input(request, payload)
 
     projected_tool = payload["available_tools"][0]
     assert set(projected_tool) == {
@@ -201,7 +201,7 @@ def test_distill_preserves_and_resolves_capability_references() -> None:
         }
     }
 
-    response = SkillDistiller()._normalize_response(raw, request)  # noqa: SLF001
+    response = SkillDistiller()._normalize_response(raw, request)
 
     collect_refs = response.draft_skill.nodes[0].capability_refs
     assert collect_refs.general_skill_ids == ["genskill_news"]
@@ -212,7 +212,7 @@ def test_distill_preserves_and_resolves_capability_references() -> None:
     assert response.draft_skill.nodes[1].capability_refs.tool_ids == ["tool_excel"]
     assert not any("不可用的能力" in warning for warning in response.warnings)
 
-    model_input = SkillDistiller()._model_input(request)  # noqa: SLF001
+    model_input = SkillDistiller()._model_input(request)
     assert "ID=tool_news" in model_input
     assert "ID=tool_excel" in model_input
     assert "ID=genskill_news" in model_input
@@ -280,7 +280,7 @@ def test_distill_infers_explicit_catalog_capabilities_when_model_omits_refs() ->
         }
     }
 
-    response = SkillDistiller()._normalize_response(raw, request)  # noqa: SLF001
+    response = SkillDistiller()._normalize_response(raw, request)
 
     search_refs = response.draft_skill.nodes[0].capability_refs
     issue_refs = response.draft_skill.nodes[1].capability_refs
@@ -519,7 +519,7 @@ def test_fallback_card_uses_conservative_adaptive_steps() -> None:
         raw_content="获取用户姓名，确认预约人数，创建预约记录并反馈给用户",
     )
 
-    card = SkillDistiller()._fallback_card(request)  # noqa: SLF001
+    card = SkillDistiller()._fallback_card(request)
 
     assert card.required_info == []
     assert all(
@@ -873,7 +873,7 @@ def test_skill_card_serializes_response_rules_before_nodes() -> None:
         raw_content="收集资料编号，审核状态，反馈给用户",
     )
 
-    card = SkillDistiller()._fallback_card(request)  # noqa: SLF001
+    card = SkillDistiller()._fallback_card(request)
     keys = list(card.model_dump().keys())
 
     assert "steps" not in keys

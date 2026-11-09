@@ -7,14 +7,18 @@ from fastapi import HTTPException
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.api.chat import _active_skill_context_for_assistant_message, _active_skill_for_assistant_message
+from app.agents.branching import ensure_open_gallery_binding, visible_published_skills
+from app.api.chat import (
+    _active_skill_context_for_assistant_message,
+    _active_skill_for_assistant_message,
+)
 from app.api.skills import (
     _extract_uploaded_skill_file,
     _skill_stats,
     _validate_handoff_assignees,
     create_skill,
-    draft_skill,
     distill_skill,
+    draft_skill,
     list_skill_versions,
     list_skills,
     publish_skill,
@@ -22,12 +26,24 @@ from app.api.skills import (
     skill_read,
     update_skill,
 )
-from app.agents.branching import ensure_open_gallery_binding, visible_published_skills
-from app.db.models import AgentEvent, AgentProfile, ChannelBinding, ChannelIdentity, Message, Skill, SkillFeedback, SkillVersion, Tenant, Tool, User
-from app.db.models import ModelConfig
+from app.db.models import (
+    AgentEvent,
+    AgentProfile,
+    ChannelBinding,
+    ChannelIdentity,
+    Message,
+    ModelConfig,
+    Skill,
+    SkillFeedback,
+    SkillVersion,
+    Tenant,
+    Tool,
+    User,
+)
+from app.security.encryption import encrypt_secret
+from app.skills.nesting import SopNestingError
 from app.skills.skill_distiller import SkillDistiller
 from app.skills.skill_editor import SkillEditor
-from app.skills.nesting import SopNestingError
 from app.skills.skill_reflection import PROMPT_PATH as SKILL_REFLECTION_PROMPT_PATH
 from app.skills.skill_reflection import RUBRIC_LABELS
 from app.skills.skill_schema import (
@@ -39,7 +55,6 @@ from app.skills.skill_schema import (
     SkillUpdateRequest,
     skill_card_from_persisted,
 )
-from app.security.encryption import encrypt_secret
 
 
 def _admin_user() -> User:
@@ -60,7 +75,7 @@ def test_skill_editor_only_merges_selected_step() -> None:
     candidate.nodes[0].instruction = "新的收集说明"
     candidate.nodes[1].instruction = "不应修改其他步骤"
 
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "assistant_message": "已改写步骤。",
             "draft_skill": candidate.model_dump(),
@@ -88,7 +103,7 @@ def test_skill_editor_merges_multiple_selected_targets() -> None:
     candidate.nodes[0].instruction = "新的收集说明"
     candidate.nodes[1].instruction = "不应修改第二步"
 
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "assistant_message": "已改写多个区域。",
             "draft_skill": candidate.model_dump(),
@@ -115,7 +130,7 @@ def test_skill_editor_can_target_node_by_index() -> None:
     candidate.nodes[0].instruction = "不应修改第一步"
     candidate.nodes[1].instruction = "只修改第二个节点"
 
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "assistant_message": "已改写指定下标节点。",
             "draft_skill": candidate.model_dump(),
@@ -143,7 +158,7 @@ def test_skill_editor_allows_selected_step_deletion() -> None:
     candidate_data["terminal_node_ids"] = ["collect_info"]
     candidate = SkillCard.model_validate(candidate_data)
 
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "assistant_message": "已删除反馈步骤。",
             "draft_skill": candidate.model_dump(),
@@ -177,7 +192,7 @@ def test_skill_editor_allows_selected_step_insertion() -> None:
     )
     candidate = SkillCard.model_validate(candidate_data)
 
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "assistant_message": "已新增确认步骤。",
             "draft_skill": candidate.model_dump(),
@@ -211,7 +226,7 @@ def test_skill_editor_merges_selected_step_id_change() -> None:
     candidate.edges[0].next_node_id = "feedback_order_result"
     candidate.terminal_node_ids = ["feedback_order_result"]
 
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "assistant_message": "已修正步骤 ID。",
             "draft_skill": candidate.model_dump(),
@@ -238,7 +253,7 @@ def test_skill_editor_applies_step_id_corrections_to_final_draft() -> None:
     candidate.edges[0].next_node_id = "feedback_order_result"
     candidate.terminal_node_ids = ["feedback_order_result"]
 
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "assistant_message": "已修正步骤 ID。",
             "draft_skill": candidate.model_dump(),
@@ -262,7 +277,7 @@ def test_skill_editor_applies_step_id_corrections_to_final_draft() -> None:
 def test_skill_editor_applies_patch_response_without_full_draft() -> None:
     """验证模型只返回 patches 而不返回完整草稿时，补丁仍能落到目标字段。"""
     current = _skill_card()
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "assistant_message": "已精简回复规则。",
             "patches": [
@@ -290,7 +305,7 @@ def test_skill_editor_applies_patch_response_without_full_draft() -> None:
 def test_skill_editor_patches_graph_topology_and_capability_refs() -> None:
     """验证补丁可更新连线拓扑与节点能力引用，并把 graph 记入变更路径。"""
     current = _skill_card()
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "patches": [
                 {
@@ -336,7 +351,7 @@ def test_skill_editor_does_not_apply_unreported_graph_changes() -> None:
     candidate.nodes[0].instruction = "只修改节点说明"
     candidate.edges[0].label = "模型顺手改了连线"
 
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {
             "draft_skill": candidate.model_dump(mode="json"),
             "changed_paths": ["nodes[0]"],
@@ -366,7 +381,7 @@ def test_skill_editor_validates_and_normalizes_nested_sop() -> None:
             "allowed_actions": ["ask_user"],
         }
     )
-    response = SkillEditor()._normalize_response(  # noqa: SLF001
+    response = SkillEditor()._normalize_response(
         {"draft_skill": candidate},
         SkillRewriteRequest(
             tenant_id="tenant_demo",
@@ -403,11 +418,11 @@ def test_skill_editor_rejects_unknown_or_cyclic_nested_sop() -> None:
     )
 
     with pytest.raises(SopNestingError, match="missing or unpublished"):
-        SkillEditor()._normalize_response({"draft_skill": candidate}, request)  # noqa: SLF001
+        SkillEditor()._normalize_response({"draft_skill": candidate}, request)
 
     cyclic_child = _available_sop("child_purchase", nested_sop_ids=[current.skill_id])
     with pytest.raises(SopNestingError, match="cycle"):
-        SkillEditor()._normalize_response(  # noqa: SLF001
+        SkillEditor()._normalize_response(
             {"draft_skill": candidate},
             request.model_copy(update={"available_sops": [cyclic_child]}),
         )
@@ -423,7 +438,7 @@ def test_skill_editor_payload_exposes_compact_sop_catalog() -> None:
         available_sops=[child],
     )
 
-    payload = SkillEditor()._payload(request)  # noqa: SLF001
+    payload = SkillEditor()._payload(request)
 
     assert payload["available_sops"] == [
         {
@@ -440,12 +455,12 @@ def test_skill_editor_payload_exposes_compact_sop_catalog() -> None:
 
 def test_skill_editor_stream_repairs_invalid_json_once(monkeypatch) -> None:
     """验证模型输出非法 JSON 时只重试修复一次，并依次推送各阶段状态。"""
-    def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+    def fake_stream(self, _system_prompt: str, _payload: dict):
         """伪造流式输出：先返回被截断的 JSON，触发后续修复流程。"""
         assert self.max_output_tokens == 8192
         yield '{"assistant_message": "截断的输出", "patches": ['
 
-    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+    def fake_text(self, _system_prompt: str, payload: dict):
         """伪造非流式输出：修复请求返回合法补丁，反思请求返回全部通过。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round"):
@@ -1268,7 +1283,7 @@ def test_persisted_skill_promotes_required_capabilities_without_weakening_schema
 
 def test_skill_distiller_stream_uses_generation_status(monkeypatch) -> None:
     """验证蒸馏流程推送生成阶段状态，且提示词传递原始文本而不是 JSON。"""
-    def fake_stream(self, _system_prompt: str, _payload: str):  # noqa: ANN001
+    def fake_stream(self, _system_prompt: str, _payload: str):
         """伪造蒸馏流式输出：返回一份完整的技能草稿 JSON 文本。"""
         assert self.max_output_tokens == 8192
         assert isinstance(_payload, str)
@@ -1316,7 +1331,7 @@ def test_skill_distiller_stream_uses_generation_status(monkeypatch) -> None:
         }
         """
 
-    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+    def fake_text(self, _system_prompt: str, payload: dict):
         """伪造反思调用：断言处于首轮反思并返回全部通过的结果。"""
         assert self.max_output_tokens == 8192
         assert payload.get("reflection_round") == 1
@@ -1347,7 +1362,7 @@ def test_skill_distiller_stream_uses_generation_status(monkeypatch) -> None:
 
 def test_skill_distiller_stream_reflects_and_repairs_generated_skill(monkeypatch) -> None:
     """验证反思发现缺少闭环步骤时应用修正，并重置此前已推送的片段。"""
-    def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+    def fake_stream(self, _system_prompt: str, _payload: dict):
         """伪造蒸馏流式输出：返回缺少闭环回复步骤的技能草稿。"""
         assert self.max_output_tokens == 8192
         yield json.dumps(
@@ -1380,7 +1395,7 @@ def test_skill_distiller_stream_reflects_and_repairs_generated_skill(monkeypatch
             ensure_ascii=False,
         )
 
-    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+    def fake_text(self, _system_prompt: str, payload: dict):
         """伪造反思调用：首轮补上闭环步骤，第二轮返回通过结果。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round") == 1:
@@ -1443,7 +1458,7 @@ def test_skill_distiller_stream_reflects_and_repairs_generated_skill(monkeypatch
 
 def test_skill_distiller_reflection_checks_tool_call_format_without_rule_fallback(monkeypatch) -> None:
     """验证反思按 rubric 检查工具调用格式并修正裸 call_tool，不用规则兜底。"""
-    def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+    def fake_stream(self, _system_prompt: str, _payload: dict):
         """伪造蒸馏流式输出：返回含裸 call_tool 动作的技能草稿。"""
         assert self.max_output_tokens == 8192
         yield json.dumps(
@@ -1484,7 +1499,7 @@ def test_skill_distiller_reflection_checks_tool_call_format_without_rule_fallbac
             ensure_ascii=False,
         )
 
-    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+    def fake_text(self, _system_prompt: str, payload: dict):
         """伪造反思调用：断言 rubric 含工具调用格式项，首轮修正动作后次轮通过。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round") == 1:
@@ -1562,12 +1577,12 @@ def test_skill_reflection_prompt_keeps_new_candidate_tool_actions() -> None:
 
 def test_skill_distiller_stream_repairs_invalid_json_with_model(monkeypatch) -> None:
     """验证蒸馏遇到非法 JSON 时由模型修复一次，并重置片段后继续。"""
-    def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+    def fake_stream(self, _system_prompt: str, _payload: dict):
         """伪造流式输出：返回被截断的技能草稿 JSON。"""
         assert self.max_output_tokens == 8192
         yield '{"draft_skill": {"name": "截断"'
 
-    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+    def fake_text(self, _system_prompt: str, payload: dict):
         """伪造修复调用：断言修复轮次，并返回完整的技能草稿。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round"):
@@ -1639,12 +1654,12 @@ def test_skill_distiller_stream_repairs_invalid_json_with_model(monkeypatch) -> 
 
 def test_skill_distiller_stream_uses_staged_generation_after_repair_failure(monkeypatch) -> None:
     """验证模型修复失败后改用分段生成，逐节点扩写后再做最终评审。"""
-    def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+    def fake_stream(self, _system_prompt: str, _payload: dict):
         """伪造流式输出：返回被截断的 JSON，迫使流程进入修复阶段。"""
         assert self.max_output_tokens == 8192
         yield '{"draft_skill": {"name": "截断"'
 
-    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+    def fake_text(self, _system_prompt: str, payload: dict):
         """伪造修复与分段调用：修复失败，分段生成逐节点扩写并完成评审。"""
         assert self.max_output_tokens == 8192
         if payload.get("reflection_round"):
@@ -1729,7 +1744,7 @@ def test_distill_skill_uses_selected_model_config(monkeypatch) -> None:
     """验证蒸馏接口使用请求指定的模型配置，而不是租户默认模型。"""
     captured: dict[str, str] = {}
 
-    def fake_distill(self, request, model_config):  # noqa: ANN001
+    def fake_distill(self, request, model_config):
         """替换真实蒸馏调用，记录实际使用的模型 ID 以便断言。"""
         captured["model_id"] = model_config.id
         return SkillDistillResponse(draft_skill=_skill_card())

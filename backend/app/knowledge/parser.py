@@ -6,7 +6,6 @@ from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
 
-
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".markdown", ".html", ".htm", ".pdf", ".docx", ".doc"}
 
 

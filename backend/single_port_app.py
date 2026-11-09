@@ -15,7 +15,6 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from app import paths
 from app.main import app
 
-
 logger = logging.getLogger("staffdeck.static")
 ROOT_DIR = paths.resource_dir()
 # frozen: dist 被收集到 _MEIPASS/frontend-enterprise/dist
@@ -128,7 +127,7 @@ def _pilotdeck_proxy_timeout() -> httpx.Timeout:
 
 
 @app.middleware("http")
-async def pilotdeck_host_proxy(request: Request, call_next):  # noqa: ANN001
+async def pilotdeck_host_proxy(request: Request, call_next):
     """把 PilotDeck 虚拟主机或 /pilotdeck 前缀的请求经本进程转发到上游。"""
     upstream_path = _pilotdeck_proxy_path(
         request.headers.get("host", ""),

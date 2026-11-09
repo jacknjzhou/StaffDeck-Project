@@ -1,6 +1,6 @@
 from app.core.agent_loop import AgentLoop
-from app.session.session_schema import StepAgentResult
 from app.db.models import ChatSession, Skill
+from app.session.session_schema import StepAgentResult
 
 
 def _skill() -> Skill:

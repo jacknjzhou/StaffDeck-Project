@@ -6,7 +6,6 @@ from sqlmodel import Session, select
 
 from app.db.models import AgentEvent, ChatSession, ExternalSessionBinding
 
-
 PILOTDECK_GROUP_CHAT_CHANNEL = "pilotdeck_group_chat"
 
 

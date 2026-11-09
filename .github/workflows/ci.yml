@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest, PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # PostgreSQL 集成用例是门禁的一部分而不是可选项：服务容器无条件启动，
+      # 作业级 STAFFDECK_TEST_PG_URL 固定指向它。工作流无法按条件声明 service，
+      # 因此不做「有仓库变量才跑 PG」的分支；本地没有该变量时用例仍然跳过。
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: staffdeck_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # conftest_pg.pg_url 在 CI 下缺少该变量会直接失败，避免 PG 路径静默退化成跳过。
+      STAFFDECK_TEST_PG_URL: postgresql+psycopg://postgres:postgres@localhost:5432/staffdeck_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend (editable, dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "backend[dev]"
+
+      - name: Ruff
+        run: ruff check backend
+
+      - name: Pytest
+        run: pytest backend/tests -q --timeout=120
+
+  frontend:
+    name: Frontend (build + vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend-enterprise/package-lock.json
+
+      - name: Install frontend
+        run: npm --prefix frontend-enterprise ci
+
+      - name: Build (tsc + vite)
+        run: npm --prefix frontend-enterprise run build
+
+      - name: Vitest
+        run: npm --prefix frontend-enterprise test

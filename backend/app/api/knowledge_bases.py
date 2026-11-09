@@ -6,8 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from app.capability_scope import normalize_capability_scope
-from app.db import get_session
 from app.agents.branching import (
     ensure_agent_private_knowledge_branch,
     ensure_knowledge_base_version,
@@ -25,6 +23,8 @@ from app.agents.branching import (
     sync_knowledge_branch_from_overall,
     user_creator_metadata,
 )
+from app.capability_scope import normalize_capability_scope
+from app.db import get_session
 from app.db.models import (
     AgentKnowledgeBranch,
     AgentResourceBinding,
@@ -39,14 +39,6 @@ from app.db.models import (
     User,
     utc_now,
 )
-from app.knowledge.schema import (
-    KnowledgeBaseCreateRequest,
-    KnowledgeConceptRead,
-    KnowledgeConceptUpdateRequest,
-    KnowledgeBaseRead,
-    KnowledgeBaseRollbackRequest,
-    KnowledgeBaseUpdateRequest,
-)
 from app.knowledge.concepts import ensure_okf_concepts_for_version
 from app.knowledge.okf import (
     export_okf_bundle,
@@ -55,6 +47,14 @@ from app.knowledge.okf import (
     parse_okf_markdown,
     persist_lint_issues,
     upsert_concepts,
+)
+from app.knowledge.schema import (
+    KnowledgeBaseCreateRequest,
+    KnowledgeBaseRead,
+    KnowledgeBaseRollbackRequest,
+    KnowledgeBaseUpdateRequest,
+    KnowledgeConceptRead,
+    KnowledgeConceptUpdateRequest,
 )
 from app.security.auth import get_current_user
 from app.security.permissions import (

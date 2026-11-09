@@ -2,13 +2,13 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.api.mock import (
+    MockOrderQueryRequest,
     MockOrderRefundRequest,
     MockProductPurchaseRequest,
     mock_order_query,
     mock_order_refund,
     mock_product_purchase,
 )
-from app.api.mock import MockOrderQueryRequest
 from app.core.harness_agent import HarnessAction, _finish_result
 from app.core.task_request_compiler import TaskRequirement
 from app.db.seed import DEMO_TOOLS, REFUND_SKILL

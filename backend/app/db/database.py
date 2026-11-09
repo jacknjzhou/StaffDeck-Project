@@ -4,7 +4,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Connection, Engine, inspect, text
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.config import get_settings
@@ -75,14 +75,68 @@ _CAPABILITY_SCOPE_TABLES = (
 def init_db() -> None:
     """启动时初始化数据库:建表、执行 SQLite 增量迁移并清理孤儿会话。
 
-    先导入模型以注册元数据,再建表,随后在 SQLite 上开启 WAL 并补齐历史表结构。
+    先导入模型以注册元数据,再校验生产库版本,随后建表并补齐历史表结构。
     """
     import app.db.models  # noqa: F401
 
     _configure_sqlite_runtime()
+    # 必须早于 create_all:未纳管的生产库要先抛出"先跑迁移",否则 create_all 会先建出一批表,
+    # 之后 alembic upgrade head 的基线 create_table(无 checkfirst)反而撞上已存在的表。
+    assert_schema_current(engine)
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_skill_schema()
     _purge_orphaned_chat_sessions()
+
+
+def _alembic_head_revisions() -> set[str]:
+    """读取 Alembic 脚本目录登记的 head 版本号,用于和生产库的当前版本比对。"""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    backend_dir = Path(__file__).resolve().parents[2]
+    config = Config(str(backend_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_dir / "alembic"))
+    return set(ScriptDirectory.from_config(config).get_heads())
+
+
+def assert_schema_current(engine: Engine) -> None:
+    """生产库必须由 Alembic 管理:版本表缺失或落后于 head 时抛错快速失败。
+
+    只在生产环境、非 SQLite 且进程角色为 api 或 all 时生效:
+    - 开发/测试用 init_db() 直接建表,本地 SQLite 库也没有 alembic_version,不能因此拒绝启动;
+    - worker/connector 不执行迁移,由 compose 的 service_healthy 门控到 api 就绪后才启动,
+      逐进程校验只会让它们在发版时多一次崩溃重启;迁移由 api 角色的 entrypoint 负责,故只由
+      api 把关;
+    - 角色为 all 的单体部署自己负责迁移(同样在 init_db 里 create_all),必须和生产 api
+      一样校验版本,否则未纳管的库会先建表再暴露问题。
+    """
+    settings = get_settings()
+    if not settings.is_production or engine.dialect.name == "sqlite":
+        return
+    if settings.process_role not in {"api", "all"}:
+        return
+    with engine.connect() as conn:
+        has_version_table = inspect(conn).has_table("alembic_version")
+        current = (
+            {
+                str(value)
+                for value in conn.execute(text("SELECT version_num FROM alembic_version")).scalars()
+            }
+            if has_version_table
+            else set()
+        )
+    if not has_version_table:
+        raise RuntimeError(
+            "database is not managed by Alembic (missing alembic_version table); "
+            "run `alembic upgrade head` before starting the service"
+        )
+    heads = _alembic_head_revisions()
+    if not heads or current != heads:
+        raise RuntimeError(
+            "database schema is out of date: current revision(s) "
+            f"{sorted(current) or ['none']} != latest head(s) {sorted(heads) or ['unknown']}; "
+            "run `alembic upgrade head` before starting the service"
+        )
 
 
 def _purge_orphaned_chat_sessions() -> None:
@@ -155,7 +209,6 @@ def _migrate_sqlite_skill_schema() -> None:
         _migrate_feishu_channel_schema(conn, tables)
         _migrate_channel_inbound_run_schema(conn, tables)
         _migrate_channel_bind_code_constraints(conn, tables)
-        _migrate_wechat_kf_accounts(conn, tables)
         _migrate_capability_scope_schema(conn, inspector, tables)
         _migrate_harness_v2_schema(conn, inspector, tables)
 
@@ -194,6 +247,11 @@ def _migrate_sqlite_skill_schema() -> None:
                 conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'member'"))
             if "source" not in user_columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN source VARCHAR NOT NULL DEFAULT 'web'"))
+            if "status" not in user_columns:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN status VARCHAR NOT NULL DEFAULT 'active'")
+                )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_status ON users (status)"))
             if "display_name" in user_columns:
                 conn.execute(
                     text(
@@ -289,6 +347,9 @@ def _migrate_sqlite_skill_schema() -> None:
                 conn.execute(text("ALTER TABLE channel_bindings ADD COLUMN team_id VARCHAR"))
             if "name" not in binding_columns:
                 conn.execute(text("ALTER TABLE channel_bindings ADD COLUMN name VARCHAR"))
+
+        # 必须排在 channel_bindings.team_id 补列之后:回填 SQL 会读该列。
+        _migrate_wechat_kf_accounts(conn, tables)
 
         if "channel_deliveries" in tables:
             delivery_columns = {column["name"] for column in inspector.get_columns("channel_deliveries")}
@@ -1183,6 +1244,18 @@ def _table_sql_compact(conn, table_name: str) -> str:
     return "".join(str(row[0]).split()).upper()
 
 
+def _table_columns(conn: Connection, table: str) -> set[str]:
+    """读取当前连接可见的列名，避免 inspector 缓存导致迁移顺序误判。
+
+    SQLite 走 PRAGMA(不受 Inspector 的 info_cache 影响);其他方言用 inspector,
+    便于将来在 PostgreSQL 上复用同一套增量迁移逻辑。
+    """
+    if conn.dialect.name == "sqlite":
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).mappings().all()
+        return {str(row["name"]) for row in rows}
+    return {str(column["name"]) for column in inspect(conn).get_columns(table)}
+
+
 def _migrate_channel_bindings_multi(conn, inspector, tables: set[str]) -> None:
     """channel_bindings 重建:移除 (agent_id, channel) 表级唯一约束,支持同 Agent 多渠道实例。"""
     if "channel_bindings" not in tables:
@@ -1266,7 +1339,9 @@ def _migrate_wechat_kf_accounts(conn, tables: set[str]) -> None:
             """
         )
     )
-    if "channel_bindings" in tables:
+    # 防御:旧库或被重建过的 channel_bindings 可能还没有 team_id 列,此时跳过回填,
+    # 避免 "no such column: team_id" 让整个启动迁移失败;索引仍需建出。
+    if "channel_bindings" in tables and "team_id" in _table_columns(conn, "channel_bindings"):
         rows = conn.execute(
             text(
                 "SELECT id, tenant_id, agent_id, team_id, config_json "

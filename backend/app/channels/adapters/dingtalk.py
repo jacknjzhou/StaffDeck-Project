@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-import logging
-import threading
 import asyncio
 import json
+import logging
 import re
+import threading
 import time
-from urllib.parse import quote_plus
-from urllib.parse import urlparse
-from datetime import UTC, datetime
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote_plus, urlparse
 
 import httpx
-from sqlmodel import Session, select
 from sqlalchemy import update
+from sqlmodel import Session, select
 
 from app.channels.adapters.base import (
     ChannelInbound,
@@ -726,7 +725,7 @@ class DingTalkStreamManager:
                         while not stop.is_set():
                             try:
                                 raw_message = await asyncio.wait_for(websocket.recv(), timeout=0.5)
-                            except asyncio.TimeoutError:
+                            except TimeoutError:
                                 continue
                             result = await client.route_message(json.loads(raw_message))
                             if result == "disconnect":

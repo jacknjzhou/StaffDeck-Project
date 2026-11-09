@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from typing import ClassVar
 
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -45,13 +46,21 @@ def _test_engine():
 
 class FakeLLMClient:
     """可编排脚本与异常的假 LLM 客户端，记录每次分类调用的入参。"""
-    calls: list[dict] = []
+    calls: ClassVar[list[dict]] = []
     script: object = json.dumps({"agent_id": "stay", "confidence": 0.9, "reason": "意图不明"})
     error: Exception | None = None
 
     def __init__(self, model_config):
         """保存模型配置，保持与真实客户端一致的构造签名。"""
         self.model_config = model_config
+
+    def __enter__(self):
+        """返回自身，供 with 语句获取客户端。"""
+        return self
+
+    def __exit__(self, *_exc_info):
+        """测试替身不持有真实连接，退出时不做清理。"""
+        return None
 
     def generate_text(self, system_prompt, user_payload, response_format=None):
         """记录系统提示词、载荷与格式要求，再按预设脚本返回或抛错。"""
@@ -419,7 +428,7 @@ def _p2p_message(event_id: str, text: str) -> dict:
 
 class RecordingAgentLoop:
     """记录每轮请求的假 AgentLoop，避免真实推理并提交事务。"""
-    calls: list = []
+    calls: ClassVar[list] = []
 
     def __init__(self, db, *, event_sink=None):
         """保存数据库会话，供 handle_turn 提交使用。"""

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { User } from 'lucide-react';
 
@@ -40,14 +40,30 @@ import type { EnterpriseAuthUser } from '../auth';
 import { useClientPagination } from '../hooks/useClientPagination';
 import { StatusBadge } from './scheduled-tasks/StatusBadge';
 
+type AccountStatus = 'active' | 'pending' | 'rejected';
+
 type EmployeeAccount = {
   id: string;
   tenant_id: string;
   username: string;
   display_name?: string;
   role: 'admin' | 'member';
+  status: AccountStatus;
   created_at?: string;
   updated_at?: string;
+};
+
+type AccountStatusFilter = 'all' | AccountStatus;
+
+type AccountStatusTarget = 'active' | 'rejected';
+
+/** 审核动作：文案与要写入的目标状态。 */
+type StatusAction = { label: string; status: AccountStatusTarget };
+
+const STATUS_LABELS: Record<AccountStatus, string> = {
+  active: '正常',
+  pending: '待审核',
+  rejected: '已拒绝',
 };
 
 type AccountDraft = {
@@ -75,7 +91,50 @@ export function AccountRoleBadge({ role }: { role: EmployeeAccount['role'] }) {
 }
 
 /**
- * 账号管理页：展示当前租户的成员账号，支持搜索、分页、新建、编辑与删除。
+ * 归并任意状态字符串为三种有效状态。
+ *
+ * `pending` / `rejected` 原样保留，其余（含缺失、未知值）一律视为 `active`，
+ * 保证徽标、筛选与操作门控对同一行的判断一致。
+ */
+export function effectiveStatus(status?: string): AccountStatus {
+  if (status === 'pending') return 'pending';
+  if (status === 'rejected') return 'rejected';
+  return 'active';
+}
+
+/**
+ * 按有效状态给出审核动作：待审核可「通过 / 拒绝」，已拒绝可「通过」，正常无动作。
+ */
+export function statusActions(status?: string): StatusAction[] {
+  const current = effectiveStatus(status);
+  if (current === 'pending') {
+    return [
+      { label: '通过', status: 'active' },
+      { label: '拒绝', status: 'rejected' },
+    ];
+  }
+  if (current === 'rejected') return [{ label: '通过', status: 'active' }];
+  return [];
+}
+
+const STATUS_TONES: Record<AccountStatus, 'green' | 'orange' | 'red'> = {
+  active: 'green',
+  pending: 'orange',
+  rejected: 'red',
+};
+
+/**
+ * 账号状态徽标：正常绿色、待审核橙色、已拒绝红色。
+ *
+ * 未知或缺失状态按「正常」渲染，与筛选、操作门控共用 `effectiveStatus`。
+ */
+export function AccountStatusBadge({ status }: { status?: string }) {
+  const current = effectiveStatus(status);
+  return <StatusBadge tone={STATUS_TONES[current]}>{STATUS_LABELS[current]}</StatusBadge>;
+}
+
+/**
+ * 账号管理页：展示当前租户的成员账号，支持搜索、状态筛选、分页、新建、编辑与删除。
  *
  * 首次挂载时拉取账号列表；管理员账号受保护，不提供删除操作。
  */
@@ -89,6 +148,7 @@ export default function AccountsPage({
   const [rows, setRows] = useState<EmployeeAccount[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
+  const [statusFilter, setStatusFilter] = useState<AccountStatusFilter>('all');
   const [editing, setEditing] = useState<EmployeeAccount | null>(null);
   const [draft, setDraft] = useState<AccountDraft>({ displayName: '', password: '', role: 'member' });
   const [saving, setSaving] = useState(false);
@@ -102,15 +162,22 @@ export default function AccountsPage({
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<EmployeeAccount | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [statusPendingId, setStatusPendingId] = useState<string | null>(null);
+
+  /** 列表请求序号：只接受最新一次请求的结果，避免旧快照覆盖新数据。 */
+  const loadTokenRef = useRef(0);
 
   /** 拉取当前租户的账号列表，并维护 loading 状态与失败提示。 */
   async function load() {
+    const token = ++loadTokenRef.current;
     setLoading(true);
     try {
       const result = await api.get<EmployeeAccount[]>(`/api/auth/users?tenant_id=${TENANT_ID}`);
-      setRows(result);
+      if (token === loadTokenRef.current) setRows(result);
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : '加载账号失败');
+      if (token === loadTokenRef.current) {
+        notify.error(error instanceof Error ? error.message : '加载账号失败');
+      }
     } finally {
       setLoading(false);
     }
@@ -122,14 +189,19 @@ export default function AccountsPage({
 
   const filteredRows = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
-    if (!keyword) return rows;
-    return rows.filter((row) =>
-      [row.username, row.display_name || '', row.role === 'admin' ? '管理员' : '普通成员']
-        .some((value) => value.toLowerCase().includes(keyword)),
-    );
-  }, [rows, searchText]);
+    return rows.filter((row) => {
+      if (statusFilter !== 'all' && effectiveStatus(row.status) !== statusFilter) return false;
+      if (!keyword) return true;
+      return [row.username, row.display_name || '', row.role === 'admin' ? '管理员' : '普通成员']
+        .some((value) => value.toLowerCase().includes(keyword));
+    });
+  }, [rows, searchText, statusFilter]);
 
-  const pagination = useClientPagination(filteredRows, ACCOUNT_PAGE_SIZE, searchText);
+  const pagination = useClientPagination(
+    filteredRows,
+    ACCOUNT_PAGE_SIZE,
+    `${searchText}|${statusFilter}`,
+  );
 
   /** 打开编辑弹窗，并用当前行数据初始化草稿（密码留空表示不修改）。 */
   function openEdit(row: EmployeeAccount) {
@@ -214,9 +286,43 @@ export default function AccountsPage({
     }
   }
 
-  /** 渲染行操作菜单：编辑入口 + 删除入口（管理员账号不可删除）。 */
+  /**
+   * 审核账号：调用状态接口，用返回的账号就地更新该行。
+   *
+   * 不重新拉取列表；同时作废更新前后发出的列表请求，避免旧快照把新状态覆盖回去。
+   * 失败时保留当前列表并提示错误。
+   */
+  async function changeStatus(row: EmployeeAccount, status: AccountStatusTarget) {
+    if (statusPendingId === row.id) return;
+    setStatusPendingId(row.id);
+    // 作废更新前发出的列表请求。
+    loadTokenRef.current += 1;
+    try {
+      const updated = await api.put<{ status?: string }>(`/api/auth/users/${row.id}/status`, {
+        tenant_id: TENANT_ID,
+        status,
+      });
+      // 更新期间可能又有刷新发出，再次作废以保住本次就地更新。
+      loadTokenRef.current += 1;
+      setRows((prev) =>
+        prev.map((item) =>
+          item.id === row.id
+            ? { ...item, status: effectiveStatus(updated.status ?? status) }
+            : item,
+        ),
+      );
+    } catch (error) {
+      notify.error(error instanceof Error ? error.message : '操作失败');
+    } finally {
+      setStatusPendingId(null);
+    }
+  }
+
+  /** 渲染行操作菜单：审核入口 + 编辑入口 + 删除入口（管理员账号不可删除）。 */
   function renderActions(row: EmployeeAccount) {
     const isProtected = row.role === 'admin';
+    const actions = statusActions(row.status);
+    const statusBusy = statusPendingId === row.id;
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -226,6 +332,19 @@ export default function AccountsPage({
           <IconMore className="size-3.5" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className={MENU_CONTENT_CLASS}>
+          {actions.map((action) => (
+            <DropdownMenuItem
+              key={action.label}
+              className={MENU_ITEM_CLASS}
+              disabled={statusBusy}
+              onSelect={() => void changeStatus(row, action.status)}
+            >
+              {action.label}
+            </DropdownMenuItem>
+          ))}
+          {actions.length > 0 && (
+            <DropdownMenuSeparator className="my-[2px] bg-[#eef0f4]" />
+          )}
           <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => openEdit(row)}>
             <IconEdit />
             编辑
@@ -272,6 +391,12 @@ export default function AccountsPage({
       width: 120,
       render: (row) => <AccountRoleBadge role={row.role} />,
     },
+    {
+      key: 'status',
+      title: '状态',
+      width: 120,
+      render: (row) => <AccountStatusBadge status={row.status} />,
+    },
     { key: 'created', title: '创建时间', width: 180, render: (row) => formatDateTime(row.created_at) },
     { key: 'updated', title: '最近更新', width: 180, render: (row) => formatDateTime(row.updated_at) },
     {
@@ -294,8 +419,9 @@ export default function AccountsPage({
           <span className="min-w-0">
             <strong className="block truncate text-[14px] font-semibold text-[#18181a]">{row.username}</strong>
             <span className="mt-[2px] block truncate text-[12px] text-[#858b9c]">{row.display_name || row.username}</span>
-            <span className="mt-[6px] block">
+            <span className="mt-[6px] flex items-center gap-[6px]">
               <AccountRoleBadge role={row.role} />
+              <AccountStatusBadge status={row.status} />
             </span>
           </span>
         </span>
@@ -338,29 +464,49 @@ export default function AccountsPage({
             <span className="text-[14px] font-normal leading-none">账号列表</span>
           </div>
 
-          <label className="flex h-[34px] w-[300px] items-center gap-[8px] overflow-hidden rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white px-[12px] transition-colors focus-within:border-[#18181a] max-[900px]:w-full">
-            <IconSearch className="size-[14px] shrink-0 text-[#858b9c]" />
-            <input
-              autoComplete="off"
-              data-1p-ignore="true"
-              data-lpignore="true"
-              data-bwignore="true"
-              value={searchText}
-              placeholder="搜索用户名或显示名"
-              onChange={(event) => setSearchText(event.target.value)}
-              className="h-full min-w-0 flex-1 bg-transparent text-[12px] text-[#17191f] outline-none placeholder:text-[#c0c6d4]"
-            />
-            {searchText && (
-              <button
-                type="button"
-                aria-label="清除搜索"
-                onClick={() => setSearchText('')}
-                className="grid size-[16px] shrink-0 place-items-center text-[#c0c6d4] hover:text-[#858b9c]"
+          <div className="flex items-center gap-[12px] max-[900px]:flex-col max-[900px]:items-stretch">
+            <Select
+              value={statusFilter}
+              onValueChange={(value) => setStatusFilter(value as AccountStatusFilter)}
+            >
+              <SelectTrigger
+                aria-label="状态筛选"
+                className="h-[34px] w-[132px] shrink-0 rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white px-[12px] text-[12px] text-[#17191f] max-[900px]:w-full"
               >
-                <IconClear className="size-[14px]" />
-              </button>
-            )}
-          </label>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部</SelectItem>
+                <SelectItem value="pending">待审核</SelectItem>
+                <SelectItem value="active">正常</SelectItem>
+                <SelectItem value="rejected">已拒绝</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <label className="flex h-[34px] w-[300px] items-center gap-[8px] overflow-hidden rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white px-[12px] transition-colors focus-within:border-[#18181a] max-[900px]:w-full">
+              <IconSearch className="size-[14px] shrink-0 text-[#858b9c]" />
+              <input
+                autoComplete="off"
+                data-1p-ignore="true"
+                data-lpignore="true"
+                data-bwignore="true"
+                value={searchText}
+                placeholder="搜索用户名或显示名"
+                onChange={(event) => setSearchText(event.target.value)}
+                className="h-full min-w-0 flex-1 bg-transparent text-[12px] text-[#17191f] outline-none placeholder:text-[#c0c6d4]"
+              />
+              {searchText && (
+                <button
+                  type="button"
+                  aria-label="清除搜索"
+                  onClick={() => setSearchText('')}
+                  className="grid size-[16px] shrink-0 place-items-center text-[#c0c6d4] hover:text-[#858b9c]"
+                >
+                  <IconClear className="size-[14px]" />
+                </button>
+              )}
+            </label>
+          </div>
 
           <div className="grid gap-[10px] md:hidden">
             {filteredRows.length ? (

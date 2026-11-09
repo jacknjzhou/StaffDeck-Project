@@ -152,7 +152,12 @@ class HumanHandoffService:
         if not user_id:
             return False
         user = self.db.get(User, user_id)
-        return bool(user and user.tenant_id == tenant_id and user.source == "web")
+        return bool(
+            user
+            and user.tenant_id == tenant_id
+            and user.source == "web"
+            and getattr(user, "status", "active") == "active"
+        )
 
     def assignee_user_id(
         self,

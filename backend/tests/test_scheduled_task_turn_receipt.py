@@ -69,7 +69,7 @@ def test_scheduled_task_shortcut_honors_pre_message_cancellation(monkeypatch) ->
     SQLModel.metadata.create_all(engine)
     detector_calls = 0
 
-    def detect(*args, **kwargs):  # noqa: ANN002, ANN003
+    def detect(*args, **kwargs):
         """统计检测器调用次数；一旦被调用即失败，用于证明取消后不再触达检测。"""
         nonlocal detector_calls
         detector_calls += 1

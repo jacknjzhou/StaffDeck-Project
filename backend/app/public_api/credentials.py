@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
 from app.db import get_session
-from app.db.models import APIClient, APICredential, AgentProfile, utc_now
+from app.db.models import AgentProfile, APIClient, APICredential, utc_now
 from app.public_api.auth import (
     PublicPrincipal,
     generate_api_key,
@@ -20,7 +20,6 @@ from app.public_api.schemas import (
     APICredentialCreated,
     APICredentialRead,
 )
-
 
 router = APIRouter(tags=["credentials"])
 

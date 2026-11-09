@@ -31,7 +31,6 @@ from app.session.session_schema import (
 )
 from app.session.slot_policy import strip_router_generated_message_slots
 
-
 PROMPT_PATH = (
     paths.resource_dir() / "app" / "llm" / "prompts" / "turn_planner_prompt.md"
 )
@@ -82,8 +81,7 @@ class TurnPlanner:
             output_contract=TURN_PLANNER_OUTPUT_SCHEMA,
         )
         try:
-            client = LLMClient(model_config)
-            with llm_operation("turn_planner.plan"):
+            with LLMClient(model_config) as client, llm_operation("turn_planner.plan"):
                 plan = self._generate_validated_plan(
                     client,
                     unified_system_prompt(),

@@ -45,6 +45,9 @@ class User(SQLModel, table=True):
     role: str = Field(default="member", index=True)
     # 账号来源:web=网页端创建;wechat 等=渠道懒建(用户管理列表默认隐藏)
     source: str = Field(default="web", index=True)
+    # 账号状态:active=正常;pending=注册待审核;rejected=审核拒绝/已停用。
+    # 默认 active,让引导管理员、演示数据、OIDC 与渠道懒建四条路径零改动。
+    status: str = Field(default="active", index=True)
     password_hash: str
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+import secrets
 import sys
+from itertools import pairwise
 from pathlib import Path
 
 from sqlmodel import Session, select
@@ -20,9 +23,11 @@ from app.db.models import (
     User,
     utc_now,
 )
-from app.security.encryption import encrypt_secret
-from app.security.auth import hash_password
 from app.db.staffdeck_seed import seed_staffdeck_admin_gallery
+from app.security.auth import hash_password, verify_password
+from app.security.encryption import encrypt_secret
+
+logger = logging.getLogger(__name__)
 
 
 ADAPTIVE_FLOW_RULE = (
@@ -914,11 +919,63 @@ def _seed_mcp_servers(session: Session) -> None:
         session.add(server)
 
 
-def seed_demo_data(session: Session) -> None:
+def ensure_bootstrap_admin(session: Session) -> str | None:
+    """确保存在租户管理员；空库生成随机口令，旧库默认口令就地轮换。"""
+    settings = get_settings()
+    admin = session.exec(
+        select(User).where(User.tenant_id == "tenant_demo", User.username == "admin")
+    ).first()
+    if admin is None:
+        # SEED_DEMO_DATA=false 时也必须补齐租户，否则登录接口在 ensure_tenant 处 404。
+        if session.get(Tenant, "tenant_demo") is None:
+            session.add(Tenant(id="tenant_demo", name="Demo Enterprise"))
+        configured_password = settings.bootstrap_admin_password
+        password = configured_password or secrets.token_urlsafe(18)
+        session.add(
+            User(
+                id="admin",
+                tenant_id="tenant_demo",
+                username="admin",
+                display_name="Administrator",
+                role="admin",
+                password_hash=hash_password(password),
+            )
+        )
+        session.commit()
+        if not configured_password:
+            logger.warning(
+                "Bootstrap admin 'admin' created. Generated password (shown once): %s",
+                password,
+            )
+        return password
+    if admin.role != "admin":
+        admin.role = "admin"
+        admin.updated_at = utc_now()
+        session.add(admin)
+        session.commit()
+    if settings.is_production and verify_password("admin", admin.password_hash):
+        configured_password = settings.bootstrap_admin_password
+        password = configured_password or secrets.token_urlsafe(18)
+        admin.password_hash = hash_password(password)
+        admin.updated_at = utc_now()
+        session.add(admin)
+        session.commit()
+        if not configured_password:
+            logger.warning(
+                "Bootstrap admin 'admin' legacy password rotated. "
+                "Generated password (shown once): %s",
+                password,
+            )
+        return password
+    return None
+
+
+def seed_demo_data(session: Session) -> str | None:
     """幂等写入 demo 租户的种子数据:租户、人设、演示/管理员账号、示例技能与工具、默认模型。
 
     每条记录按业务主键查重,存在则就地更新而不是重建,便于重复启动时追平配置差异;
-    本地 MCP 与通用技能由子流程补种,函数末尾统一 commit。
+    本地 MCP 与通用技能由子流程补种,函数末尾统一 commit。返回本次生成的引导管理员
+    明文口令(未生成则为 None),供启动日志提示用户首登后修改。
     """
     settings = get_settings()
     if not session.get(Tenant, "tenant_demo"):
@@ -941,25 +998,8 @@ def seed_demo_data(session: Session) -> None:
             )
         )
 
-    # 桌面/单机版默认管理员账号（admin / admin）。权限只读取数据库 role 字段。
-    admin_user = session.exec(
-        select(User).where(User.tenant_id == "tenant_demo", User.username == "admin")
-    ).first()
-    if not admin_user:
-        session.add(
-            User(
-                id="admin",
-                tenant_id="tenant_demo",
-                username="admin",
-                display_name="Administrator",
-                role="admin",
-                password_hash=hash_password("admin"),
-            )
-        )
-    elif admin_user.role != "admin":
-        admin_user.role = "admin"
-        admin_user.updated_at = utc_now()
-        session.add(admin_user)
+    # 引导管理员：空库生成随机口令，生产环境就地轮换遗留的 admin/admin。
+    generated = ensure_bootstrap_admin(session)
 
     _ensure_seed_agents(session)
 
@@ -1061,6 +1101,7 @@ def seed_demo_data(session: Session) -> None:
         )
 
     session.commit()
+    return generated
 
 
 def _publish_seeded_system_resources(session: Session) -> None:
@@ -1430,7 +1471,7 @@ def _skill_content_graph(content: dict) -> dict:
                     "priority": index,
                     "label": "",
                 }
-                for index, (source, target) in enumerate(zip(node_ids, node_ids[1:]))
+                for index, (source, target) in enumerate(pairwise(node_ids))
             ],
         )
     else:

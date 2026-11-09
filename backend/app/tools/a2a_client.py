@@ -15,7 +15,6 @@ from sqlmodel import Session, select
 from app.config import get_settings
 from app.db.models import A2ATaskEvent, A2ATaskRun, Tool, utc_now
 
-
 _TERMINAL_STATES = {"completed", "failed", "canceled", "cancelled", "rejected"}
 _INTERRUPTED_STATES = {"input-required", "auth-required"}
 _RUN_LOCKS: dict[str, threading.RLock] = {}

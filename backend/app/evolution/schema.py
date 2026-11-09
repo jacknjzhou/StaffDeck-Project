@@ -4,7 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 EvolutionResourceType = Literal["sop", "general_skill"]
 
 

@@ -9,13 +9,17 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-
 SpanSink = Callable[[str, dict[str, Any]], None]
 
 
 _span_sink: ContextVar[SpanSink | None] = ContextVar("span_sink", default=None)
 _span_operation: ContextVar[str] = ContextVar("span_operation", default="llm.request")
-_span_attributes: ContextVar[dict[str, Any]] = ContextVar("span_attributes", default={})
+_span_attributes: ContextVar[dict[str, Any]] = ContextVar(
+    "span_attributes",
+    # The default is never mutated in place: every writer sets a new dict via
+    # `{**current, **attributes}`, so sharing it across contexts is safe.
+    default={},  # noqa: B039
+)
 _parent_span_id: ContextVar[str | None] = ContextVar("parent_span_id", default=None)
 
 
@@ -54,7 +58,7 @@ def bind_span_sink(sink: SpanSink) -> Iterator[None]:
         _span_sink.reset(token)
 
 
-def set_span_sink(sink: SpanSink):  # noqa: ANN201 - ContextVar token type is implementation-specific.
+def set_span_sink(sink: SpanSink):  # ContextVar token type is implementation-specific.
     """设置当前上下文的 sink,并返回可交给 reset_span_sink 回滚的 token。"""
     return _span_sink.set(sink)
 

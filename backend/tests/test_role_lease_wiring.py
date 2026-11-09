@@ -7,6 +7,8 @@
 3. 异常路径：startup 失败时已持有的租约与文件锁都被释放。
 """
 
+import logging
+
 import fakeredis
 import pytest
 
@@ -204,3 +206,195 @@ def test_held_leases_are_renewed_while_process_runs(monkeypatch):
 
     assert not main_mod._lease_renew_thread
     assert held[0].released
+
+
+class _ScriptedLease:
+    """按预设序列返回续期结果的替身租约，用于验证失败计数与 fencing 语义。
+
+    序列元素既可以是 bool（正常返回），也可以是异常实例（模拟 Redis 不可达）；
+    序列用尽后重复最后一项。
+    """
+
+    def __init__(self, results: list[object]) -> None:
+        """记录续期结果序列，并初始化计数与释放标记。"""
+        self.results = results
+        self.renewed = 0
+        self.released = False
+
+    def renew(self) -> bool:
+        """按下标返回结果或抛出预设异常，序列用尽后重复最后一项。"""
+        index = min(self.renewed, len(self.results) - 1)
+        self.renewed += 1
+        result = self.results[index]
+        if isinstance(result, BaseException):
+            raise result
+        return bool(result)
+
+    def release(self) -> None:
+        """标记租约已释放，供清理路径断言。"""
+        self.released = True
+
+
+def _wait_until(predicate, timeout: float = 3.0) -> None:
+    """轮询等待条件成立，避免对后台线程用固定 sleep 造成偶发失败。"""
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while not predicate() and _time.monotonic() < deadline:
+        _time.sleep(0.01)
+    assert predicate()
+
+
+def _renewer_test_setup(monkeypatch, results: list[object]):
+    """装配一个只持有替身租约的 main 模块，返回（模块, 租约）。"""
+    from app.core import runtime_state
+
+    main_mod = _patch_settings(monkeypatch, redis_url="redis://example:6379/0")
+    monkeypatch.setattr(main_mod, "LEASE_RENEW_INTERVAL_SECONDS", 0.02)
+    lease = _ScriptedLease(results)
+    main_mod._stop_lease_renewer()
+    main_mod._held_leases.clear()
+    main_mod._held_leases.append(lease)
+    runtime_state.lease_lost.clear()
+    main_mod._lease_renew_failures = 0
+    return main_mod, lease
+
+
+def _renewer_test_teardown(main_mod) -> None:
+    """停止续期线程并清理托管状态，避免测试间相互污染。"""
+    from app.core import runtime_state
+
+    main_mod._stop_lease_renewer()
+    main_mod._held_leases.clear()
+    main_mod._lease_renew_failures = 0
+    runtime_state.lease_lost.clear()
+
+
+def _main_records(caplog, level: int) -> list[logging.LogRecord]:
+    """只取 main 记录器指定级别的日志，排除其他库的噪音。"""
+    return [
+        record
+        for record in caplog.records
+        if record.name == "staffdeck.main" and record.levelno == level
+    ]
+
+
+class _ExitHook:
+    """记录 ``_terminate_process`` 的调用次数，防止测试进程真的退出。
+
+    fatal 分支调用本钩子后置位续期停止事件：真实的 ``os._exit`` 不会返回，测试里
+    用一个空实现模拟，需要主动让续期循环停下来，否则会按 20ms 间隔反复触发。
+    """
+
+    def __init__(self, main_mod) -> None:
+        """保存被测模块句柄，便于置位其停止事件。"""
+        self.main_mod = main_mod
+        self.calls = 0
+
+    def __call__(self) -> None:
+        """记录一次终止调用并停止续期循环。"""
+        self.calls += 1
+        self.main_mod._lease_renew_stop.set()
+
+
+def _install_exit_hook(monkeypatch, main_mod) -> _ExitHook:
+    """把真正的 os._exit 替换成可观测的钩子。"""
+    hook = _ExitHook(main_mod)
+    monkeypatch.setattr(main_mod, "_terminate_process", hook)
+    return hook
+
+
+def test_renew_false_terminates_process(monkeypatch, caplog):
+    """renew() 明确返回 False 代表 fencing 已丢失：置位 not-ready 并终止进程。"""
+    from app.core import runtime_state
+
+    main_mod, lease = _renewer_test_setup(monkeypatch, [False])
+    exit_hook = _install_exit_hook(monkeypatch, main_mod)
+    caplog.set_level(logging.ERROR, logger="staffdeck.main")
+    main_mod._start_lease_renewer()
+    try:
+        _wait_until(lambda: exit_hook.calls >= 1)
+        assert runtime_state.is_lease_lost()
+        assert lease.renewed >= 1
+        _wait_until(lambda: len(_main_records(caplog, logging.ERROR)) == 1)
+        message = _main_records(caplog, logging.ERROR)[0].getMessage()
+        # 日志里要能区分是哪个租约，不能退化成只有内存地址的 repr。
+        assert "ScriptedLease#0" in message
+        assert "租约已被他人持有或已过期" in message
+        assert "object at 0x" not in message
+    finally:
+        _renewer_test_teardown(main_mod)
+
+
+def test_three_consecutive_renew_exceptions_do_not_terminate(monkeypatch, caplog):
+    """异常可能只是 Redis 抖动：连败 3 轮只置位 not-ready，不终止进程。"""
+    from app.core import runtime_state
+
+    main_mod, lease = _renewer_test_setup(monkeypatch, [RuntimeError("redis unavailable")])
+    exit_hook = _install_exit_hook(monkeypatch, main_mod)
+    caplog.set_level(logging.ERROR, logger="staffdeck.main")
+    main_mod._start_lease_renewer()
+    try:
+        _wait_until(runtime_state.is_lease_lost)
+        assert lease.renewed >= 3
+        _wait_until(lambda: len(_main_records(caplog, logging.ERROR)) == 1)
+        message = _main_records(caplog, logging.ERROR)[0].getMessage()
+        assert "ScriptedLease#0" in message
+        assert "连续 3 轮续期异常" in message
+        assert "object at 0x" not in message
+        assert exit_hook.calls == 0
+
+        settled = lease.renewed
+        _wait_until(lambda: lease.renewed >= settled + 2)
+        assert len(_main_records(caplog, logging.ERROR)) == 1, "lost lease must not log every round"
+        assert exit_hook.calls == 0, "transport errors alone must not restart the process"
+    finally:
+        _renewer_test_teardown(main_mod)
+
+
+def test_successful_renewal_resets_failure_streak(monkeypatch, caplog):
+    """两次异常后成功一次即清零，因此永不到达 3 连败、也不会置位 lost。"""
+    from app.core import runtime_state
+
+    main_mod, lease = _renewer_test_setup(
+        monkeypatch, [RuntimeError("blip"), RuntimeError("blip"), True]
+    )
+    exit_hook = _install_exit_hook(monkeypatch, main_mod)
+    caplog.set_level(logging.WARNING, logger="staffdeck.main")
+    main_mod._start_lease_renewer()
+    try:
+        _wait_until(lambda: lease.renewed >= 6)
+        assert not runtime_state.is_lease_lost()
+        assert _main_records(caplog, logging.WARNING) == []
+        assert _main_records(caplog, logging.ERROR) == []
+        assert exit_hook.calls == 0
+    finally:
+        _renewer_test_teardown(main_mod)
+
+
+def test_successful_renewal_clears_lost_state_and_logs_recovery(monkeypatch, caplog):
+    """异常抖动被置位后，下一次成功续期必须恢复就绪，而不是永久 503。"""
+    from app.core import runtime_state
+
+    main_mod, _lease = _renewer_test_setup(monkeypatch, [False, True])
+    exit_hook = _install_exit_hook(monkeypatch, main_mod)
+    caplog.set_level(logging.WARNING, logger="staffdeck.main")
+
+    # 直接驱动一轮 renew，避免与后台线程的 20ms 间隔产生竞态。
+    fencing_lost, reason = main_mod._renew_held_leases_once()
+    assert fencing_lost and reason
+    assert not runtime_state.is_lease_lost()
+    # 这里模拟异常路径的置位（非 fatal），恢复语义与 fatal 路径共用 clear。
+    main_mod._latch_lease_lost(reason)
+    assert runtime_state.is_lease_lost()
+    assert exit_hook.calls == 0
+
+    fencing_lost, reason = main_mod._renew_held_leases_once()
+    assert not fencing_lost and reason == ""
+    main_mod._record_lease_renew_success()
+
+    assert not runtime_state.is_lease_lost()
+    lost_messages = [r.getMessage() for r in _main_records(caplog, logging.ERROR)]
+    recovery_messages = [r.getMessage() for r in _main_records(caplog, logging.WARNING)]
+    assert any("not-ready" in message for message in lost_messages)
+    assert any("转回 ready" in message for message in recovery_messages)

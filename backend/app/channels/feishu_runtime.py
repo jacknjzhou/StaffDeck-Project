@@ -15,7 +15,6 @@ from app.channels.service_feishu_inbox import StageDisposition, stage_feishu_inb
 from app.db.models import ChannelBinding
 from feishu_connector_worker import SDK_CONTRACT_VERSION
 
-
 logger = logging.getLogger(__name__)
 
 

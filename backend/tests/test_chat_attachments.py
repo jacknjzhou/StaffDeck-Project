@@ -21,7 +21,7 @@ def test_text_attachment_extracts_preview_and_python_summary() -> None:
     attachment = parse_chat_attachment(
         "notes.txt",
         "text/plain",
-        "第一行\n第二行".encode("utf-8"),
+        "第一行\n第二行".encode(),
     )
 
     assert attachment.kind == "text"

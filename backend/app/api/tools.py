@@ -19,8 +19,8 @@ from app.agents.branching import (
     user_creator_metadata,
     visible_tool_rows,
 )
-from app.config import get_settings
 from app.capability_scope import normalize_capability_scope
+from app.config import get_settings
 from app.db import get_session
 from app.db.models import (
     A2ATaskEvent,
@@ -55,9 +55,9 @@ from app.tools.tool_schema import (
     MCPAppResourceRead,
     MCPAppToolCallRequest,
     MCPAppToolCallResponse,
+    MCPDiscoveredTool,
     MCPDiscoverRequest,
     MCPDiscoverResponse,
-    MCPDiscoveredTool,
     MCPServerConnection,
     MCPServerCreateRequest,
     MCPServerRead,
@@ -321,7 +321,7 @@ def probe_tool(
             input_schema=request.input_schema,
             output_schema=request.output_schema,
         )
-        result = ToolExecutor(db)._execute_a2a_tool(  # noqa: SLF001
+        result = ToolExecutor(db)._execute_a2a_tool(
             tool,
             request.sample_arguments,
         )
@@ -869,9 +869,13 @@ def _infer_json_schema(value: Any) -> dict[str, Any]:
 
 
 def _server_connection(row: MCPServer) -> MCPServerConnection:
-    """把 MCPServer 行还原成结构化的连接配置。"""
-    return MCPServerConnection(
-        transport=row.transport,  # type: ignore[arg-type]
+    """把 MCPServer 行还原成结构化的连接配置。
+
+    已落库的连接属于读路径，用 model_construct 跳过输入校验：部署策略收紧后，
+    历史行或种子行（例如本机解释器路径）不应让详情接口直接 500。
+    """
+    return MCPServerConnection.model_construct(
+        transport=row.transport,
         url=row.url,
         headers=row.headers_json or {},
         command=row.command,
@@ -879,6 +883,19 @@ def _server_connection(row: MCPServer) -> MCPServerConnection:
         env=row.env_json or {},
         cwd=row.cwd,
     )
+
+
+def _ensure_stdio_enabled(connection: MCPServerConnection | None) -> None:
+    """stdio 写入/探测入口的部署级门禁：先看开关，再按白名单复核命令。"""
+    if connection is None or connection.transport != "stdio":
+        return
+    if not get_settings().mcp_stdio_enabled:
+        raise HTTPException(status_code=403, detail="stdio MCP 未在本部署启用")
+    if not connection.allowed_stdio_command():
+        raise HTTPException(
+            status_code=403,
+            detail=f"stdio command not in allowlist: {connection.command}",
+        )
 
 
 def _connection_to_client_config(connection: MCPServerConnection) -> dict[str, Any]:
@@ -964,6 +981,7 @@ def create_mcp_server(
     current_user: User = Depends(get_current_user),
 ) -> MCPServerRead:
     """创建 MCP 工具集；同一租户内 name 重复时返回 409。"""
+    _ensure_stdio_enabled(request.connection)
     ensure_tenant(db, request.tenant_id)
     ensure_open_gallery_admin(request.tenant_id, current_user)
     existing = db.exec(
@@ -1128,6 +1146,7 @@ def update_mcp_server(
     current_user: User = Depends(get_current_user),
 ) -> MCPServerRead:
     """更新 MCP 工具集配置；能力范围变更会级联到继承该默认值的子工具。"""
+    _ensure_stdio_enabled(request.connection)
     row = _get_mcp_server(db, request.tenant_id, server_id)
     ensure_open_gallery_admin(request.tenant_id, current_user)
     conn = request.connection
@@ -1198,6 +1217,7 @@ def discover_mcp_tools_adhoc(
             success=False,
             error=ToolError(code="MISSING_CONNECTION", message="缺少 MCP 连接配置。"),
         )
+    _ensure_stdio_enabled(request.connection)
     return _discover_response(request.connection, apps_mode=request.apps_mode)
 
 
@@ -1215,6 +1235,7 @@ def discover_mcp_tools(
     if agent_id and get_agent(db, request.tenant_id, agent_id) is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     connection = request.connection or _server_connection(row)
+    _ensure_stdio_enabled(connection)
     response = _discover_response(
         connection,
         apps_mode=request.apps_mode if request.connection is not None else row.apps_mode,
@@ -1384,7 +1405,7 @@ def _discover_response(
             success=False,
             error=ToolError(code="MCP_DISCOVER_ERROR", message=str(exc)),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return MCPDiscoverResponse(
             success=False,
             error=ToolError(code="MCP_DISCOVER_UNEXPECTED", message=str(exc)),

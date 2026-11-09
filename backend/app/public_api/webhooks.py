@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import json
 import secrets
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
@@ -25,7 +25,6 @@ from app.public_api.auth import PublicPrincipal, require_scopes
 from app.public_api.errors import PublicAPIError
 from app.public_api.schemas import WebhookCreate, WebhookRead
 from app.security.encryption import decrypt_secret, encrypt_secret
-
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -347,7 +346,7 @@ def deliver_webhook(delivery_id: str) -> None:
         timestamp = str(int(datetime_now_timestamp()))
         signature = hmac.new(
             decrypt_secret(endpoint.secret_encrypted).encode("utf-8"),
-            f"{timestamp}.{body}".encode("utf-8"),
+            f"{timestamp}.{body}".encode(),
             hashlib.sha256,
         ).hexdigest()
         delivery.attempt_count += 1
@@ -370,7 +369,7 @@ def deliver_webhook(delivery_id: str) -> None:
                 delivery.last_error = None
             else:
                 _schedule_retry(delivery, f"HTTP {response.status_code}")
-        except Exception as exc:  # noqa: BLE001 - persisted delivery boundary.
+        except Exception as exc:  # persisted delivery boundary.
             _schedule_retry(delivery, str(exc))
         _finish_webhook_delivery(
             db,

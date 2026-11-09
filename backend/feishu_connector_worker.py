@@ -10,9 +10,10 @@ import sqlite3
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 WATCHDOG_EXIT_CODE = 71
 PARENT_GONE_EXIT_CODE = 72

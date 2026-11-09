@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.capability_scope import CapabilityScope
+from app.config import get_settings
 
 
 class ToolExecutionPolicy(BaseModel):
@@ -21,7 +23,7 @@ class ToolExecutionPolicy(BaseModel):
     max_tracking_seconds: int = Field(default=86400, ge=1, le=2592000)
 
     @model_validator(mode="after")
-    def validate_provider_tracking(self) -> "ToolExecutionPolicy":
+    def validate_provider_tracking(self) -> ToolExecutionPolicy:
         """校验 Provider 托管的 detached 工具必须提供 status_url，否则抛 ValueError。"""
         if (
             self.execution_mode == "detached"
@@ -181,6 +183,15 @@ class MCPServerConnection(BaseModel):
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     cwd: Optional[str] = None
+
+    def allowed_stdio_command(self) -> bool:
+        """按可执行文件名判断 stdio 命令是否落入部署配置的白名单。"""
+        allowed = {
+            item.strip()
+            for item in get_settings().mcp_stdio_allowed_commands.split(",")
+            if item.strip()
+        }
+        return Path(self.command or "").name in allowed
 
 
 class MCPServerCreateRequest(BaseModel):

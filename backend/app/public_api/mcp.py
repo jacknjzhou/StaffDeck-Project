@@ -138,7 +138,7 @@ def _dispatch(
         # laundered into a 200 with a JSON-RPC error body, or a client would
         # treat an access denial as a tool-level hiccup.
         raise
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         return JSONResponse(
             error_response(request_id, RpcError(INTERNAL_ERROR, str(error))),
             status_code=200,

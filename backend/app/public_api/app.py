@@ -71,7 +71,7 @@ def _audit_loop() -> None:
                     db.connection().exec_driver_sql("PRAGMA busy_timeout = 2000")
                 db.add(APIAuditLog(**item))  # type: ignore[arg-type]
                 db.commit()
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             # Never silently drop the failure: a missing audit trail is an
             # incident, not a detail, and the request itself already succeeded.
             logger.warning(

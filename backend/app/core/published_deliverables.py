@@ -8,7 +8,6 @@ from sqlmodel import Session, select
 from app.db.models import HarnessTaskFrameRecord, Message
 from app.harness import HarnessArtifactAccessError, normalize_harness_artifact_path
 
-
 MAX_PUBLISHED_DELIVERABLES = 20
 
 

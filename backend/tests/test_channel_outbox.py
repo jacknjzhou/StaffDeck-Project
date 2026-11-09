@@ -7,6 +7,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.channels.adapters import base as adapter_registry
 from app.channels.adapters.base import register_channel_adapter
+from app.channels.crypto import encrypt_channel_secret
 from app.channels.service_durable_inbox import reaction_target
 from app.channels.service_outbox import (
     cleanup_channel_reactions_before_binding_delete,
@@ -15,7 +16,6 @@ from app.channels.service_outbox import (
     stage_channel_delivery,
 )
 from app.config import get_settings
-from app.channels.crypto import encrypt_channel_secret
 from app.db.models import (
     ChannelBinding,
     ChannelDelivery,

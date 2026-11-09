@@ -9,7 +9,6 @@ from app.db.models import A2ATaskRun, Tool, utc_now
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import ToolCall
 
-
 _RECOVERABLE_STATES = {"submitted", "working"}
 
 

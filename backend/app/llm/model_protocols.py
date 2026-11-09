@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from enum import StrEnum
 from typing import Any
-import unicodedata
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException

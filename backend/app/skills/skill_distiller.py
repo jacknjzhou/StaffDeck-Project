@@ -13,14 +13,13 @@ from app.llm import LLMClient, LLMError
 from app.skills.llm_limits import skill_model_config
 from app.skills.skill_reflection import reflect_skill_response, reflect_skill_response_stream
 from app.skills.skill_schema import (
+    SkillCard,
     SkillDistillRequest,
     SkillDistillResponse,
-    SkillCard,
     SkillGraphNode,
     ToolSuggestion,
 )
 from app.skills.step_ids import ensure_unique_node_ids, skill_card_with_unique_step_ids
-
 
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "skill_distiller_prompt.md"
 STREAM_INTERVAL_SECONDS = 0.035
@@ -78,56 +77,68 @@ class SkillDistiller:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
         client = LLMClient(skill_model_config(model_config))
         try:
-            yield {"event": "status", "data": {"text": "模型正在规划技能结构"}}
-            for chunk in client.generate_text_stream(prompt, model_input):
-                chunks.append(chunk)
-                yield {"event": "chunk", "data": {"content": chunk}}
-            yield {"event": "status", "data": {"text": "正在校验模型输出结构"}}
-            response = self._response_from_text("".join(chunks), request)
-        except (LLMError, json.JSONDecodeError, TypeError, ValueError) as exc:
             try:
-                yield {"event": "status", "data": {"text": "模型输出需要修复，正在重试"}}
-                response = self._repair_response(
-                    client, prompt, payload, "".join(chunks), str(exc), request
-                )
-            except (LLMError, json.JSONDecodeError, TypeError, ValueError) as repair_exc:
+                yield {"event": "status", "data": {"text": "模型正在规划技能结构"}}
+                for chunk in client.generate_text_stream(prompt, model_input):
+                    chunks.append(chunk)
+                    yield {"event": "chunk", "data": {"content": chunk}}
+                yield {"event": "status", "data": {"text": "正在校验模型输出结构"}}
+                response = self._response_from_text("".join(chunks), request)
+            except (LLMError, json.JSONDecodeError, TypeError, ValueError) as exc:
                 try:
-                    yield {"event": "status", "data": {"text": "模型修复失败，改用分段生成"}}
-                    response = self._staged_response(
-                        client, prompt, payload, request, str(repair_exc)
+                    yield {"event": "status", "data": {"text": "模型输出需要修复，正在重试"}}
+                    response = self._repair_response(
+                        client, prompt, payload, "".join(chunks), str(exc), request
                     )
-                except (LLMError, json.JSONDecodeError, TypeError, ValueError) as staged_exc:
-                    yield {
-                        "event": "status",
-                        "data": {"text": "模型多轮生成失败，使用最低可运行草稿"},
-                    }
-                    response = self._fallback_response(
-                        request, f"模型多轮生成未能完成，已使用最低可运行草稿：{staged_exc}"
-                    )
-            yield {"event": "chunk_reset", "data": {}}
-            for chunk in _chunk_text(_serialize_response_for_stream(response)):
-                yield {"event": "chunk", "data": {"content": chunk}}
-                sleep(STREAM_INTERVAL_SECONDS)
-        yield {"event": "status", "data": {"text": "正在校验步骤闭环与工具接入"}}
-        before_reflection = response.model_dump(mode="json")
-        response = yield from reflect_skill_response_stream(
-            client=client,
-            source_kind="distill",
-            source_payload=payload,
-            response=response,
-            candidate_skill=response.draft_skill,
-            current_warnings=response.warnings,
-            tool_suggestions=response.tool_suggestions,
-            normalize_response=lambda raw: self._normalize_response(raw, request),
-        )
-        yield {"event": "status", "data": {"text": "正在整理校验后的技能草稿"}}
-        if response.model_dump(mode="json") != before_reflection:
-            yield {"event": "chunk_reset", "data": {}}
-            for chunk in _chunk_text(_serialize_response_for_stream(response)):
-                yield {"event": "chunk", "data": {"content": chunk}}
-                sleep(STREAM_INTERVAL_SECONDS)
-        yield {"event": "status", "data": {"text": "校验完成，已完成 Skill Card 结构化"}}
-        yield {"event": "complete", "data": response.model_dump(mode="json")}
+                except (LLMError, json.JSONDecodeError, TypeError, ValueError) as repair_exc:
+                    try:
+                        yield {
+                            "event": "status",
+                            "data": {"text": "模型修复失败，改用分段生成"},
+                        }
+                        response = self._staged_response(
+                            client, prompt, payload, request, str(repair_exc)
+                        )
+                    except (
+                        LLMError,
+                        json.JSONDecodeError,
+                        TypeError,
+                        ValueError,
+                    ) as staged_exc:
+                        yield {
+                            "event": "status",
+                            "data": {"text": "模型多轮生成失败，使用最低可运行草稿"},
+                        }
+                        response = self._fallback_response(
+                            request,
+                            f"模型多轮生成未能完成，已使用最低可运行草稿：{staged_exc}",
+                        )
+                yield {"event": "chunk_reset", "data": {}}
+                for chunk in _chunk_text(_serialize_response_for_stream(response)):
+                    yield {"event": "chunk", "data": {"content": chunk}}
+                    sleep(STREAM_INTERVAL_SECONDS)
+            yield {"event": "status", "data": {"text": "正在校验步骤闭环与工具接入"}}
+            before_reflection = response.model_dump(mode="json")
+            response = yield from reflect_skill_response_stream(
+                client=client,
+                source_kind="distill",
+                source_payload=payload,
+                response=response,
+                candidate_skill=response.draft_skill,
+                current_warnings=response.warnings,
+                tool_suggestions=response.tool_suggestions,
+                normalize_response=lambda raw: self._normalize_response(raw, request),
+            )
+            yield {"event": "status", "data": {"text": "正在整理校验后的技能草稿"}}
+            if response.model_dump(mode="json") != before_reflection:
+                yield {"event": "chunk_reset", "data": {}}
+                for chunk in _chunk_text(_serialize_response_for_stream(response)):
+                    yield {"event": "chunk", "data": {"content": chunk}}
+                    sleep(STREAM_INTERVAL_SECONDS)
+            yield {"event": "status", "data": {"text": "校验完成，已完成 Skill Card 结构化"}}
+            yield {"event": "complete", "data": response.model_dump(mode="json")}
+        finally:
+            client.close()
 
     def _generate_response(
         self, request: SkillDistillRequest, model_config: ModelConfig
@@ -136,33 +147,41 @@ class SkillDistiller:
         payload = self._payload(request)
         model_input = self._model_input(request, payload)
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
-        client = LLMClient(skill_model_config(model_config))
         output = ""
-        try:
-            output = client.generate_text(prompt, model_input)
-            response = self._response_from_text(output, request)
-        except (LLMError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        with LLMClient(skill_model_config(model_config)) as client:
             try:
-                response = self._repair_response(client, prompt, payload, output, str(exc), request)
-            except (LLMError, json.JSONDecodeError, TypeError, ValueError) as repair_exc:
+                output = client.generate_text(prompt, model_input)
+                response = self._response_from_text(output, request)
+            except (LLMError, json.JSONDecodeError, TypeError, ValueError) as exc:
                 try:
-                    response = self._staged_response(
-                        client, prompt, payload, request, str(repair_exc)
+                    response = self._repair_response(
+                        client, prompt, payload, output, str(exc), request
                     )
-                except (LLMError, json.JSONDecodeError, TypeError, ValueError) as staged_exc:
-                    response = self._fallback_response(
-                        request, f"模型多轮生成未能完成，已使用最低可运行草稿：{staged_exc}"
-                    )
-        return reflect_skill_response(
-            client=client,
-            source_kind="distill",
-            source_payload=payload,
-            response=response,
-            candidate_skill=response.draft_skill,
-            current_warnings=response.warnings,
-            tool_suggestions=response.tool_suggestions,
-            normalize_response=lambda raw: self._normalize_response(raw, request),
-        )
+                except (LLMError, json.JSONDecodeError, TypeError, ValueError) as repair_exc:
+                    try:
+                        response = self._staged_response(
+                            client, prompt, payload, request, str(repair_exc)
+                        )
+                    except (
+                        LLMError,
+                        json.JSONDecodeError,
+                        TypeError,
+                        ValueError,
+                    ) as staged_exc:
+                        response = self._fallback_response(
+                            request,
+                            f"模型多轮生成未能完成，已使用最低可运行草稿：{staged_exc}",
+                        )
+            return reflect_skill_response(
+                client=client,
+                source_kind="distill",
+                source_payload=payload,
+                response=response,
+                candidate_skill=response.draft_skill,
+                current_warnings=response.warnings,
+                tool_suggestions=response.tool_suggestions,
+                normalize_response=lambda raw: self._normalize_response(raw, request),
+            )
 
     def _response_from_text(self, text: str, request: SkillDistillRequest) -> SkillDistillResponse:
         """从模型文本中提取 JSON 对象，并按请求上下文归一化为技能响应。"""
@@ -1824,5 +1843,5 @@ def _slugify(title: str, raw: str) -> str:
     ascii_slug = "_".join(part for part in ascii_slug.split("_") if part)
     if ascii_slug:
         return ascii_slug[:48]
-    digest = hashlib.md5(f"{title}:{raw}".encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+    digest = hashlib.md5(f"{title}:{raw}".encode(), usedforsecurity=False).hexdigest()[:8]
     return f"skill_{digest}"

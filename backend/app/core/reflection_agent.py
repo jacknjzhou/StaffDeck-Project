@@ -20,7 +20,6 @@ from app.observability.spans import llm_operation
 from app.session.session_schema import RouterDecision, StepAgentResult
 from app.tools.tool_schema import ToolResult
 
-
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "reflection_prompt.md"
 
 
@@ -88,10 +87,8 @@ class ReflectionAgent:
             output_contract=REFLECTION_OUTPUT_SCHEMA,
         )
         try:
-            with llm_operation("reflection.review"):
-                raw = LLMClient(model_config).generate_json(
-                    unified_system_prompt(), payload
-                )
+            with llm_operation("reflection.review"), LLMClient(model_config) as client:
+                raw = client.generate_json(unified_system_prompt(), payload)
             return ReflectionDecision.model_validate(raw)
         except Exception as exc:
             if isinstance(exc, LLMError):

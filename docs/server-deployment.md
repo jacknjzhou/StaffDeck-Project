@@ -62,16 +62,17 @@ PORT=8080 bash scripts/compose_smoke.sh  # 换端口
 - [ ] PostgreSQL 与 Redis **没有**映射到公网端口；compose 默认只在容器网络内暴露。
 - [ ] nginx 前面有 TLS 终止（云负载均衡或宿主 nginx），并强制 HTTPS；`APP_SECRET`
       与 OIDC secret 只存在于服务端环境变量。
-- [ ] 已配置 `pg_dump` 定时备份，并至少完成一次恢复演练；备份文件与
-      `STAFFDECK_APP_SECRET` 分开保管。
+- [ ] 已配置 `pg_dump` 定时备份（见[备份与恢复](backup-restore.md)），并至少完成一次
+      恢复演练；备份文件与 `STAFFDECK_APP_SECRET` 分开保管。
 - [ ] `STAFFDECK_RUN_MIGRATIONS=1` 只在 `api` 容器上；升级时先备份，再滚动重建。
 - [ ] 已确认 `curl -fsS http://<host>/api/health` 返回 200，且日志无租约冲突。
 - [ ] 若启用 OIDC，`OIDC_REDIRECT_URI` 与 `FRONTEND_BASE_URL` 都指向对外域名，
       且 IdP 侧回调地址完全一致。
 
-> 当前版本的 `APP_SECRET` 仍有内置默认值，服务不会因默认值拒绝启动；管理员
-> 账号也仍会在空库初始化时创建。**在上述门禁落地前，必须人工完成前两项检查**，
-> 不能把“能启动”当作“可上线”。对应加固任务见优化计划的任务 1–2。
+> **生产环境启动时即校验 `APP_SECRET`**：内置默认值、短于 32 字符，或包含
+> `change-me`/`changeme`/`replace-me`/`example` 等占位片段，都会直接拒绝启动
+> （实现见 `backend/app/config.py`）。管理员账号仍会在空库初始化时创建，因此
+> “能启动”不等于“可上线”：密钥强度、默认口令替换与 TLS 仍需人工确认。
 
 ---
 
@@ -146,7 +147,13 @@ STAFFDECK_DATABASE_URL="postgresql+psycopg://user:pass@host:5432/staffdeck" \
 > 的 schema 变更应以迁移为准，否则新建表/列不会在其他实例上线。启动时的 schema
 > 版本校验与 PostgreSQL 增量迁移是优化计划的任务 4。
 
-升级顺序：备份 → 停 `worker`/`connector` → 跑迁移 → 重建 `api` → 重建其余容器。
+升级顺序：[备份](backup-restore.md) → 停 `worker`/`connector` → 跑迁移 →
+重建 `api` → 重建其余容器。
+
+> **含 `0003_user_status` 之后**：`api` 容器启动时会先自动执行迁移
+> （`STAFFDECK_RUN_MIGRATIONS=1`）。仅当关闭自动迁移（`STAFFDECK_RUN_MIGRATIONS=0`）
+> 或绕过 `entrypoint.sh` 直接启动 uvicorn 时，未迁移的库才会被
+> `assert_schema_current` 拒绝启动。升级仍建议先迁移再重建 `api`。
 
 ---
 
@@ -177,8 +184,13 @@ STAFFDECK_DATABASE_URL="postgresql+psycopg://user:pass@host:5432/staffdeck" \
 - 对外 API `/api/v1`：Bearer `sd_live_*` 密钥（账号密钥 / 员工运行密钥 / API Client 密钥）。
 - **租户由凭证推导**，不再依赖请求参数：`tenant_id` 查询参数已改为可选，
   省略时以 JWT 为准；显式传入且不匹配仍返回 403。
-- 管理员重置密码：`PUT /api/auth/users/{user_id}`；当前没有用户自助改密页面，
-  引导管理员改密需由管理员操作或直接更新数据库（见任务 2 的改密端点）。
+- 自助改密：本地口令账号可在企业控制台（非对话页）右上角账户菜单「修改密码」调用
+  `POST /api/auth/change-password`（需当前口令，成功返回 204）；管理员重置他人密码仍用
+  `PUT /api/auth/users/{user_id}`。
+- OIDC 账号没有本地口令，不能使用自助改密；管理员可用 `PUT /api/auth/users/{user_id}`
+  为其重置口令，或删除该账号。系统不提供单独的“禁用账号”开关。
+- **已知限制**：JWT 没有吊销列表，用户改密后已签发的旧 token 在 14 天有效期内仍然可用。
+  口令泄露场景应同时让管理员重置口令或删除账号，或在后续版本引入 token 版本号校验。
 
 ### OIDC SSO（可选）
 
@@ -190,14 +202,23 @@ OIDC_ISSUER=https://your-idp.example.com
 OIDC_CLIENT_ID=staffdeck
 OIDC_CLIENT_SECRET=...
 OIDC_REDIRECT_URI=https://staffdeck.example.com/api/auth/oidc/callback
+OIDC_TENANT_ID=tenant_acme
 FRONTEND_BASE_URL=https://staffdeck.example.com
 ```
 
-登录入口 `GET /api/auth/oidc/login`，IdP 回调后按邮箱查找/创建用户并签发常规 JWT，
-重定向到 `{FRONTEND_BASE_URL}/login?token=<JWT>`。未启用时该端点返回 404。
+`OIDC_TENANT_ID` 指定 OIDC 登录绑定的租户。未设置时回退到 `tenant_demo`；
+生产多租户部署必须显式设置，否则所有 SSO 用户都会落到演示租户。
 
-> 已知限制：OIDC 目前**只按邮箱匹配用户，不校验租户**。在启用多租户的部署中，
-> 不同租户出现同名邮箱时可能把身份绑到错误租户；加固任务见优化计划任务 7。
+登录入口 `GET /api/auth/oidc/login`，IdP 回调后按邮箱在 `OIDC_TENANT_ID`
+绑定的租户内查找/创建用户并签发常规 JWT，重定向到
+`{FRONTEND_BASE_URL}/login?token=<JWT>`。未启用时该端点返回 404。
+
+匹配规则：
+
+- 邮箱先 `strip().lower()`，再按 `(tenant_id, lower(username))` 查询，避免大小写差异造成重复账号。
+- 新用户创建在 `OIDC_TENANT_ID` 租户；`OIDC_TENANT_ID` 未设置时回退 `tenant_demo`。
+- 若同邮箱已存在于其他租户，返回 **409** 并提示管理员先在当前租户显式绑定，
+  绝不静默选中其他租户账号或新建重复账号。
 
 ---
 
@@ -214,9 +235,13 @@ FRONTEND_BASE_URL=https://staffdeck.example.com
 | `PUBLIC_API_ENABLED` | 是否挂载 `/api/v1` | `true` |
 | `STAFFDECK_PG_PASSWORD` | compose 用，PostgreSQL 密码 | 必填 |
 | `STAFFDECK_HOST_PORT` | compose 暴露的宿主端口 | `5173` |
+| `OIDC_TENANT_ID` | OIDC 登录绑定的租户；生产多租户必须显式设置 | `tenant_demo` |
+| `FORWARDED_ALLOW_IPS` | uvicorn 信任的代理 IP/CIDR（禁 `*`） | `127.0.0.1` |
+| `STAFFDECK_FORWARDED_ALLOW_IPS` | compose 覆盖上值 | `172.16.0.0/12,127.0.0.1` |
 | `OIDC_*` | 见上节 | 未启用 |
 
-完整列表见 `backend/app/config.py`。
+nginx 是 compose 的唯一入口且 api 端口未发布，因此默认只信任 Docker 子网与回环；
+若绕过 nginx 直连 api，需同步收紧该值。完整列表见 `backend/app/config.py`。
 
 ---
 
@@ -274,3 +299,4 @@ SQLite → PostgreSQL 没有自动迁移工具。推荐路径：
 - 服务端化总体设计：`docs/superpowers/specs/2026-10-22-staffdeck-server-side-design.md`
 - deepchat 接入方案：`docs/superpowers/specs/2026-10-22-deepchat-side-integration-design.md`
 - 公开 API 使用说明：`docs/open-api-v1.md`
+- 备份与恢复：[docs/backup-restore.md](backup-restore.md)

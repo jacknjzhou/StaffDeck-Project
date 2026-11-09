@@ -1,17 +1,18 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
-
-from app.agents.branching import ensure_private_resource_binding
-from app.tools.tool_executor import ToolExecutor
-from app.tools.tool_schema import ToolCall
-from app.db.models import A2ATaskEvent, A2ATaskRun, AgentProfile, MCPServer, Tenant, Tool
-from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
+
+from app.agents.branching import ensure_private_resource_binding
+from app.db.models import A2ATaskEvent, A2ATaskRun, AgentProfile, MCPServer, Tenant, Tool
+from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
+from app.tools.tool_executor import ToolExecutor
+from app.tools.tool_schema import ToolCall
 
 
 def test_resolve_secret_header(monkeypatch):
@@ -819,8 +820,17 @@ def test_execute_builtin_mcp_tool_unknown_config_returns_error() -> None:
         assert result.error.code == "MCP_ERROR"
 
 
-def test_execute_stdio_mcp_tool_success() -> None:
+def test_execute_stdio_mcp_tool_success(monkeypatch) -> None:
     """验证 stdio 传输的 MCP 工具能通过子进程完成真实调用并返回结果。"""
+    monkeypatch.setattr(
+        "app.tools.mcp_client.get_settings",
+        lambda: SimpleNamespace(
+            mcp_stdio_enabled=True,
+            mcp_stdio_allowed_commands=(
+                f"npx,uvx,node,python3,uv,{Path(sys.executable).name}"
+            ),
+        ),
+    )
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(
@@ -859,8 +869,17 @@ def test_execute_stdio_mcp_tool_success() -> None:
         assert result.data == {"text": "hello real mcp", "length": 14}
 
 
-def test_execute_stdio_mcp_tool_error_is_stable() -> None:
+def test_execute_stdio_mcp_tool_error_is_stable(monkeypatch) -> None:
     """验证 stdio MCP 工具的参数校验错误以 MCP_ERROR 稳定返回并保留原始信息。"""
+    monkeypatch.setattr(
+        "app.tools.mcp_client.get_settings",
+        lambda: SimpleNamespace(
+            mcp_stdio_enabled=True,
+            mcp_stdio_allowed_commands=(
+                f"npx,uvx,node,python3,uv,{Path(sys.executable).name}"
+            ),
+        ),
+    )
     with _test_session() as db:
         db.add(Tenant(id="tenant_demo", name="Demo"))
         db.add(

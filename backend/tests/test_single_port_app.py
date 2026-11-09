@@ -3,8 +3,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
@@ -194,7 +193,7 @@ async def test_llm_relay_forwards_auth_body_query_and_stream(monkeypatch) -> Non
             """保存客户端构造参数，供断言超时等配置。"""
             captured["client_kwargs"] = kwargs
 
-        def build_request(self, method, url, *, headers, content):  # noqa: ANN001
+        def build_request(self, method, url, *, headers, content):
             """记录并构造请求，便于校验转发的方法、URL 与请求体。"""
             captured.update(
                 method=method,
@@ -204,7 +203,7 @@ async def test_llm_relay_forwards_auth_body_query_and_stream(monkeypatch) -> Non
             )
             return httpx.Request(method, url, headers=headers, content=content)
 
-        async def send(self, request, *, stream):  # noqa: ANN001
+        async def send(self, request, *, stream):
             """返回带 SSE 头和自定义流的假响应，并记录是否流式发送。"""
             captured["stream"] = stream
             return httpx.Response(
@@ -278,7 +277,7 @@ async def test_anthropic_messages_relay_uses_dedicated_upstream(monkeypatch) -> 
     captured: dict[str, object] = {}
     expected = single_port_app.StreamingResponse(iter([b"ok"]))
 
-    async def fake_relay(request, *, upstream, upstream_path):  # noqa: ANN001
+    async def fake_relay(request, *, upstream, upstream_path):
         """记录中转参数并返回预置响应，替代真实上游调用。"""
         captured.update(
             request=request,

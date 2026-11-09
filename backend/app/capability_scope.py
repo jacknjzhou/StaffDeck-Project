@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal, TypeAlias
 
-
 CapabilityScope: TypeAlias = Literal["general", "sop_specific"]
 
 GENERAL_CAPABILITY_SCOPE: CapabilityScope = "general"

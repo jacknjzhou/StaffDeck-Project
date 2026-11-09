@@ -16,7 +16,6 @@ from app.security.auth import get_current_user
 from app.security.permissions import ensure_agent_scope_manager
 from app.security.tenant import ensure_tenant
 
-
 router = APIRouter(prefix="/api/enterprise", tags=["enterprise:evolution"])
 
 

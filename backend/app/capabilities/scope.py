@@ -6,8 +6,8 @@ from app.capability_scope import (
 )
 
 __all__ = [
-    "CapabilityScope",
     "GENERAL_CAPABILITY_SCOPE",
     "SOP_SPECIFIC_CAPABILITY_SCOPE",
+    "CapabilityScope",
     "normalize_capability_scope",
 ]

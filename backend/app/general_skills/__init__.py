@@ -13,9 +13,9 @@ __all__ = [
     "GeneralSkillImportRequest",
     "GeneralSkillPackageUploadRequest",
     "GeneralSkillRead",
+    "GeneralSkillReader",
     "GeneralSkillRunRequest",
     "GeneralSkillRunResponse",
     "GeneralSkillRunner",
-    "GeneralSkillReader",
     "GeneralSkillSelector",
 ]

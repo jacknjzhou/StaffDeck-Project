@@ -10,9 +10,9 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.agents.branching import (
     copy_overall_scope_to_agent,
-    ensure_private_resource_binding,
-    ensure_open_gallery_binding,
     ensure_knowledge_base_version,
+    ensure_open_gallery_binding,
+    ensure_private_resource_binding,
     hide_open_gallery_binding,
     knowledge_version_for_upload,
     require_overall_agent,

@@ -1,5 +1,8 @@
+from typing import ClassVar
+
 import pytest
 from sqlalchemy import text as sa_text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -97,7 +100,7 @@ def _wecom_inbound(event_id: str, text: str, *, userid: str = "zhangsan", group:
 
 class RecordingAgentLoop:
     """记录每轮 turn 请求的假 AgentLoop,替代真实模型调用。"""
-    calls: list = []
+    calls: ClassVar[list] = []
 
     def __init__(self, db, *, event_sink=None):
         """保存测试会话,供 handle_turn 提交事务时使用。"""
@@ -530,7 +533,7 @@ def test_channel_scope_rebuild_migration(monkeypatch, tmp_path) -> None:
                 "VALUES ('ev_2', 'tenant_demo', 'chan_other', 'wecom', 'm1', 'done')"
             )
         )
-        with pytest.raises(Exception):
+        with pytest.raises(IntegrityError):
             conn.execute(
                 sa_text(
                     "INSERT INTO channel_inbound_events (id, tenant_id, binding_id, channel, event_id, status) "
@@ -1006,7 +1009,7 @@ def test_scope_migration_roundtrip_and_noop(monkeypatch) -> None:
         assert db.exec(select(ChannelIdentity)).one().external_account_scope == "corpA"
 
     # ③ 再保存一次(scope 无变化):不触发迁移
-    calls: list = []
+    calls: ClassVar[list] = []
     original = identity_module.migrate_scope_for_binding
     monkeypatch.setattr(
         channels_api,
@@ -1262,7 +1265,7 @@ def test_corp_id_read_and_reconfig_keeps_unless_explicit(monkeypatch) -> None:
     import app.api.channels as channels_api
 
     engine = _test_engine()
-    owner, headers = _seed_owner(engine)
+    _owner, headers = _seed_owner(engine)
     binding_id = _seed_wecom_binding(engine, bot_id="aib_bot1")
     with Session(engine) as db:
         binding = db.get(ChannelBinding, binding_id)

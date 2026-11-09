@@ -13,6 +13,7 @@ from typing import Any, TextIO
 
 import httpx
 
+from app.config import get_settings
 from app.security.managed_subprocess import ManagedProcess, ManagedProcessError
 from app.tools.mcp_builtin import (
     BuiltinMCPError,
@@ -28,6 +29,58 @@ class MCPClientError(RuntimeError):
 
 MCP_APPS_EXTENSION_ID = "io.modelcontextprotocol/ui"
 MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
+
+# stdio 子进程只继承这些与运行时定位相关的基础变量，云凭证等一律不随环境泄漏。
+_SAFE_ENV_KEYS = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "SYSTEMROOT",
+    "USERPROFILE",
+    "COMSPEC",
+    # 代理与自定义 CA 属于网络定位信息，不含凭证；保留它们才能让 npx 等走企业代理。
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+)
+
+
+def build_stdio_env(config_env: dict[str, str] | None = None) -> dict[str, str]:
+    """构造 stdio 子进程环境：只继承基础变量，其余由显式配置提供。"""
+    env = {key: os.environ[key] for key in _SAFE_ENV_KEYS if key in os.environ}
+    env.update(config_env or {})
+    return env
+
+
+def _enforce_stdio_policy(command: list[str]) -> None:
+    """stdio 启动前的部署级门禁：关闭即拒绝，并复核命令白名单。
+
+    这是执行期纵深防御，覆盖历史行、种子行、同步与工具调用等所有 spawn 入口；
+    与 API 层 403、模型层 allowlist 使用同一组配置字段。
+    """
+    settings = get_settings()
+    if not settings.mcp_stdio_enabled:
+        raise ValueError("stdio MCP transport is disabled on this deployment")
+    allowed = {
+        item.strip()
+        for item in settings.mcp_stdio_allowed_commands.split(",")
+        if item.strip()
+    }
+    executable = command[0] if command else ""
+    if Path(executable).name not in allowed:
+        raise ValueError(f"stdio command not in allowlist: {executable!r}")
 
 
 # --------------------------------------------------------------------------- #
@@ -334,7 +387,7 @@ class _MCPSession:
         self._notify("notifications/initialized", {})
 
     # 子类实现 ---------------------------------------------------------------
-    def __enter__(self) -> "_MCPSession":
+    def __enter__(self) -> _MCPSession:
         """默认上下文入口，子类可在此建立连接。"""
         return self
 
@@ -469,16 +522,20 @@ class _StdioSession(_MCPSession):
         self._stderr_collector: _StderrCollector | None = None
         self._next_id = 0
 
-    def __enter__(self) -> "_StdioSession":
+    def __enter__(self) -> _StdioSession:
         """按配置拉起受控子进程，并挂上 stdout/stderr 读取器。
 
         启动失败会区分工作目录不存在、命令缺失、权限不足等情况，统一抛 MCPClientError。
         """
         command = _stdio_command(self.config)
-        env = os.environ.copy()
+        _enforce_stdio_policy(command)
         raw_env = self.config.get("env")
-        if isinstance(raw_env, Mapping):
-            env.update({str(key): str(value) for key, value in raw_env.items()})
+        config_env = (
+            {str(key): str(value) for key, value in raw_env.items()}
+            if isinstance(raw_env, Mapping)
+            else None
+        )
+        env = build_stdio_env(config_env)
         cwd = str(self.config["cwd"]) if self.config.get("cwd") else None
         _validate_stdio_launch(command, cwd)
         try:
@@ -628,7 +685,7 @@ class _HttpSession(_MCPSession):
         self._next_id = 0
         self._session_id: str | None = None
 
-    def __enter__(self) -> "_HttpSession":
+    def __enter__(self) -> _HttpSession:
         """创建带超时的 httpx 客户端。"""
         self._client = httpx.Client(timeout=self.timeout_seconds)
         return self
@@ -729,7 +786,7 @@ class _SseSession(_MCPSession):
         self._message_url: str | None = None
         self._next_id = 0
 
-    def __enter__(self) -> "_SseSession":
+    def __enter__(self) -> _SseSession:
         """建立 SSE 长连接，从 endpoint 事件拿到消息端点后返回。"""
         self._client = httpx.Client(timeout=httpx.Timeout(self.timeout_seconds, read=None))
         url = str(self.config.get("url") or self.config.get("endpoint") or "").strip()

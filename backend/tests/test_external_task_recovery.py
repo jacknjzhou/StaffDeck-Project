@@ -8,13 +8,13 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from sqlmodel import select
+from test_external_business_tasks import _seed, _session
 
+from app.db.models import ExternalBusinessTask, utc_now
 from app.tools import external_task_worker as worker
 from app.tools import external_tasks as tasks
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import ToolCall, ToolResult, ToolTestRequest
-from app.db.models import ExternalBusinessTask, utc_now
-from test_external_business_tasks import _seed, _session
 
 
 def test_worker_recovers_from_exception_using_fresh_session(monkeypatch):
@@ -177,8 +177,8 @@ def test_resume_query_cannot_submit_pending_task_again():
 
 def test_saved_tool_test_retries_use_same_request_id():
     """验证工具测试重试使用同一 client_request_id，只产生一个任务。"""
-    from app.api.tools import test_tool as invoke
     from app.agents.branching import ensure_open_gallery_binding
+    from app.api.tools import test_tool as invoke
     from app.db.models import AgentProfile
 
     with _session() as db:

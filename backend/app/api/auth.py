@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from datetime import datetime
-from typing import Literal, Optional
+from threading import Lock
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from redis.exceptions import RedisError
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.db import get_session
@@ -28,6 +32,161 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+# 登录限速(成功与失败都计数):固定窗口 60 秒。配置了 Redis 时跨进程共享,
+# 否则退化为进程内计数;身份键同时带来源 IP 与用户名,避免 NAT 放大或换用户名绕过。
+_RATE_LIMIT_KEY_ROOT = "staffdeck:"
+_LOGIN_RATE_KEY_PREFIX = f"{_RATE_LIMIT_KEY_ROOT}login:"
+_LOGIN_RATE_WINDOW_SECONDS = 60
+# 进程内窗口的键上限:超过后先清理过期项,防止伪造用户名把字典撑大。
+_LOGIN_RATE_WINDOW_MAX_KEYS = 1024
+_login_memory_windows: dict[str, tuple[float, int]] = {}
+_login_memory_lock = Lock()
+_login_redis_client: Any = None
+_login_redis_client_url = ""
+
+
+def _settings() -> Any:
+    """延迟读取设置,让测试可以 monkeypatch `app.config.get_settings`。"""
+    from app.config import get_settings
+
+    return get_settings()
+
+
+def _login_identity_key(host: str, username: str) -> str:
+    """限速身份键:来源 + 用户名,避免只按 IP 被 NAT 放大或只按用户被绕过。"""
+    return f"login:{host}:{username}"
+
+
+def _request_host(request: Request) -> str:
+    """取直连来源 IP;测试客户端没有 client 时退化为 unknown。"""
+    client = request.client
+    host = getattr(client, "host", "") if client is not None else ""
+    return host or "unknown"
+
+
+def _build_login_redis_client(url: str) -> Any:
+    """构造限速用 Redis 客户端;独立成型便于测试注入 fakeredis。"""
+    from redis import Redis
+
+    return Redis.from_url(
+        url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2
+    )
+
+
+def _login_redis(url: str) -> Any:
+    """按 URL 复用 Redis 客户端,避免每次登录都新建连接。"""
+    global _login_redis_client, _login_redis_client_url
+    if _login_redis_client is None or _login_redis_client_url != url:
+        _login_redis_client = _build_login_redis_client(url)
+        _login_redis_client_url = url
+    return _login_redis_client
+
+
+def _prune_memory_windows(now: float) -> None:
+    """清理已过期的进程内窗口条目(调用方持有 `_login_memory_lock`)。"""
+    expired = [
+        key
+        for key, (start, _) in _login_memory_windows.items()
+        if now - start >= _LOGIN_RATE_WINDOW_SECONDS
+    ]
+    for key in expired:
+        del _login_memory_windows[key]
+
+
+def _hit_memory_window(identity: str) -> int:
+    """进程内固定窗口计数,返回当前窗口内的累计次数。"""
+    now = time.monotonic()
+    with _login_memory_lock:
+        start, count = _login_memory_windows.get(identity, (now, 0))
+        if now - start >= _LOGIN_RATE_WINDOW_SECONDS:
+            start, count = now, 0
+        if identity not in _login_memory_windows and (
+            len(_login_memory_windows) >= _LOGIN_RATE_WINDOW_MAX_KEYS
+        ):
+            _prune_memory_windows(now)
+            if len(_login_memory_windows) >= _LOGIN_RATE_WINDOW_MAX_KEYS:
+                # 全是活跃窗口时强制淘汰最早的一条,保证字典有界。
+                oldest = min(
+                    _login_memory_windows,
+                    key=lambda key: _login_memory_windows[key][0],
+                )
+                del _login_memory_windows[oldest]
+        count += 1
+        _login_memory_windows[identity] = (start, count)
+        return count
+
+
+def _rate_limit(identity: str, *, redis_prefix: str, detail: str) -> None:
+    """固定窗口限速,超限抛 429;Redis 不可用时降级为进程内窗口。
+
+    配置 Redis 时用 INCR + EXPIRE 跨进程共享;每次 INCR 后补一次 NX 过期,
+    修复历史上缺失 TTL 的键。Redis 异常只记日志并降级到进程内窗口,
+    限速层绝不能因此让业务接口 500。密码与凭据永远不写日志。
+    """
+    settings = _settings()
+    limit = int(settings.login_rate_limit_per_minute or 0)
+    if limit <= 0:
+        return
+    url = str(settings.redis_url or "").strip()
+    count: int | None = None
+    if url:
+        try:
+            client = _login_redis(url)
+            key = f"{redis_prefix}{identity}"
+            count = int(client.incr(key))
+            # NX: 只在键还没有 TTL 时补,避免把已有窗口续期;同时修复
+            # INCR 成功后进程崩溃留下的永久键。
+            client.expire(key, _LOGIN_RATE_WINDOW_SECONDS, nx=True)
+        except (RedisError, OSError):
+            logger.exception(
+                "rate limit: redis unavailable, falling back to memory"
+            )
+            count = None
+    if count is None:
+        count = _hit_memory_window(identity)
+    if count > limit:
+        raise HTTPException(
+            status_code=429,
+            detail=detail,
+            headers={"Retry-After": str(_LOGIN_RATE_WINDOW_SECONDS)},
+        )
+
+
+def _rate_limit_login(identity: str) -> None:
+    """登录限速:成功与失败都计数,独立窗口,超限抛 429。"""
+    _rate_limit(
+        identity,
+        redis_prefix=_LOGIN_RATE_KEY_PREFIX,
+        detail="too many login attempts",
+    )
+
+
+def _rate_limit_change_password(user_id: str) -> None:
+    """自助改密限速:按账号独立计数,不占用登录接口的配额。"""
+    _rate_limit(
+        f"change-password:{user_id}",
+        redis_prefix=_RATE_LIMIT_KEY_ROOT,
+        detail="too many password change attempts",
+    )
+
+
+def _rate_limit_register(host: str) -> None:
+    """注册限速:按来源 IP 独立计数,不占用登录接口的配额。"""
+    _rate_limit(
+        f"register:{host}",
+        redis_prefix=_RATE_LIMIT_KEY_ROOT,
+        detail="too many registration attempts",
+    )
+
+
+def _reset_login_rate_limit_state() -> None:
+    """清空限速窗口与 Redis 客户端缓存,供测试隔离与运维重置使用。"""
+    global _login_redis_client, _login_redis_client_url
+    with _login_memory_lock:
+        _login_memory_windows.clear()
+    _login_redis_client = None
+    _login_redis_client_url = ""
+
 
 class LoginRequest(BaseModel):
     """登录请求体：租户、用户名与密码。"""
@@ -35,6 +194,45 @@ class LoginRequest(BaseModel):
     tenant_id: str
     username: str
     password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """自助改密请求体：当前口令用于确认身份，新口令限制 8-128 位。"""
+
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password", mode="before")
+    @classmethod
+    def _strip_new_password(cls, value: object) -> object:
+        """先去掉首尾空白再做长度校验，纯空白口令会因不足 8 位被拒绝。"""
+        return value.strip() if isinstance(value, str) else value
+
+
+class RegisterRequest(BaseModel):
+    """自助注册请求体：租户、账号、显示名与口令。
+
+    口令不设 Field 长度约束：FastAPI 的校验错误体会原样回显 ``input``，
+    对一个未认证端点来说等于把提交的口令写回响应。长度在路由里自行校验。
+    """
+
+    tenant_id: str
+    username: str = Field(min_length=1, max_length=64)
+    display_name: Optional[str] = Field(default=None, max_length=80)
+    password: str
+
+    @field_validator("username", "password", mode="before")
+    @classmethod
+    def _strip_text(cls, value: object) -> object:
+        """先去掉首尾空白再做长度校验，纯空白会因不足长度被拒绝。"""
+        return value.strip() if isinstance(value, str) else value
+
+
+class RegisterResponse(BaseModel):
+    """注册受理响应：只回状态与账号，不含内部 id 与口令。"""
+
+    status: str
+    username: str
 
 
 class UserCreateRequest(BaseModel):
@@ -56,6 +254,13 @@ class UserUpdateRequest(BaseModel):
     role: Optional[Literal["admin", "member"]] = None
 
 
+class UserStatusUpdateRequest(BaseModel):
+    """账号状态变更请求体：只允许通过审核或拒绝/停用。"""
+
+    tenant_id: str
+    status: Literal["active", "rejected"]
+
+
 class UserChannelIdentity(BaseModel):
     """账号已绑定的渠道身份摘要，供处理人选择器判断可达性。"""
 
@@ -74,6 +279,7 @@ class UserRead(BaseModel):
     display_name: Optional[str] = None
     role: Literal["admin", "member"]
     source: str = "web"
+    status: str = "active"
     # 仅 /me 与 /login 带出:头像资源指针(存在性标识),不内联二进制——
     # 完整 data_url 可达 2.67MB,内联会把登录/会话刷新响应与前端 localStorage 撑爆
     avatar_url: Optional[str] = None
@@ -128,30 +334,112 @@ class AccountAPICredentialCreated(AccountAPICredentialRead):
 ACCOUNT_API_CLIENT_PREFIX = "StaffDeck 账号全量 API"
 
 
+@router.post("/register", response_model=RegisterResponse, status_code=201)
+def register(
+    request: Request,
+    payload: RegisterRequest,
+    db: Session = Depends(get_session),
+) -> RegisterResponse:
+    """自助注册：创建待审核账号，同名已存在时按状态返回可区分的 409。
+
+    注册不消耗任何可用资源（账号为 pending，无法登录）；限速按来源 IP 独立计数。
+    拒绝后不允许自助重新注册，否则「拒绝」形同虚设。
+    """
+    _rate_limit_register(_request_host(request))
+    # 口令长度在这里校验而非 Pydantic:框架的 422 会把提交值原样回显在 input 字段。
+    if not 8 <= len(payload.password) <= 128:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_PASSWORD", "message": "password must be 8-128 characters"},
+        )
+    ensure_tenant(db, payload.tenant_id)
+    username = payload.username.strip()
+    existing = db.exec(
+        select(User).where(User.tenant_id == payload.tenant_id, User.username == username)
+    ).first()
+    if not existing:
+        # login() 允许用唯一的 display_name 当登录名;注册必须一并占用,
+        # 否则匿名注册者能劫持他人的别名登录(200 变 401/403)。
+        existing = db.exec(
+            select(User).where(
+                User.tenant_id == payload.tenant_id, User.display_name == username
+            )
+        ).first()
+    if existing:
+        status = getattr(existing, "status", "active")
+        code = {
+            "pending": "REGISTRATION_PENDING",
+            "rejected": "REGISTRATION_REJECTED",
+        }.get(status, "ACCOUNT_EXISTS")
+        raise HTTPException(
+            status_code=409,
+            detail={"code": code, "message": "account already exists in this tenant"},
+        )
+    user = User(
+        tenant_id=payload.tenant_id,
+        username=username,
+        display_name=(payload.display_name or username).strip()[:80] or username,
+        role=MEMBER_ROLE,
+        source="web",
+        status="pending",
+        password_hash=hash_password(payload.password),
+    )
+    db.add(user)
+    db.commit()
+    return RegisterResponse(status="pending", username=username)
+
+
 @router.post("/login", response_model=LoginResponse)
-def login(request: LoginRequest, db: Session = Depends(get_session)) -> LoginResponse:
-    """账号密码登录：校验租户与密码后签发访问令牌。
+def login(
+    request: Request,
+    payload: LoginRequest,
+    db: Session = Depends(get_session),
+) -> LoginResponse:
+    """账号密码登录：限速后校验租户与密码，签发访问令牌。
 
     用户名不存在时允许唯一匹配 display_name 作为登录名；凭据错误一律返回 401。
+    所有尝试(无论成败)都计入限速窗口，避免攻击者靠无限重试枚举账号。
     """
-    ensure_tenant(db, request.tenant_id)
-    username = request.username.strip()
-    if not username or not request.password:
+    username = payload.username.strip()
+    # 先计数再查租户/密码:所有尝试(含错误租户、空字段)都进同一窗口。
+    _rate_limit_login(_login_identity_key(_request_host(request), username))
+    ensure_tenant(db, payload.tenant_id)
+    if not username or not payload.password:
         raise HTTPException(status_code=400, detail="Username and password are required")
 
     user = db.exec(
-        select(User).where(User.tenant_id == request.tenant_id, User.username == username)
+        select(User).where(User.tenant_id == payload.tenant_id, User.username == username)
     ).first()
     if not user:
+        # 只有 active 账号才可作为登录别名:非 active 账号本就 403 不能登录,
+        # 若参与解析,匿名注册的 pending 影子账号会让受害者的别名登录命中两行而 401。
         display_name_matches = db.exec(
             select(User)
-            .where(User.tenant_id == request.tenant_id, User.display_name == username)
+            .where(
+                User.tenant_id == payload.tenant_id,
+                User.display_name == username,
+                User.status == "active",
+            )
             .limit(2)
         ).all()
         if len(display_name_matches) == 1:
             user = display_name_matches[0]
-    if not user or not verify_password(request.password, user.password_hash):
+    if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # 口令正确后才判断状态:否则不知道口令的人也能枚举账号状态。
+    # 用 403 而非 401:这不是凭据错误,前端按 code 分支展示对应文案。
+    account_status = getattr(user, "status", "active")
+    if account_status != "active":
+        code = (
+            "ACCOUNT_PENDING_APPROVAL"
+            if account_status == "pending"
+            else "ACCOUNT_REGISTRATION_REJECTED"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={"code": code, "message": "account is not approved for login"},
+        )
 
     return LoginResponse(
         token=create_access_token(user),
@@ -163,6 +451,36 @@ def login(request: LoginRequest, db: Session = Depends(get_session)) -> LoginRes
 def me(user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> UserRead:
     """返回当前登录用户的账号信息与头像资源指针。"""
     return _user_read(user, _avatar_pointer_for(db, user.id))
+
+
+@router.post("/change-password", status_code=204)
+def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> Response:
+    """当前登录用户自助改密：先校验当前口令，拒绝复用旧口令后落库。
+
+    账号一律取自登录态而非请求参数，错误口令统一 403，不暴露账号是否存在；
+    新口令与当前口令相同时返回 400，OIDC 账号明确提示未设置本地口令。
+    JWT 无吊销列表，改密不会使旧 token 立即失效。
+    """
+    if current_user.source == "oidc" or current_user.password_hash == "oidc":
+        raise HTTPException(status_code=400, detail="account has no local password")
+    # 先计数再校验口令:错误口令也计入窗口,避免绕过限速无限尝试。
+    _rate_limit_change_password(current_user.id)
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=403, detail="current password is incorrect")
+    if verify_password(payload.new_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="new password must differ from the current password",
+        )
+    current_user.password_hash = hash_password(payload.new_password)
+    current_user.updated_at = utc_now()
+    db.add(current_user)
+    db.commit()
+    return Response(status_code=204)
 
 
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
@@ -303,7 +621,11 @@ def list_users(
     statement = select(User).where(User.tenant_id == tenant_id)
     # 非管理员只需要为处理人选择器读取内部成员。不能依赖前端过滤，否则
     # include_channel=true 会把渠道客户及群聊虚拟账号暴露给任意租户成员。
-    if not is_admin_user(current_user) or not include_channel:
+    if not is_admin_user(current_user):
+        statement = statement.where(User.source == "web")
+        # 待审核/已拒绝账号不参与处理人选择器，避免把未开通的账号派给客户。
+        statement = statement.where(User.status == "active")
+    elif not include_channel:
         statement = statement.where(User.source == "web")
     rows = db.exec(statement.order_by(User.created_at.desc())).all()
     if include_channel:
@@ -482,6 +804,32 @@ def update_user(
     return _user_read(user)
 
 
+@router.put("/users/{user_id}/status", response_model=UserRead)
+def update_user_status(
+    user_id: str,
+    request: UserStatusUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> UserRead:
+    """管理员审核注册申请：通过(active)或拒绝/停用(rejected)。
+
+    禁止管理员把自己改为 rejected，避免唯一管理员自锁；
+    pending 只能由注册产生，不能通过本端点回设。
+    """
+    _require_admin(current_user, request.tenant_id)
+    user = db.get(User, user_id)
+    if not user or user.tenant_id != request.tenant_id:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if user.id == current_user.id and request.status == "rejected":
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+    user.status = request.status
+    user.updated_at = utc_now()
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return _user_read(user)
+
+
 @router.delete("/users/{user_id}")
 def delete_user(
     user_id: str,
@@ -521,6 +869,7 @@ def _user_read(
         display_name=user.display_name,
         role=user.role,
         source=user.source,
+        status=getattr(user, "status", "active"),
         avatar_url=avatar_url,
         created_at=user.created_at.isoformat() if user.created_at else None,
         updated_at=user.updated_at.isoformat() if user.updated_at else None,
@@ -689,13 +1038,31 @@ def oidc_callback(code: str, state: str, db: Session = Depends(get_session)):
     discovery = oidc_mod._discover(settings.oidc_issuer)
     tokens = oidc_mod._exchange_code(discovery, code)
     userinfo = oidc_mod._fetch_userinfo(discovery, tokens["access_token"])
-    email = (userinfo.get("email") or "").strip()
+    email = (userinfo.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="OIDC account missing email")
-    user = db.exec(select(User).where(User.username == email)).first()
+    tenant_id = settings.oidc_tenant_id or "tenant_demo"
+    user = db.exec(
+        select(User).where(
+            User.tenant_id == tenant_id,
+            func.lower(User.username) == email,
+        )
+    ).first()
     if user is None:
+        other_tenant_user = db.exec(
+            select(User).where(
+                func.lower(User.username) == email,
+                User.tenant_id != tenant_id,
+            )
+        ).first()
+        if other_tenant_user is not None:
+            # 多租户歧义:绝不静默选中或新建重复账号,交给管理员显式绑定。
+            raise HTTPException(
+                status_code=409,
+                detail="该邮箱已存在于其他租户，请联系管理员在当前租户显式绑定该账号",
+            )
         user = User(
-            tenant_id="tenant_demo",
+            tenant_id=tenant_id,
             username=email,
             display_name=(userinfo.get("name") or email).strip()[:80],
             # 不可用占位:OIDC 账号不走密码校验(verify_password 对非法哈希恒 False)

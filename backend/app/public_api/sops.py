@@ -7,13 +7,13 @@ from fastapi import APIRouter, Depends, Header, Request, Response
 from pydantic import ValidationError
 from sqlmodel import Session, select
 
-from app.api import skills as internal_skills
 from app.agents.branching import visible_skill_rows
+from app.api import skills as internal_skills
 from app.db import get_session
 from app.db.models import (
+    AgentResourceBinding,
     APIJob,
     APISOPDraft,
-    AgentResourceBinding,
     GeneralSkill,
     KnowledgeBase,
     Skill,
@@ -34,6 +34,7 @@ from app.public_api.schemas import (
 from app.public_api.sessions import ensure_public_agent
 from app.public_api.utils import etag_for
 from app.skills import SkillDistiller, SkillEditor
+from app.skills.nesting import SopNestingError, validate_sop_nesting
 from app.skills.skill_schema import (
     SkillCard,
     SkillCreateRequest,
@@ -42,8 +43,6 @@ from app.skills.skill_schema import (
     SkillUpdateRequest,
     skill_card_from_persisted,
 )
-from app.skills.nesting import SopNestingError, validate_sop_nesting
-
 
 router = APIRouter(tags=["sops"])
 

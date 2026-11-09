@@ -36,7 +36,6 @@ from app.skills import SkillEditor
 from app.skills.nesting import SopNestingError, validate_sop_nesting
 from app.skills.skill_schema import SkillCard, SkillRewriteRequest, skill_card_from_persisted
 
-
 GENERAL_SKILL_EVOLUTION_PROMPT = """
 你是 StaffDeck 的通用技能改进器。根据当前 SKILL.md 和真实用户反馈，生成一次最小、可审核的改进。
 
@@ -556,19 +555,20 @@ class EvolutionService:
         model: ModelConfig,
     ) -> EvolutionProposal:
         """让模型按反馈生成通用技能的最小 SKILL.md 修改，组装候选并静态评估。"""
-        raw = LLMClient(model).generate_json(
-            GENERAL_SKILL_EVOLUTION_PROMPT,
-            {
-                "current_skill": {
-                    "slug": skill.slug,
-                    "name": skill.name,
-                    "description": skill.description,
-                    "skill_markdown": skill.skill_markdown,
+        with LLMClient(model) as client:
+            raw = client.generate_json(
+                GENERAL_SKILL_EVOLUTION_PROMPT,
+                {
+                    "current_skill": {
+                        "slug": skill.slug,
+                        "name": skill.name,
+                        "description": skill.description,
+                        "skill_markdown": skill.skill_markdown,
+                    },
+                    "feedback_evidence": evidence,
+                    "additional_instruction": request.instruction or "",
                 },
-                "feedback_evidence": evidence,
-                "additional_instruction": request.instruction or "",
-            },
-        )
+            )
         candidate = {
             "skill_markdown": str(raw.get("skill_markdown") or skill.skill_markdown),
             "description": skill.description,

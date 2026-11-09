@@ -11,11 +11,11 @@ def test_step_agent_uses_model_json_for_slots_and_tool(monkeypatch):
     """
     captured = {}
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实的 LLM 客户端初始化，用例无需任何模型配置。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """记录系统提示词与请求载荷，并返回带槽位和工具调用的固定结构。"""
         captured["system_prompt"] = system_prompt
         captured["payload"] = payload
@@ -116,11 +116,11 @@ def test_step_agent_compacts_knowledge_continuation_without_duplicate_results(mo
     """
     captured = {}
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实的 LLM 客户端初始化，用例无需任何模型配置。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """记录请求载荷，并返回一条已完成的回复。"""
         captured["payload"] = payload
         return {"reply": "已找到相关信息", "is_step_completed": True}

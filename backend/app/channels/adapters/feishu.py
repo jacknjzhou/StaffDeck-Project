@@ -4,7 +4,8 @@ import hashlib
 import json
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 
@@ -216,7 +217,7 @@ class FeishuAdapter:
     def _uuid(idempotency_key: str, chunk_index: int) -> str:
         """由幂等键与分片序号派生 40 位稳定 uuid，保证重试不重复投递。"""
         return hashlib.sha256(
-            f"{idempotency_key}:{chunk_index}".encode("utf-8")
+            f"{idempotency_key}:{chunk_index}".encode()
         ).hexdigest()[:40]
 
     def _request(

@@ -6,11 +6,18 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from app.db.models import AgentEvent, ChatSession, Message, MessageFeedback, ModelConfig, User, utc_now
+from app.db.models import (
+    AgentEvent,
+    ChatSession,
+    Message,
+    MessageFeedback,
+    ModelConfig,
+    User,
+    utc_now,
+)
 from app.llm import LLMClient, LLMError
 from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.observability.spans import llm_operation
-
 
 FEEDBACK_BUCKET_LABELS: dict[str, str] = {
     "model_issue": "模型问题",
@@ -88,7 +95,8 @@ class FeedbackAnalysisService:
         for attempt in range(1, FEEDBACK_ANALYSIS_MAX_ATTEMPTS + 1):
             try:
                 with llm_operation("feedback.analyze", attempt=attempt):
-                    raw = LLMClient(model_config).generate_json(FEEDBACK_ANALYSIS_PROMPT, payload)
+                    with LLMClient(model_config) as client:
+                        raw = client.generate_json(FEEDBACK_ANALYSIS_PROMPT, payload)
                 analysis = _normalize_analysis(raw, feedback.rating)
                 self._apply_analysis(feedback, analysis, "analyzed")
                 self.db.add(feedback)

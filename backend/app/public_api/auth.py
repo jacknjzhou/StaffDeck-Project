@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import hmac
 import secrets
-from typing import Annotated, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -12,12 +13,11 @@ from sqlmodel import Session, select
 
 from app.config import get_settings
 from app.db import get_session
-from app.db.models import APIClient, APICredential, AgentProfile, User, utc_now
+from app.db.models import AgentProfile, APIClient, APICredential, User, utc_now
 from app.public_api.credential_profiles import USER_FULL_ACCESS_SCOPES
 from app.public_api.errors import PublicAPIError
 from app.security.auth import _decode_token
 from app.security.permissions import agent_owned_by_user, is_admin_user
-
 
 PUBLIC_KEY_PREFIX = "sd_live_"
 _security = HTTPBearer(auto_error=False)
@@ -86,7 +86,13 @@ def _api_key_principal(token: str, db: Session) -> PublicPrincipal:
         raise PublicAPIError(401, "API_CLIENT_INACTIVE", "The API client is inactive.")
     actor = db.get(User, client.created_by_user_id or "")
     if not actor or actor.tenant_id != client.tenant_id:
-        raise PublicAPIError(401, "API_CLIENT_OWNER_MISSING", "The API client owner is unavailable.")
+        raise PublicAPIError(
+            401, "API_CLIENT_OWNER_MISSING", "The API client owner is unavailable."
+        )
+    if getattr(actor, "status", "active") != "active":
+        raise PublicAPIError(
+            401, "API_CLIENT_OWNER_INACTIVE", "The API client owner is inactive."
+        )
     credential.last_used_at = now
     credential.updated_at = now
     db.add(credential)
@@ -157,6 +163,8 @@ def _bootstrap_principal(token: str, db: Session) -> PublicPrincipal:
     payload = _decode_token(token)
     user = db.get(User, str(payload.get("user_id") or ""))
     if not user or user.tenant_id != payload.get("tenant_id"):
+        raise PublicAPIError(401, "INVALID_USER_TOKEN", "The user token is invalid.")
+    if getattr(user, "status", "active") != "active":
         raise PublicAPIError(401, "INVALID_USER_TOKEN", "The user token is invalid.")
     if not is_admin_user(user):
         raise PublicAPIError(403, "ADMIN_REQUIRED", "Tenant administrator access is required.")

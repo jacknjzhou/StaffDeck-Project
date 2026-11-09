@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.harness import HarnessExecutor, HarnessToolCall, HarnessToolContext, HarnessRegistry
+from app.harness import HarnessExecutor, HarnessRegistry, HarnessToolCall, HarnessToolContext
 from app.harness import skill_script as skill_script_module
 from app.harness.skill_script import register_skill_script_tools
 

@@ -1,6 +1,7 @@
 import os as _os
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +11,14 @@ class Settings(BaseSettings):
     app_name: str = "Skill Agent Loop Service"
     database_url: str = "sqlite:///./skill_agent_loop.db"
     app_secret: str = "change-me-in-development"
+    # 部署形态：production 时启动阶段即校验密钥等安全配置，开发环境保留默认值。
+    environment: str = "development"
+    bootstrap_admin_password: str = ""
+    seed_demo_data: bool = True
+    mcp_stdio_enabled: bool = False
+    mcp_stdio_allowed_commands: str = "npx,uvx,node,python,python3,uv"
+    login_rate_limit_per_minute: int = 10
+    max_upload_bytes: int = 50 * 1024 * 1024
     demo_model_base_url: str = "http://localhost:52010/v1"
     demo_model_name: str = "qwen3.6-27b"
     demo_model_api_key: str = ""
@@ -80,18 +89,25 @@ class Settings(BaseSettings):
     channel_feishu_trace_compact_sop: bool = True
 
     # OIDC SSO 登录(M1):httpx 手工授权码流程,成功后映射到现有 JWT 会话。
-    # state 存进程内存字典(单组 api 进程内有效);tenant 固定 tenant_demo,M2 再演进。
+    # state 存进程内存字典(单组 api 进程内有效);租户由 oidc_tenant_id 绑定,
+    # 缺省 tenant_demo,同邮箱在其他租户存在时回调返回 409 要求管理员显式绑定。
     oidc_enabled: bool = False
     oidc_issuer: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
     oidc_redirect_uri: str = ""
+    oidc_tenant_id: str = ""
     frontend_base_url: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(
         env_file=_os.environ.get("ULTRARAG_DOTENV", ".env"),
         env_file_encoding="utf-8", extra="ignore",
     )
+
+    @property
+    def is_production(self) -> bool:
+        """当前部署形态是否为生产环境（决定是否启用启动期安全校验）。"""
+        return self.environment.lower() == "production"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -107,6 +123,33 @@ class Settings(BaseSettings):
     def general_skill_runtime_package_list(self) -> list[str]:
         """把逗号分隔的 general_skill_runtime_packages 拆成去空白的包名列表。"""
         return [item.strip() for item in self.general_skill_runtime_packages.split(",") if item.strip()]
+
+    @model_validator(mode="after")
+    def _validate_production_secrets(self) -> "Settings":
+        """生产环境拒绝默认、占位或过短的 APP_SECRET，把配置错误提前到进程启动阶段。"""
+        if not self.is_production:
+            return self
+        lower_secret = self.app_secret.lower()
+        placeholder_hits = [
+            token for token in _PLACEHOLDER_SECRET_TOKENS if token in lower_secret
+        ]
+        if (
+            self.app_secret == "change-me-in-development"
+            or placeholder_hits
+            or len(self.app_secret) < 32
+        ):
+            raise ValueError(
+                "APP_SECRET must be a random value of at least 32 characters in production, "
+                "not the built-in default or a placeholder such as 'change-me'/'example'; "
+                "generate one with `python -c \"import secrets;"
+                "print(secrets.token_urlsafe(48))\"`"
+            )
+        return self
+
+
+# 复制模板后仍能通过长度检查的占位值：出现这些片段即视为未完成上线配置。
+# 定义在类之后：校验器在调用时解析模块全局，导入期顺序不影响。
+_PLACEHOLDER_SECRET_TOKENS = ("change-me", "changeme", "replace-me", "example")
 
 
 @lru_cache

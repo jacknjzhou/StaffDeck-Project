@@ -648,7 +648,9 @@ def _bucket_concept(document: KnowledgeDocument, document_concept_id: str, bucke
     content = str(metadata.get("content") or bucket.summary)
     section_links = [
         f"- [{path}](/{document_concept_id}/sections/{safe_path_segment(str(section_id))}.md)"
-        for path, section_id in zip(metadata.get("section_paths") or [], metadata.get("section_ids") or [])
+        for path, section_id in zip(
+            metadata.get("section_paths") or [], metadata.get("section_ids") or [], strict=False
+        )
         if path and section_id
     ]
     body = "\n".join(

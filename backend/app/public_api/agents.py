@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlmodel import Session, select
 
+from app.agents.branching import visible_skill
 from app.agents.schema import (
     AgentModelsUpdateRequest,
     AgentProfileCreateRequest,
@@ -11,7 +12,6 @@ from app.agents.schema import (
     AgentResourcesUpdateRequest,
 )
 from app.api import agents as internal_agents
-from app.agents.branching import visible_skill
 from app.core.capability_manifest import CapabilityManifestBuilder
 from app.db import get_session
 from app.db.models import AgentProfile, ModelConfig
@@ -29,7 +29,6 @@ from app.public_api.schemas import (
     ResourceBindingsUpdate,
 )
 from app.public_api.utils import etag_for
-
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
-from typing import Any, Iterable
+from typing import Any
 
 from app.db.models import Skill
-
 
 MAX_NESTED_SOP_DEPTH = 8
 

@@ -90,8 +90,16 @@ for path in /enterprise /workspace; do
 done
 
 log "checking role leases are held and renewed"
+# worker/connector 依赖 api 健康后才启动，各自还要完成迁移校验与租约竞争，
+# 一次性检查会稳定撞上启动竞态；这里给每个角色 60s 的收敛窗口。
 for role in api worker connector; do
-  ttl=$(docker compose exec -T redis redis-cli PTTL "staffdeck:lease:${role}" | tr -d '\r')
+  deadline=$((SECONDS + 60))
+  ttl=""
+  while (( SECONDS < deadline )); do
+    ttl=$(docker compose exec -T redis redis-cli PTTL "staffdeck:lease:${role}" | tr -d '\r')
+    [[ "$ttl" =~ ^[0-9]+$ ]] && break
+    sleep 1
+  done
   [[ "$ttl" =~ ^[0-9]+$ ]] || fail "lease for ${role} is missing (PTTL=${ttl})"
   log "  lease:${role} pttl=${ttl}ms"
 done

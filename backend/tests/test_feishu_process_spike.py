@@ -7,8 +7,8 @@ import sqlite3
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from multiprocessing.process import BaseProcess
+from pathlib import Path
 
 import pytest
 import websockets
@@ -78,7 +78,7 @@ class _LocalFeishuServer:
 
         class EndpointHandler(BaseHTTPRequestHandler):
             """应答连接器端点上报请求的假 HTTP 处理器。"""
-            def do_POST(self) -> None:  # noqa: N802
+            def do_POST(self) -> None:
                 """回填当前 server 的 ws 地址与重连配置。"""
                 length = int(self.headers.get("Content-Length", "0"))
                 self.rfile.read(length)

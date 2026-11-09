@@ -3,6 +3,7 @@ import threading
 import time
 from datetime import timedelta
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -16,9 +17,9 @@ from app.channels.adapters.wecom import (
     WeComStreamManager,
     WeComStreamReply,
     WeComTokenProvider,
+    _split_wecom_text,
     is_self_frame,
     normalize_wecom_frame,
-    _split_wecom_text,
 )
 from app.channels.crypto import decrypt_channel_secret, encrypt_channel_secret
 from app.channels.service_durable_inbox import StageDisposition, StageResult
@@ -344,7 +345,10 @@ def test_file_message_with_image_bytes_is_promoted_to_image(monkeypatch) -> None
 
 def test_wecom_replay_restores_attachment_dataclass() -> None:
     """验证重放信封编码解码后仍能还原附件的 dataclass 结构。"""
-    from app.channels.service_wecom_inbox import decode_wecom_replay_envelope, encode_wecom_replay_envelope
+    from app.channels.service_wecom_inbox import (
+        decode_wecom_replay_envelope,
+        encode_wecom_replay_envelope,
+    )
 
     inbound = normalize_wecom_frame(
         _text_frame(msgtype="image", text=None, image={"media_id": "media-image"})
@@ -1304,7 +1308,7 @@ def test_reconcile_does_not_stop_stream_while_revision_initializes(monkeypatch) 
 
 class RecordingAgentLoop:
     """记录 agent 循环请求的替身实现，供 intake 链路断言。"""
-    calls: list = []
+    calls: ClassVar[list] = []
 
     def __init__(self, db, *, event_sink=None):
         """保存数据库会话，忽略事件 sink。"""
@@ -2308,7 +2312,7 @@ def test_disconnect_timeout_alerts_once_and_clears_on_reconnect() -> None:
     manager = WeComStreamManager(db_engine=engine, client_factory=lambda bot_id, secret: FakeWSClient())
 
     # 阻止 reconcile 热拉起线程,专注告警判定
-    manager.ensure_binding = lambda binding_id: None  # noqa: E731
+    manager.ensure_binding = lambda binding_id: None
     manager.reconcile_once()
 
     with Session(engine) as db:
@@ -2343,7 +2347,7 @@ def test_disconnect_timeout_not_fired_before_threshold() -> None:
     engine = _test_engine()
     binding_id = _seed_disconnect_alert_binding(engine, age_minutes=5)
     manager = WeComStreamManager(db_engine=engine, client_factory=lambda bot_id, secret: FakeWSClient())
-    manager.ensure_binding = lambda binding_id: None  # noqa: E731
+    manager.ensure_binding = lambda binding_id: None
     manager.reconcile_once()
     with Session(engine) as db:
         assert db.exec(select(ChannelDelivery)).all() == []

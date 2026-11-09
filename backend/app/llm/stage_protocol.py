@@ -6,7 +6,6 @@ from typing import Any
 
 from app import paths
 
-
 UNIFIED_PROMPT_PATH = (
     paths.resource_dir() / "app" / "llm" / "prompts" / "unified_agent_prompt.md"
 )

@@ -169,7 +169,7 @@ def test_capability_selector_still_checks_knowledge_without_general_skills(monke
     received: dict[str, object] = {}
     monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """记录下发的载荷，并返回固定的能力选择结果。"""
         received.update(payload)
         return {
@@ -195,7 +195,7 @@ def test_general_skill_reader_does_not_generate_runner_code(monkeypatch) -> None
     """验证只读说明器只返回技能介绍，不生成可执行代码。"""
     monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """校验说明器阶段指令后，返回技能介绍的结构化输出。"""
         instructions = payload["_agent_stage"]["instructions"]
         assert "只读说明器" in instructions
@@ -321,7 +321,7 @@ def test_import_general_skill_uses_user_supplied_metadata() -> None:
                 db,
                 _admin_user(),
             )
-            assert False, "expected general skill slug update to fail"
+            pytest.fail("expected general skill slug update to fail")
         except HTTPException as exc:
             assert exc.status_code == 400
             assert exc.detail == "General skill slug cannot be modified"
@@ -688,7 +688,7 @@ def test_import_clawhub_skill_reads_zip_package_without_overwriting(monkeypatch)
         archive.writestr("skill-pack-main/weather/scripts/run.py", "print('ok')\n")
         archive.writestr("skill-pack-main/weather/data/cities.json", '{"北京": "101010100"}')
 
-    def fake_download(url: str):  # noqa: ANN001
+    def fake_download(url: str):
         """校验下载地址并返回预置的 zip 包内容。"""
         assert url == "https://example.com/weather.zip"
         return package.getvalue(), "application/zip"
@@ -779,7 +779,7 @@ def test_import_general_skill_package_upload_treats_single_markdown_as_skill_md(
 
 def test_import_clawhub_skill_reads_github_directory_package(monkeypatch) -> None:
     """验证 ClawHub 导入可递归读取 GitHub 目录包中的全部文件。"""
-    def fake_json(url: str):  # noqa: ANN001
+    def fake_json(url: str):
         """按 GitHub 目录接口地址返回预置的文件与目录列表。"""
         if url == "https://api.github.com/repos/example/skill-pack/contents/weather?ref=main":
             return [
@@ -814,7 +814,7 @@ def test_import_clawhub_skill_reads_github_directory_package(monkeypatch) -> Non
             ]
         raise AssertionError(f"unexpected github api url: {url}")
 
-    def fake_download(url: str):  # noqa: ANN001
+    def fake_download(url: str):
         """按 raw 地址返回预置的技能文件内容。"""
         content = {
             "https://raw.githubusercontent.com/example/skill-pack/main/weather/SKILL.md": "---\nname: 目录天气\nslug: weather-dir\n---\n\n# 天气\n",
@@ -850,7 +850,7 @@ def test_import_clawhub_skill_reads_github_directory_package(monkeypatch) -> Non
 
 def test_import_clawhub_skill_follows_page_to_real_skill_package(monkeypatch) -> None:
     """验证 ClawHub 页面链接会被解析到真实技能包地址后再导入。"""
-    def fake_download(url: str):  # noqa: ANN001
+    def fake_download(url: str):
         """技能页返回含 GitHub 链接的 HTML，raw 地址返回 SKILL.md。"""
         if url == "https://clawhub.example/skills/weather":
             return (
@@ -864,7 +864,7 @@ def test_import_clawhub_skill_follows_page_to_real_skill_package(monkeypatch) ->
             raise AssertionError(f"unexpected url: {url}")
         return content.encode("utf-8"), "text/plain"
 
-    def fake_json(url: str):  # noqa: ANN001
+    def fake_json(url: str):
         """返回技能目录下唯一的 SKILL.md 文件条目。"""
         assert url == "https://api.github.com/repos/example/skill-pack/contents/weather?ref=main"
         return [
@@ -906,7 +906,7 @@ def test_import_clawhub_skill_uses_clawhub_download_api_for_page_url(monkeypatch
 
     calls: list[str] = []
 
-    def fake_download(url: str):  # noqa: ANN001
+    def fake_download(url: str):
         """记录下载地址并返回预置的 zip 包。"""
         calls.append(url)
         assert url == "https://wry-manatee-359.convex.site/api/v1/download?slug=maomao-weather"
@@ -942,7 +942,7 @@ def test_import_clawhub_skill_accepts_cli_slug(monkeypatch) -> None:
     with ZipFile(package, "w") as archive:
         archive.writestr("SKILL.md", "---\nname: weather\n---\n\n# 天气\n")
 
-    def fake_download(url: str):  # noqa: ANN001
+    def fake_download(url: str):
         """校验由 slug 拼出的下载地址并返回预置 zip 包。"""
         assert url == "https://wry-manatee-359.convex.site/api/v1/download?slug=maomao-weather"
         return package.getvalue(), "application/zip"
@@ -963,7 +963,7 @@ def test_import_clawhub_skill_accepts_cli_slug(monkeypatch) -> None:
 
 def test_import_clawhub_skill_rejects_plain_html_page(monkeypatch) -> None:
     """验证普通 HTML 页面不会被当作 SKILL.md 导入。"""
-    def fake_download(url: str):  # noqa: ANN001
+    def fake_download(url: str):
         """返回不含技能包的纯 HTML 页面。"""
         assert url == "https://clawhub.example/skills/weather"
         return b"<html><body>skill landing page without package</body></html>", "text/html"
@@ -994,7 +994,7 @@ def test_general_skill_archive_publish_and_delete_api(monkeypatch) -> None:
 
     def fake_run(
         self, skill, query, model_config, user_id="enterprise_demo", max_attempts=5, event_sink=None
-    ):  # noqa: ANN001
+    ):
         """伪造技能执行，记录所选模型并返回固定的成功结果。"""
         captured_model_ids.append(model_config.id)
         return {
@@ -1009,7 +1009,7 @@ def test_general_skill_archive_publish_and_delete_api(monkeypatch) -> None:
 
     monkeypatch.setattr(GeneralSkillRunner, "run", fake_run)
 
-    def fake_read(self, skill, query, model_config, **kwargs):  # noqa: ANN001
+    def fake_read(self, skill, query, model_config, **kwargs):
         """伪造只读说明调用，记录查询内容并返回只读响应。"""
         read_queries.append(query)
         return GeneralSkillRunResponse(
@@ -1138,11 +1138,11 @@ async def test_general_skill_stream_executes_through_forced_harness_v2(monkeypat
     SQLModel.metadata.create_all(test_engine)
     captured_requests = []
 
-    def fail_legacy_runner(*args, **kwargs):  # noqa: ANN002, ANN003
+    def fail_legacy_runner(*args, **kwargs):
         """断言旧版执行器未被调用，一旦被调用即说明走了错误路径。"""
         raise AssertionError("legacy GeneralSkillRunner must not handle skill tests")
 
-    def fake_handle_turn(self, request):  # noqa: ANN001
+    def fake_handle_turn(self, request):
         """伪造 Harness v2 回合处理，写入轨迹事件与助手消息并返回回合响应。"""
         captured_requests.append(request)
         self.db.add(
@@ -1291,11 +1291,11 @@ def test_general_skill_runner_repairs_failed_code(monkeypatch) -> None:
     """验证执行器首次失败后调用代码修复，重试成功后生成回复。"""
     calls: list[str] = []
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """按提示词中的角色名返回执行、修复或回复的预设输出。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "代码修复器" in prompt_text:
@@ -1358,11 +1358,11 @@ def test_general_skill_runner_materializes_folder_package(monkeypatch) -> None:
     """验证执行器会把技能包文件物化到工作目录，供生成代码读取。"""
     calls: list[str] = []
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """按提示词中的角色名返回执行、审查或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "通用技能执行器" in prompt_text:
@@ -1433,11 +1433,11 @@ def test_general_skill_runner_executes_bash_package_command(monkeypatch) -> None
     """验证声明 allowed-tools: Bash 的技能以 bash 运行时执行包内脚本。"""
     calls: list[str] = []
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """按提示词中的角色名返回执行、审查或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "通用技能执行器" in prompt_text:
@@ -1515,11 +1515,11 @@ def test_general_skill_runner_has_requests_in_runtime(monkeypatch) -> None:
     """验证通用技能的 Python 运行环境已预装 requests。"""
     calls: list[str] = []
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """按提示词中的角色名返回执行、审查或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "通用技能执行器" in prompt_text:
@@ -1613,11 +1613,11 @@ def test_general_skill_runner_reflects_failed_initial_plan(monkeypatch) -> None:
     """验证首次计划生成失败会触发代码修复，并在轨迹中记录计划失败与重试。"""
     calls: list[str] = []
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """按提示词中的角色名返回修复、失败或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "代码修复器" in prompt_text:
@@ -1677,11 +1677,11 @@ def test_general_skill_runner_stops_on_non_retryable_failure(monkeypatch) -> Non
     """验证不可重试的失败会跳过代码修复直接结束，并给出兜底回复。"""
     calls: list[str] = []
 
-    def fake_init(self, model_config):  # noqa: ANN001
+    def fake_init(self, model_config):
         """跳过真实 LLM 客户端初始化，避免测试依赖网络与密钥。"""
         return
 
-    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+    def fake_generate_json(self, system_prompt, payload):
         """按提示词中的角色名返回执行、审查或回复的预设输出，并校验载荷。"""
         prompt_text = _system_and_stage_instructions(system_prompt, payload)
         if "通用技能执行器" in prompt_text:

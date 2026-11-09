@@ -1651,7 +1651,7 @@ def _download_github_directory(
         try:
             return _download_github_archive(owner, repo, [branch], subtree)
         except HTTPException:
-            raise api_error
+            raise api_error from None
 
 
 def _download_github_directory_contents(
@@ -1812,7 +1812,7 @@ def _download_url(url: str) -> tuple[bytes, str]:
     """下载 URL 内容并校验包体积上限，网络错误统一转换为 400。"""
     try:
         request = Request(url, headers={"User-Agent": "StaffDeck-GeneralSkillImporter/1.0"})
-        with urlopen(request, timeout=REMOTE_SKILL_DOWNLOAD_TIMEOUT_SECONDS) as response:  # noqa: S310 - user-confirmed import source
+        with urlopen(request, timeout=REMOTE_SKILL_DOWNLOAD_TIMEOUT_SECONDS) as response:  # user-confirmed import source
             content_type = response.headers.get("content-type", "")
             data = response.read(MAX_CLAWHUB_PACKAGE_BYTES + 1)
     except HTTPError as exc:

@@ -41,6 +41,17 @@ class RedisLease:
         self._client.eval(_RELEASE_LUA, 1, self._key, self._holder)
 
 
+def get_settings() -> Any:
+    """延迟解析应用设置。
+
+    保留模块级别名是为了让测试可以 monkeypatch `lease.get_settings`；函数体
+    每次重新解析，因此 patch `app.config.get_settings` 同样生效。
+    """
+    from app.config import get_settings as _get_settings
+
+    return _get_settings()
+
+
 def _build_client(url: str) -> Any:
     """按 URL 构造租约用的 Redis 客户端。
 
@@ -53,14 +64,20 @@ def _build_client(url: str) -> Any:
 
 
 def acquire_role_lease(role: str, ttl_seconds: int = 60) -> RedisLease | None:
-    """获取某个进程角色的租约；未配置 Redis 时返回 `None` 表示跳过。
+    """获取某个进程角色的租约；开发环境未配置 Redis 时返回 `None` 表示跳过。
 
-    已有其他进程持有该角色的租约时抛 `RuntimeError`，调用方据此拒绝启动。
+    生产环境缺少 Redis 时抛 `RuntimeError`：没有租约就无法阻止同角色多进程
+    并发，静默降级会掩盖部署配置错误。已有其他进程持有该角色的租约时同样抛
+    `RuntimeError`，调用方据此拒绝启动。
     """
-    from app.config import get_settings
-
-    url = get_settings().redis_url
+    settings = get_settings()
+    url = str(settings.redis_url or "").strip()
     if not url:
+        if settings.is_production:
+            raise RuntimeError(
+                "REDIS_URL is required in production: role leases prevent duplicate "
+                "api/worker/connector processes"
+            )
         return None
     client = _build_client(url)
     lease = RedisLease(client, f"staffdeck:lease:{role}", ttl_seconds=ttl_seconds)

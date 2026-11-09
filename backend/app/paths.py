@@ -19,7 +19,7 @@ def app_root() -> Path:
 def resource_dir() -> Path:
     """返回只读资源目录：打包态是 _MEIPASS 解包目录，开发态与 app_root() 一致。"""
     if is_frozen():
-        return Path(getattr(sys, "_MEIPASS"))
+        return Path(sys._MEIPASS)
     return app_root()
 
 

@@ -119,10 +119,8 @@ class GeneralSkillSelector:
             },
             output_contract=GENERAL_SKILL_SELECTION_OUTPUT,
         )
-        with llm_operation("general_skill.select"):
-            raw = LLMClient(model_config).generate_json(
-                unified_system_prompt(), payload
-            )
+        with llm_operation("general_skill.select"), LLMClient(model_config) as client:
+            raw = client.generate_json(unified_system_prompt(), payload)
         decision = GeneralSkillSelection.model_validate(raw)
         slugs = {skill.slug for skill in general_skills if skill.status == "published"}
         if decision.use_general_skill and decision.selected_slug in slugs:
@@ -168,8 +166,8 @@ class GeneralSkillReader:
             output_contract=GENERAL_SKILL_READ_OUTPUT,
         )
         try:
-            with llm_operation("general_skill.read"):
-                raw = LLMClient(model_config).generate_json(unified_system_prompt(), payload)
+            with llm_operation("general_skill.read"), LLMClient(model_config) as client:
+                raw = client.generate_json(unified_system_prompt(), payload)
             reply = str(raw.get("reply") or "").strip()
             if not reply:
                 raise LLMError("General skill read reply is empty")
@@ -472,11 +470,10 @@ class GeneralSkillRunner:
             stage_data=stage_data,
             output_contract=GENERAL_SKILL_PLAN_OUTPUT,
         )
-        with llm_operation("general_skill.plan"):
-            raw = LLMClient(snapshot_model_config(model_config)).generate_json(
-                unified_system_prompt(),
-                payload,
-            )
+        with llm_operation("general_skill.plan"), LLMClient(
+            snapshot_model_config(model_config)
+        ) as client:
+            raw = client.generate_json(unified_system_prompt(), payload)
         plan = GeneralSkillExecutionPlan.model_validate(raw)
         plan.runtime = _plan_runtime(plan)
         if not plan.code.strip():
@@ -642,11 +639,10 @@ class GeneralSkillRunner:
             stage_data=stage_data,
             output_contract=GENERAL_SKILL_PLAN_OUTPUT,
         )
-        with llm_operation("general_skill.repair", attempt=next_attempt):
-            raw = LLMClient(snapshot_model_config(model_config)).generate_json(
-                unified_system_prompt(),
-                payload,
-            )
+        with llm_operation("general_skill.repair", attempt=next_attempt), LLMClient(
+            snapshot_model_config(model_config)
+        ) as client:
+            raw = client.generate_json(unified_system_prompt(), payload)
         plan = GeneralSkillExecutionPlan.model_validate(raw)
         plan.runtime = _plan_runtime(plan)
         if not plan.code.strip():
@@ -901,10 +897,8 @@ class GeneralSkillRunner:
             output_contract=GENERAL_SKILL_REPLY_OUTPUT,
         )
         try:
-            with llm_operation("general_skill.reply"):
-                raw = LLMClient(model_config).generate_json(
-                    unified_system_prompt(), payload
-                )
+            with llm_operation("general_skill.reply"), LLMClient(model_config) as client:
+                raw = client.generate_json(unified_system_prompt(), payload)
             reply = GeneralSkillReply.model_validate(raw).reply.strip()
         except LLMError:
             raise
@@ -973,10 +967,10 @@ class GeneralSkillRunner:
             output_contract=GENERAL_SKILL_REVIEW_OUTPUT,
         )
         try:
-            with llm_operation("general_skill.review", attempt=attempt):
-                raw = LLMClient(model_config).generate_json(
-                    unified_system_prompt(), payload
-                )
+            with llm_operation("general_skill.review", attempt=attempt), LLMClient(
+                model_config
+            ) as client:
+                raw = client.generate_json(unified_system_prompt(), payload)
             review = GeneralSkillExecutionReview.model_validate(raw).model_dump(mode="json")
         except Exception as exc:
             fallback_needs_retry = _execution_needs_retry(stdout, stderr, structured_result)

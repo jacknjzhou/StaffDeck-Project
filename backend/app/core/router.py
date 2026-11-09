@@ -19,7 +19,6 @@ from app.observability.spans import llm_operation
 from app.session.session_schema import PendingTask, RouterDecision
 from app.session.slot_policy import strip_router_generated_message_slots
 
-
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "router_prompt.md"
 
 
@@ -51,10 +50,8 @@ class Router:
             output_contract=ROUTER_OUTPUT_SCHEMA,
         )
         try:
-            with llm_operation("router.scene"):
-                raw = LLMClient(model_config).generate_json(
-                    unified_system_prompt(), payload
-                )
+            with llm_operation("router.scene"), LLMClient(model_config) as client:
+                raw = client.generate_json(unified_system_prompt(), payload)
             decision = RouterDecision.model_validate(raw)
         except Exception as exc:
             if isinstance(exc, LLMError):

@@ -41,12 +41,11 @@ from app.scheduled_tasks.schema import (
     ScheduledTaskRunRead,
     ScheduledTaskUpdateRequest,
 )
-from app.session.session_schema import ChatTurnRequest, ChatTurnResponse
 from app.security.permissions import agent_owned_by_user as _agent_owned_by_user
 from app.security.permissions import is_admin_user as _is_admin_user
 from app.security.tenant import ensure_tenant
+from app.session.session_schema import ChatTurnRequest, ChatTurnResponse
 from app.skills.nesting import SopNestingError, expand_sop_for_execution
-
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_TASK_TIME = "09:00"
@@ -1143,8 +1142,8 @@ def _detect_with_llm(
     if not model_config:
         return None
     try:
-        with llm_operation("scheduled_task.detect"):
-            raw = LLMClient(model_config).generate_json(
+        with llm_operation("scheduled_task.detect"), LLMClient(model_config) as client:
+            raw = client.generate_json(
                 SCHEDULE_DRAFT_PROMPT,
                 {
                     "now": _to_local(utc_now(), timezone).isoformat(),

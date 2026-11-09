@@ -9,7 +9,6 @@ from typing import Any
 
 from app.db.models import new_id, utc_now
 
-
 AsyncJobStatus = str
 
 
@@ -125,7 +124,7 @@ class AsyncJobQueue:
         self._update(job_id, status="running", started_at=utc_now())
         try:
             func(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001 - background jobs must never crash the request path.
+        except Exception as exc:  # background jobs must never crash the request path.
             self._update(job_id, status="failed", finished_at=utc_now(), error=str(exc))
             return
         self._update(job_id, status="succeeded", finished_at=utc_now(), error=None)

@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -103,7 +105,7 @@ def _group_message(event_id: str, text: str, group_id: str = "room_123456") -> d
 
 class RecordingAgentLoop:
     """记录调用并落库问答消息的假 AgentLoop,用于断言消息被路由到哪个员工会话。"""
-    calls: list = []
+    calls: ClassVar[list] = []
 
     def __init__(self, db, *, event_sink=None):
         """保存注入的数据库会话,并忽略事件回调参数。"""
@@ -657,7 +659,7 @@ def test_delete_agent_cleans_channel_mounts_and_repoints_default() -> None:
 
     client = _make_agents_client(engine)
     deleted = client.delete(
-        f"/api/enterprise/agents/agent_cw?tenant_id=tenant_demo",
+        "/api/enterprise/agents/agent_cw?tenant_id=tenant_demo",
         headers=_auth(users["owner"]),
     )
     assert deleted.status_code == 200
@@ -706,7 +708,7 @@ def test_delete_agent_last_mount_keeps_binding_agent() -> None:
 
     client = _make_agents_client(engine)
     deleted = client.delete(
-        f"/api/enterprise/agents/agent_cw?tenant_id=tenant_demo",
+        "/api/enterprise/agents/agent_cw?tenant_id=tenant_demo",
         headers=_auth(users["owner"]),
     )
     assert deleted.status_code == 200

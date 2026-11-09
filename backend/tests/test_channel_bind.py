@@ -1,5 +1,6 @@
 import threading
 from datetime import timedelta
+from typing import ClassVar
 
 import pytest
 from sqlalchemy import text as sa_text
@@ -166,7 +167,7 @@ def _make_lazy_account(engine) -> User:
 
 class RecordingAgentLoop:
     """记录每次被调用的轮次请求，替代真实 AgentLoop 执行。"""
-    calls: list = []
+    calls: ClassVar[list] = []
 
     def __init__(self, db, *, event_sink=None):
         """保存数据库会话，供 handle_turn 提交使用。"""

@@ -8,9 +8,9 @@ checkpoint for a later turn, and publishes one durable failure reply.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import delete
@@ -28,7 +28,6 @@ from app.db.models import (
     Message,
     utc_now,
 )
-
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session
 
 from app.db import get_session

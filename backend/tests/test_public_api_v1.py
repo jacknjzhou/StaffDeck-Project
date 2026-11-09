@@ -6,27 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.db import get_session
-from app.db.models import (
-    APIClient,
-    APICredential,
-    APIJob,
-    APIJobEvent,
-    APISOPDraft,
-    AgentEvent,
-    AgentKnowledgeBranch,
-    AgentProfile,
-    AgentResourceBinding,
-    ChatSession,
-    KnowledgeBase,
-    KnowledgeBaseVersion,
-    KnowledgeConcept,
-    Message,
-    Skill,
-    Tenant,
-    User,
-    utc_now,
-)
+from app.agents.schema import AgentAPICredentialCreateRequest
 from app.api.agents import (
     create_agent_api_credential,
     list_agent_api_credentials,
@@ -40,16 +20,36 @@ from app.api.auth import (
     revoke_account_api_credential,
     rotate_account_api_credential,
 )
-from app.agents.schema import AgentAPICredentialCreateRequest
+from app.db import get_session
+from app.db.models import (
+    AgentEvent,
+    AgentKnowledgeBranch,
+    AgentProfile,
+    AgentResourceBinding,
+    APIClient,
+    APICredential,
+    APIJob,
+    APIJobEvent,
+    APISOPDraft,
+    ChatSession,
+    KnowledgeBase,
+    KnowledgeBaseVersion,
+    KnowledgeConcept,
+    Message,
+    Skill,
+    Tenant,
+    User,
+    utc_now,
+)
+from app.public_api import jobs as public_jobs
+from app.public_api.app import create_public_api_app
 from app.public_api.credential_profiles import (
     AGENT_RUNTIME_SCOPES,
     USER_FULL_ACCESS_SCOPES,
 )
-from app.public_api.app import create_public_api_app
-from app.public_api import jobs as public_jobs
+from app.public_api.jobs import recover_public_jobs, register_job_handler, run_job
 from app.public_api.json_patch import JSONPatchError, apply_json_patch
 from app.public_api.runs import execute_run
-from app.public_api.jobs import recover_public_jobs, register_job_handler, run_job
 from app.security.auth import create_access_token
 from app.session.helpers import public_session
 from app.session.session_schema import ChatTurnResponse
@@ -1112,7 +1112,7 @@ def test_internal_job_remains_durably_queued_when_executor_is_stopping(monkeypat
     """验证执行器停机时内部任务仍落库为 queued。"""
     _client_instance, engine, _admin_token = _client(monkeypatch)
 
-    def reject_submission(*args, **kwargs):  # noqa: ANN002, ANN003
+    def reject_submission(*args, **kwargs):
         """模拟执行器关闭，提交异步任务时直接抛异常。"""
         raise RuntimeError("executor is shutting down")
 
@@ -1426,3 +1426,37 @@ def test_public_knowledge_agent_key_boundary(monkeypatch) -> None:
     )
     assert response.status_code == 403
     assert response.json()["code"] == "INSUFFICIENT_SCOPE"
+
+
+def test_public_api_rejects_console_token_of_inactive_admin(monkeypatch) -> None:
+    """被停用管理员的控制台 token 不能再走公开 API 的管理员引导路径。"""
+    client, engine, admin_token = _client(monkeypatch)
+    with Session(engine) as db:
+        admin = db.get(User, "user_api_admin")
+        admin.status = "rejected"
+        db.add(admin)
+        db.commit()
+    response = client.post(
+        "/api-clients",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"name": "rejected-admin", "scopes": ["*"]},
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "INVALID_USER_TOKEN"
+
+
+def test_api_key_is_rejected_when_owner_is_inactive(monkeypatch) -> None:
+    """已签发的 API key 在所有者被停用后必须失效,不能继续调用公开 API。"""
+    client, engine, admin_token = _client(monkeypatch)
+    tenant_key = _tenant_key(client, admin_token, ["agents:read"])
+    with Session(engine) as db:
+        admin = db.get(User, "user_api_admin")
+        admin.status = "rejected"
+        db.add(admin)
+        db.commit()
+    response = client.get(
+        "/agents",
+        headers={"Authorization": f"Bearer {tenant_key}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "API_CLIENT_OWNER_INACTIVE"

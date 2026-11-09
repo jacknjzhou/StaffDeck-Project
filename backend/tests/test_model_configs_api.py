@@ -94,12 +94,20 @@ def test_failed_verified_create_does_not_leave_disabled_model(tmp_path, monkeypa
     """验证校验失败的创建返回 502，且不残留任何半成品配置。"""
     class FailingClient:
         """模拟连接失败的 LLM 客户端，用于触发创建时的校验异常。"""
-        def __init__(self, _config) -> None:  # noqa: ANN001
+        def __init__(self, _config) -> None:
             """接收配置但不做初始化，仅保持与真实客户端一致的构造签名。"""
 
-        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+        def generate_text(self, _prompt, _payload):
             """抛出 LLMError 模拟上游连接失败。"""
             raise LLMError("Connection error")
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
     with _db(tmp_path) as db:
@@ -128,10 +136,10 @@ def test_model_test_returns_structured_provider_diagnostics(tmp_path, monkeypatc
     """验证连通性测试失败时，错误对象透出上游结构化诊断字段。"""
     class FailingClient:
         """模拟返回上游错误详情的客户端，用于检查诊断信息透传。"""
-        def __init__(self, _config) -> None:  # noqa: ANN001
+        def __init__(self, _config) -> None:
             """接收配置但不做初始化，仅保持与真实客户端一致的构造签名。"""
 
-        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+        def generate_text(self, _prompt, _payload):
             """抛出携带上游状态码与请求 ID 的 LLMError。"""
             raise LLMError(
                 "provider rejected request",
@@ -142,6 +150,14 @@ def test_model_test_returns_structured_provider_diagnostics(tmp_path, monkeypatc
                 upstream_body='{"error":{"code":"invalid_model"}}',
                 request_id="req_123",
             )
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
     with _db(tmp_path) as db:
@@ -336,12 +352,20 @@ def test_failed_verified_update_preserves_existing_model(tmp_path, monkeypatch) 
     """验证更新校验失败时，原配置的所有字段保持不变。"""
     class FailingClient:
         """模拟连接失败的客户端，用于更新场景的校验失败。"""
-        def __init__(self, _config) -> None:  # noqa: ANN001
+        def __init__(self, _config) -> None:
             """接收配置但不做初始化，仅保持与真实客户端一致的构造签名。"""
 
-        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+        def generate_text(self, _prompt, _payload):
             """抛出 LLMError 模拟上游连接失败。"""
             raise LLMError("Connection error")
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", FailingClient)
     with _db(tmp_path) as db:
@@ -505,24 +529,32 @@ def test_verification_runs_bounded_text_stream_and_json_probes(tmp_path, monkeyp
 
     class FakeClient:
         """记录调用顺序且全部探测成功的假客户端，用于校验探测流程。"""
-        def __init__(self, config) -> None:  # noqa: ANN001
+        def __init__(self, config) -> None:
             """记录构造时的输出上限与超时，以便断言参数被限制。"""
             calls.append(("init", config.max_output_tokens, config.timeout_seconds))
 
-        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+        def generate_text(self, _prompt, _payload):
             """返回固定文本，表示文本能力探测通过。"""
             calls.append(("text",))
             return "ok"
 
-        def generate_text_stream(self, _prompt, _payload):  # noqa: ANN001
+        def generate_text_stream(self, _prompt, _payload):
             """返回单段流式文本，表示流式能力探测通过。"""
             calls.append(("stream",))
             yield "ok"
 
-        def generate_json(self, _prompt, _payload):  # noqa: ANN001
+        def generate_json(self, _prompt, _payload):
             """返回固定 JSON，表示结构化输出能力探测通过。"""
             calls.append(("json",))
             return {"ok": True}
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", FakeClient)
     with _db(tmp_path) as db:
@@ -721,7 +753,7 @@ def test_concurrent_initial_verification_activates_only_one_default(tmp_path, mo
     second_check_barrier = threading.Barrier(2)
     thread_state = threading.local()
 
-    def synchronized_has_available_model(db, tenant_id):  # noqa: ANN001
+    def synchronized_has_available_model(db, tenant_id):
         """在两个线程的首次可用性检查处同步，制造并发激活的竞争窗口。"""
         check_count = getattr(thread_state, "check_count", 0) + 1
         thread_state.check_count = check_count
@@ -762,19 +794,27 @@ def _install_passing_verification_client(monkeypatch) -> None:
     """把 LLMClient 替换成所有探测都通过的假客户端，供激活类用例复用。"""
     class PassingClient:
         """文本、流式与 JSON 探测均成功的假客户端。"""
-        def __init__(self, _config) -> None:  # noqa: ANN001
+        def __init__(self, _config) -> None:
             """接收配置但不做初始化，仅保持与真实客户端一致的构造签名。"""
 
-        def generate_text(self, _prompt, _payload):  # noqa: ANN001
+        def generate_text(self, _prompt, _payload):
             """返回固定文本，表示文本探测通过。"""
             return "ok"
 
-        def generate_text_stream(self, _prompt, _payload):  # noqa: ANN001
+        def generate_text_stream(self, _prompt, _payload):
             """返回单段流式文本，表示流式探测通过。"""
             yield "ok"
 
-        def generate_json(self, _prompt, _payload):  # noqa: ANN001
+        def generate_json(self, _prompt, _payload):
             """返回固定 JSON，表示结构化输出探测通过。"""
             return {"ok": True}
+
+        def __enter__(self):
+            """返回自身，供 with 语句获取客户端。"""
+            return self
+
+        def __exit__(self, *_exc_info):
+            """测试替身不持有真实连接，退出时不做清理。"""
+            return None
 
     monkeypatch.setattr("app.api.model_configs.LLMClient", PassingClient)

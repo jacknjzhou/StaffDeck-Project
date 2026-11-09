@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 # Control-plane routers already have deterministic fallbacks. Retrying an empty
 # reasoning-only response delays the real work without improving routing.
 OPERATION_EMPTY_RESPONSE_RETRIES: dict[str, int] = {

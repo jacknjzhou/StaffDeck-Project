@@ -78,31 +78,31 @@ def test_async_job_queue_shutdown_terminalizes_all_accepted_jobs() -> None:
 def test_enqueue_racing_with_shutdown_leaves_no_phantom_job() -> None:
     """验证入队与关闭并发时只有一方成功，且不留幽灵任务。"""
     queue = AsyncJobQueue(max_workers=1)
-    queue._executor.shutdown(wait=True)  # noqa: SLF001 - controlled race fixture.
+    queue._executor.shutdown(wait=True)  # controlled race fixture.
     submit_entered = Event()
     release_submit = Event()
     delegate = ThreadPoolExecutor(max_workers=1)
 
     class GatedExecutor:
         """可控的线程池替身，在 submit 时挂起以便与关闭流程交错。"""
-        def submit(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        def submit(self, *args, **kwargs):
             """先发出已进入信号并等待放行，再委托真实线程池提交。"""
             submit_entered.set()
             release_submit.wait(2)
             return delegate.submit(*args, **kwargs)
 
-        def shutdown(self, *, wait=True, cancel_futures=False):  # noqa: ANN001
+        def shutdown(self, *, wait=True, cancel_futures=False):
             """把关闭调用转发给真实线程池。"""
             delegate.shutdown(wait=wait, cancel_futures=cancel_futures)
 
-    queue._executor = GatedExecutor()  # type: ignore[assignment]  # noqa: SLF001
+    queue._executor = GatedExecutor()  # type: ignore[assignment]
     errors: list[Exception] = []
 
     def enqueue() -> None:
         """在独立线程中发起入队并捕获预期异常。"""
         try:
             queue.enqueue("test.race", lambda: None)
-        except Exception as exc:  # noqa: BLE001 - capture the expected rejection.
+        except Exception as exc:  # capture the expected rejection.
             errors.append(exc)
 
     enqueue_thread = Thread(target=enqueue)
@@ -143,7 +143,7 @@ def test_agent_loop_enqueues_memory_capture_without_running_it_inline(monkeypatc
     """验证记忆捕获以异步任务入队，并记录事件与提交事务。"""
     captured = {}
 
-    def fake_enqueue_memory_capture(*args):  # noqa: ANN002
+    def fake_enqueue_memory_capture(*args):
         """记录入队参数并返回带 id 的任务替身。"""
         captured["args"] = args
         return SimpleNamespace(id="job_memory_1", name="memory.capture_turn")

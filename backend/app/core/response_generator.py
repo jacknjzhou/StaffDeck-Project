@@ -18,7 +18,6 @@ from app.observability.spans import llm_operation
 from app.session.session_schema import RouterDecision, StepAgentResult
 from app.tools.tool_schema import ToolResult
 
-
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "response_generator_prompt.md"
 FALLBACK_REPLY = "抱歉，我暂时无法处理这个问题。您可以换个说法，或者我可以帮您转人工。"
 MODEL_FAILURE_SUGGESTION = "请检查模型配置、API Key、网络或模型服务状态后重试。"
@@ -106,10 +105,8 @@ class ResponseGenerator:
         try:
             if tool_result and not tool_result.success and not task_results:
                 return tool_failure_reply(tool_result)
-            with llm_operation("response.generate"):
-                text = LLMClient(model_config).generate_text(
-                    unified_system_prompt(), payload
-                )
+            with llm_operation("response.generate"), LLMClient(model_config) as client:
+                text = client.generate_text(unified_system_prompt(), payload)
             reply = text.strip() or step_result.reply or self._minimal_fallback(router_decision)
             return self._visible_reply_or_fallback(
                 reply, session, router_decision, step_result, tool_result, skill
@@ -155,21 +152,26 @@ class ResponseGenerator:
                 yield from self.chunk_text(step_result.reply)
                 return
             with llm_operation("response.generate_stream"):
-                stream = LLMClient(model_config).generate_text_stream(
-                    unified_system_prompt(), payload
-                )
-                reply_parts: list[str] = []
-                has_streamed = False
-                for chunk in stream:
-                    if not chunk:
-                        continue
-                    reply_parts.append(chunk)
-                    if not has_streamed:
-                        preview = "".join(reply_parts).strip()
-                        if not preview:
+                client = LLMClient(model_config)
+                try:
+                    stream = client.generate_text_stream(
+                        unified_system_prompt(), payload
+                    )
+                    reply_parts: list[str] = []
+                    has_streamed = False
+                    for chunk in stream:
+                        if not chunk:
                             continue
-                        has_streamed = True
-                    yield chunk
+                        reply_parts.append(chunk)
+                        if not has_streamed:
+                            preview = "".join(reply_parts).strip()
+                            if not preview:
+                                continue
+                            has_streamed = True
+                        yield chunk
+                finally:
+                    # 消费方提前 break/close 时 GeneratorExit 也会走到这里。
+                    client.close()
             if has_streamed:
                 return
             reply = self._visible_reply_or_fallback(
