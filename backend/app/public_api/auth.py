@@ -86,7 +86,13 @@ def _api_key_principal(token: str, db: Session) -> PublicPrincipal:
         raise PublicAPIError(401, "API_CLIENT_INACTIVE", "The API client is inactive.")
     actor = db.get(User, client.created_by_user_id or "")
     if not actor or actor.tenant_id != client.tenant_id:
-        raise PublicAPIError(401, "API_CLIENT_OWNER_MISSING", "The API client owner is unavailable.")
+        raise PublicAPIError(
+            401, "API_CLIENT_OWNER_MISSING", "The API client owner is unavailable."
+        )
+    if getattr(actor, "status", "active") != "active":
+        raise PublicAPIError(
+            401, "API_CLIENT_OWNER_INACTIVE", "The API client owner is inactive."
+        )
     credential.last_used_at = now
     credential.updated_at = now
     db.add(credential)
@@ -157,6 +163,8 @@ def _bootstrap_principal(token: str, db: Session) -> PublicPrincipal:
     payload = _decode_token(token)
     user = db.get(User, str(payload.get("user_id") or ""))
     if not user or user.tenant_id != payload.get("tenant_id"):
+        raise PublicAPIError(401, "INVALID_USER_TOKEN", "The user token is invalid.")
+    if getattr(user, "status", "active") != "active":
         raise PublicAPIError(401, "INVALID_USER_TOKEN", "The user token is invalid.")
     if not is_admin_user(user):
         raise PublicAPIError(403, "ADMIN_REQUIRED", "Tenant administrator access is required.")

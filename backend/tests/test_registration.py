@@ -1,5 +1,7 @@
 """自助注册与审核:创建 pending 账号、拒绝重名、登录态收口与管理端审核。"""
 
+from datetime import timedelta
+
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
@@ -11,7 +13,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 import app.api.auth as auth_api
 from app.config import Settings
 from app.db import get_session
-from app.db.models import Tenant, User
+from app.db.models import Tenant, User, utc_now
 from app.security.auth import create_access_token, get_current_user, hash_password
 
 
@@ -362,3 +364,112 @@ def test_list_users_shows_pending_accounts_to_admin(monkeypatch) -> None:
         "admin": "active",
         "lisi": "pending",
     }
+
+
+def test_admin_can_reactivate_rejected_account(monkeypatch) -> None:
+    """已拒绝账号可以重新审核通过:rejected → active。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    rejected = User(id="user_r", tenant_id="tenant_demo", username="lisi",
+                    password_hash=hash_password("secret123"), status="rejected")
+    client, engine = _client(monkeypatch, users=[admin, rejected])
+    response = client.put(
+        "/api/auth/users/user_r/status",
+        json={"tenant_id": "tenant_demo", "status": "active"},
+        headers=_token(admin),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    with Session(engine) as db:
+        assert db.get(User, "user_r").status == "active"
+
+
+def test_admin_can_deactivate_another_account(monkeypatch) -> None:
+    """管理员可以把另一个 active 账号停用:active → rejected。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    member = User(id="user_m", tenant_id="tenant_demo", username="lisi",
+                  password_hash=hash_password("secret123"), status="active")
+    client, engine = _client(monkeypatch, users=[admin, member])
+    response = client.put(
+        "/api/auth/users/user_m/status",
+        json={"tenant_id": "tenant_demo", "status": "rejected"},
+        headers=_token(admin),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    with Session(engine) as db:
+        assert db.get(User, "user_m").status == "rejected"
+
+
+def test_admin_cannot_manage_other_tenant_account(monkeypatch) -> None:
+    """跨租户 user_id 返回 404,不能靠审核端点探测别的租户。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    foreign = User(id="user_other", tenant_id="tenant_other", username="lisi",
+                   password_hash=hash_password("secret123"), status="active")
+    client, _ = _client(monkeypatch, users=[admin, foreign])
+    response = client.put(
+        "/api/auth/users/user_other/status",
+        json={"tenant_id": "tenant_demo", "status": "rejected"},
+        headers=_token(admin),
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Account not found"
+
+
+def test_admin_gets_404_for_missing_account(monkeypatch) -> None:
+    """不存在的 user_id 返回 404,且 detail 与路由缺失可区分。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    client, _ = _client(monkeypatch, users=[admin])
+    response = client.put(
+        "/api/auth/users/user_missing/status",
+        json={"tenant_id": "tenant_demo", "status": "rejected"},
+        headers=_token(admin),
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Account not found"
+
+
+def test_non_admin_gets_403_for_missing_account(monkeypatch) -> None:
+    """非管理员打不存在的 user_id 必须是 403:管理员校验先于查库,不泄露存在性。"""
+    member = User(id="user_m", tenant_id="tenant_demo", username="zhangsan",
+                  password_hash=hash_password("secret123"), status="active")
+    client, _ = _client(monkeypatch, users=[member])
+    response = client.put(
+        "/api/auth/users/user_missing/status",
+        json={"tenant_id": "tenant_demo", "status": "active"},
+        headers=_token(member),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Only administrator can manage accounts"
+
+
+def test_status_update_refreshes_updated_at(monkeypatch) -> None:
+    """状态变更必须刷新 updated_at,否则前端展示的处理时间永远不动。"""
+    stale = utc_now() - timedelta(days=3)
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    pending = User(id="user_p", tenant_id="tenant_demo", username="lisi",
+                   password_hash=hash_password("secret123"), status="pending",
+                   updated_at=stale)
+    client, engine = _client(monkeypatch, users=[admin, pending])
+    response = client.put(
+        "/api/auth/users/user_p/status",
+        json={"tenant_id": "tenant_demo", "status": "active"},
+        headers=_token(admin),
+    )
+    assert response.status_code == 200
+    with Session(engine) as db:
+        assert db.get(User, "user_p").updated_at > stale
+
+
+def test_me_route_rejects_rejected_user_token(monkeypatch) -> None:
+    """路由级鉴权:被停用账号带旧 token 访问 /api/auth/me 返回 401 与明确 detail。"""
+    rejected = User(id="user_r", tenant_id="tenant_demo", username="lisi",
+                    password_hash=hash_password("secret123"), status="rejected")
+    client, _ = _client(monkeypatch, users=[rejected])
+    response = client.get("/api/auth/me", headers=_token(rejected))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Account is not active"

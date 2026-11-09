@@ -250,7 +250,11 @@ def _validate_handoff_assignees(db: Session, content: SkillCard, tenant_id: str)
     if non_internal:
         raise HTTPException(
             status_code=400,
-            detail=f"人工节点处理人必须是内部成员(web 账号),不可使用渠道客户或群聊虚拟账号: {', '.join(sorted(non_internal))}",
+            detail=(
+                "人工节点处理人必须是内部成员(web 账号),"
+                "不可使用渠道客户或群聊虚拟账号或账号未启用: "
+                f"{', '.join(sorted(non_internal))}"
+            ),
         )
     channel_specs = {
         (user_id, channel)

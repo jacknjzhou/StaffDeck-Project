@@ -1426,3 +1426,37 @@ def test_public_knowledge_agent_key_boundary(monkeypatch) -> None:
     )
     assert response.status_code == 403
     assert response.json()["code"] == "INSUFFICIENT_SCOPE"
+
+
+def test_public_api_rejects_console_token_of_inactive_admin(monkeypatch) -> None:
+    """被停用管理员的控制台 token 不能再走公开 API 的管理员引导路径。"""
+    client, engine, admin_token = _client(monkeypatch)
+    with Session(engine) as db:
+        admin = db.get(User, "user_api_admin")
+        admin.status = "rejected"
+        db.add(admin)
+        db.commit()
+    response = client.post(
+        "/api-clients",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"name": "rejected-admin", "scopes": ["*"]},
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "INVALID_USER_TOKEN"
+
+
+def test_api_key_is_rejected_when_owner_is_inactive(monkeypatch) -> None:
+    """已签发的 API key 在所有者被停用后必须失效,不能继续调用公开 API。"""
+    client, engine, admin_token = _client(monkeypatch)
+    tenant_key = _tenant_key(client, admin_token, ["agents:read"])
+    with Session(engine) as db:
+        admin = db.get(User, "user_api_admin")
+        admin.status = "rejected"
+        db.add(admin)
+        db.commit()
+    response = client.get(
+        "/agents",
+        headers={"Authorization": f"Bearer {tenant_key}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "API_CLIENT_OWNER_INACTIVE"
