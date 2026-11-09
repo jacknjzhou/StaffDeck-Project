@@ -411,9 +411,15 @@ def login(
         select(User).where(User.tenant_id == payload.tenant_id, User.username == username)
     ).first()
     if not user:
+        # 只有 active 账号才可作为登录别名:非 active 账号本就 403 不能登录,
+        # 若参与解析,匿名注册的 pending 影子账号会让受害者的别名登录命中两行而 401。
         display_name_matches = db.exec(
             select(User)
-            .where(User.tenant_id == payload.tenant_id, User.display_name == username)
+            .where(
+                User.tenant_id == payload.tenant_id,
+                User.display_name == username,
+                User.status == "active",
+            )
             .limit(2)
         ).all()
         if len(display_name_matches) == 1:

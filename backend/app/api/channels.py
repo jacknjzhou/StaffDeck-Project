@@ -717,10 +717,17 @@ def update_channel_binding_agents(
     handoff_channel = request.default_handoff_assignee_channel
     if handoff_assignee != "unchanged" and handoff_assignee:
         user = db.get(User, handoff_assignee)
-        if not user or user.tenant_id != tenant_id or user.source != "web":
+        # 与 SOP 人工节点一致:必须是本租户的内部 web 账号,且账号已启用。
+        # 非 active 账号会在运行时被 _is_internal_assignee 丢弃,这里提前拒绝。
+        if (
+            not user
+            or user.tenant_id != tenant_id
+            or user.source != "web"
+            or getattr(user, "status", "active") != "active"
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="默认人工处理人必须是当前租户的内部成员",
+                detail="默认人工处理人必须是当前租户的内部成员(web 账号),且账号已启用",
             )
         handoff_channel = str(handoff_channel or "").strip()
         if handoff_channel and handoff_channel not in ("unchanged", "web"):

@@ -1713,6 +1713,41 @@ def test_put_binding_default_handoff_assignee_rejects_channel_customer() -> None
     assert response.status_code == 400
 
 
+def test_put_binding_default_handoff_assignee_rejects_inactive_account() -> None:
+    """验证默认人工处理人必须是已启用账号:pending 账号 400,active 仍可保存。"""
+    engine = _test_engine()
+    users = _seed_users(engine)
+    binding_id = _seed_binding(engine)
+    with Session(engine) as db:
+        db.add(
+            User(
+                id="user_pending_assignee",
+                tenant_id="tenant_demo",
+                username="pending_assignee",
+                source="web",
+                status="pending",
+                password_hash="x",
+            )
+        )
+        db.commit()
+    client = _make_client(engine)
+
+    rejected = client.put(
+        f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
+        json={"default_handoff_assignee_user_id": "user_pending_assignee"},
+        headers=_auth(users["owner"]),
+    )
+    assert rejected.status_code == 400
+    assert "账号已启用" in rejected.json()["detail"]
+
+    accepted = client.put(
+        f"/api/enterprise/channels/{binding_id}?tenant_id=tenant_demo",
+        json={"default_handoff_assignee_user_id": "user_owner"},
+        headers=_auth(users["owner"]),
+    )
+    assert accepted.status_code == 200
+
+
 def test_put_feishu_default_handoff_assignee_channel_variant_requires_bound_identity() -> None:
     """飞书绑定:网页端选项不要求绑定;渠道选项要求当前 scope 下的非群聊身份。"""
     engine = _test_engine()

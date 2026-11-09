@@ -137,6 +137,55 @@ def test_register_cannot_shadow_display_name_alias(monkeypatch) -> None:
     assert login.status_code == 200
 
 
+def test_pending_shadow_display_name_does_not_break_alias_login(monkeypatch) -> None:
+    """待审核影子账号不得占用他人显示名:别名登录必须仍唯一解析到 active 账号。"""
+    victim = User(id="user_li", tenant_id="tenant_demo", username="lisi",
+                  display_name="李四", password_hash=hash_password("secret123"),
+                  status="active")
+    client, engine = _client(monkeypatch, users=[victim])
+    register = client.post("/api/auth/register", json={
+        "tenant_id": "tenant_demo", "username": "shadow",
+        "display_name": "李四", "password": "secret123",
+    })
+    assert register.status_code == 201
+    with Session(engine) as db:
+        shadow = db.exec(select(User).where(User.username == "shadow")).one()
+        assert shadow.status == "pending"
+        assert shadow.display_name == "李四"
+    # 非 active 账号不能登录,更不该参与别名解析;否则受害者被永久顶成 401。
+    login = client.post("/api/auth/login", json={
+        "tenant_id": "tenant_demo", "username": "李四", "password": "secret123",
+    })
+    assert login.status_code == 200
+
+
+def test_rejected_shadow_display_name_does_not_break_alias_login(monkeypatch) -> None:
+    """影子账号被拒绝后仍不得占用他人显示名:别名登录必须继续 200。"""
+    admin = User(id="user_admin", tenant_id="tenant_demo", username="admin",
+                 role="admin", password_hash=hash_password("adminpass"), status="active")
+    victim = User(id="user_li", tenant_id="tenant_demo", username="lisi",
+                  display_name="李四", password_hash=hash_password("secret123"),
+                  status="active")
+    client, engine = _client(monkeypatch, users=[admin, victim])
+    register = client.post("/api/auth/register", json={
+        "tenant_id": "tenant_demo", "username": "shadow",
+        "display_name": "李四", "password": "secret123",
+    })
+    assert register.status_code == 201
+    with Session(engine) as db:
+        shadow_id = db.exec(select(User).where(User.username == "shadow")).one().id
+    reject = client.put(
+        f"/api/auth/users/{shadow_id}/status",
+        json={"tenant_id": "tenant_demo", "status": "rejected"},
+        headers=_token(admin),
+    )
+    assert reject.status_code == 200
+    login = client.post("/api/auth/login", json={
+        "tenant_id": "tenant_demo", "username": "李四", "password": "secret123",
+    })
+    assert login.status_code == 200
+
+
 def test_register_rejects_unknown_tenant(monkeypatch) -> None:
     """租户不存在时返回 404,并带上租户缺失的具体原因,不建任何账号。"""
     client, _ = _client(monkeypatch)
