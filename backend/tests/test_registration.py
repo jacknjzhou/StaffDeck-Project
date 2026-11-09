@@ -1,7 +1,8 @@
 """自助注册与审核:创建 pending 账号、拒绝重名、登录态收口与管理端审核。"""
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from sqlalchemy.pool import StaticPool
@@ -11,7 +12,7 @@ import app.api.auth as auth_api
 from app.config import Settings
 from app.db import get_session
 from app.db.models import Tenant, User
-from app.security.auth import create_access_token, hash_password
+from app.security.auth import create_access_token, get_current_user, hash_password
 
 
 @pytest.fixture(autouse=True)
@@ -205,3 +206,68 @@ def test_login_quota_is_independent_from_register_quota(monkeypatch) -> None:
     login = {"tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123"}
     assert client.post("/api/auth/login", json=login).status_code == 200
 
+
+
+def test_login_pending_account_returns_403_code(monkeypatch) -> None:
+    """待审核账号用正确口令登录返回 403 与明确错误码,便于前端区分文案。"""
+    pending = User(id="user_p", tenant_id="tenant_demo", username="zhangsan",
+                   password_hash=hash_password("secret123"), status="pending")
+    client, _ = _client(monkeypatch, users=[pending])
+    response = client.post("/api/auth/login", json={
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "secret123",
+    })
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ACCOUNT_PENDING_APPROVAL"
+
+
+def test_login_wrong_password_for_pending_account_returns_401(monkeypatch) -> None:
+    """口令错误一律 401:不知道口令的人不能靠状态码枚举账号状态。"""
+    pending = User(id="user_p", tenant_id="tenant_demo", username="zhangsan",
+                   password_hash=hash_password("secret123"), status="pending")
+    client, _ = _client(monkeypatch, users=[pending])
+    response = client.post("/api/auth/login", json={
+        "tenant_id": "tenant_demo", "username": "zhangsan", "password": "wrong-pass",
+    })
+    assert response.status_code == 401
+
+
+def test_login_rejected_account_returns_403_code(monkeypatch) -> None:
+    """已拒绝账号登录返回 403 与 REGISTRATION_REJECTED 错误码。"""
+    rejected = User(id="user_r", tenant_id="tenant_demo", username="lisi",
+                    password_hash=hash_password("secret123"), status="rejected")
+    client, _ = _client(monkeypatch, users=[rejected])
+    response = client.post("/api/auth/login", json={
+        "tenant_id": "tenant_demo", "username": "lisi", "password": "secret123",
+    })
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ACCOUNT_REGISTRATION_REJECTED"
+
+
+def test_login_active_account_succeeds(monkeypatch) -> None:
+    """active 账号不受状态判断影响,仍能正常拿到 token。"""
+    active = User(id="user_a", tenant_id="tenant_demo", username="wangwu",
+                  password_hash=hash_password("secret123"), status="active")
+    client, _ = _client(monkeypatch, users=[active])
+    response = client.post("/api/auth/login", json={
+        "tenant_id": "tenant_demo", "username": "wangwu", "password": "secret123",
+    })
+    assert response.status_code == 200
+    assert response.json()["user"]["status"] == "active"
+
+
+def test_get_current_user_rejects_inactive_account() -> None:
+    """已签发 token 的账号被停用后,下一次鉴权必须 401(前端据此自动登出)。"""
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(User(id="user_x", tenant_id="tenant_demo", username="zhaoliu",
+                    password_hash=hash_password("secret"), status="rejected"))
+        db.commit()
+        user = db.get(User, "user_x")
+        token = create_access_token(user)
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        with pytest.raises(HTTPException) as exc:
+            get_current_user(credentials=credentials, db=db)
+        assert exc.value.status_code == 401

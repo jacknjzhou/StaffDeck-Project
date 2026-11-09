@@ -414,6 +414,20 @@ def login(
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    # 口令正确后才判断状态:否则不知道口令的人也能枚举账号状态。
+    # 用 403 而非 401:这不是凭据错误,前端按 code 分支展示对应文案。
+    account_status = getattr(user, "status", "active")
+    if account_status != "active":
+        code = (
+            "ACCOUNT_PENDING_APPROVAL"
+            if account_status == "pending"
+            else "ACCOUNT_REGISTRATION_REJECTED"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={"code": code, "message": "account is not approved for login"},
+        )
+
     return LoginResponse(
         token=create_access_token(user),
         user=_user_read(user, _avatar_pointer_for(db, user.id)),
