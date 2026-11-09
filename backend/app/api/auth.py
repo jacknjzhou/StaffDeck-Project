@@ -170,6 +170,15 @@ def _rate_limit_change_password(user_id: str) -> None:
     )
 
 
+def _rate_limit_register(host: str) -> None:
+    """注册限速:按来源 IP 独立计数,不占用登录接口的配额。"""
+    _rate_limit(
+        f"register:{host}",
+        redis_prefix=_RATE_LIMIT_KEY_ROOT,
+        detail="too many registration attempts",
+    )
+
+
 def _reset_login_rate_limit_state() -> None:
     """清空限速窗口与 Redis 客户端缓存,供测试隔离与运维重置使用。"""
     global _login_redis_client, _login_redis_client_url
@@ -198,6 +207,28 @@ class ChangePasswordRequest(BaseModel):
     def _strip_new_password(cls, value: object) -> object:
         """先去掉首尾空白再做长度校验，纯空白口令会因不足 8 位被拒绝。"""
         return value.strip() if isinstance(value, str) else value
+
+
+class RegisterRequest(BaseModel):
+    """自助注册请求体：租户、账号、显示名与口令。"""
+
+    tenant_id: str
+    username: str = Field(min_length=1, max_length=64)
+    display_name: Optional[str] = Field(default=None, max_length=80)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("username", "password", mode="before")
+    @classmethod
+    def _strip_text(cls, value: object) -> object:
+        """先去掉首尾空白再做长度校验，纯空白会因不足长度被拒绝。"""
+        return value.strip() if isinstance(value, str) else value
+
+
+class RegisterResponse(BaseModel):
+    """注册受理响应：只回状态与账号，不含内部 id 与口令。"""
+
+    status: str
+    username: str
 
 
 class UserCreateRequest(BaseModel):
@@ -290,6 +321,47 @@ class AccountAPICredentialCreated(AccountAPICredentialRead):
 
 
 ACCOUNT_API_CLIENT_PREFIX = "StaffDeck 账号全量 API"
+
+
+@router.post("/register", response_model=RegisterResponse, status_code=201)
+def register(
+    request: Request,
+    payload: RegisterRequest,
+    db: Session = Depends(get_session),
+) -> RegisterResponse:
+    """自助注册：创建待审核账号，同名已存在时按状态返回可区分的 409。
+
+    注册不消耗任何可用资源（账号为 pending，无法登录）；限速按来源 IP 独立计数。
+    拒绝后不允许自助重新注册，否则「拒绝」形同虚设。
+    """
+    _rate_limit_register(_request_host(request))
+    ensure_tenant(db, payload.tenant_id)
+    username = payload.username.strip()
+    existing = db.exec(
+        select(User).where(User.tenant_id == payload.tenant_id, User.username == username)
+    ).first()
+    if existing:
+        status = getattr(existing, "status", "active")
+        code = {
+            "pending": "REGISTRATION_PENDING",
+            "rejected": "REGISTRATION_REJECTED",
+        }.get(status, "ACCOUNT_EXISTS")
+        raise HTTPException(
+            status_code=409,
+            detail={"code": code, "message": "account already exists in this tenant"},
+        )
+    user = User(
+        tenant_id=payload.tenant_id,
+        username=username,
+        display_name=(payload.display_name or username).strip()[:80] or username,
+        role=MEMBER_ROLE,
+        source="web",
+        status="pending",
+        password_hash=hash_password(payload.password),
+    )
+    db.add(user)
+    db.commit()
+    return RegisterResponse(status="pending", username=username)
 
 
 @router.post("/login", response_model=LoginResponse)
