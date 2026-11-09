@@ -207,8 +207,9 @@ function Shell({
   const {
     data: agentsData,
     isFetched: agentsFetched,
+    isFetching: agentsFetching,
     refetch: refetchAgents,
-  } = useAgents(TENANT_ID);
+  } = useAgents(TENANT_ID, auth.user.id);
   const agents = useMemo(() => agentsData ?? [], [agentsData]);
   // 与旧实现一致：无论请求成功或失败，首次请求结束后即视为已加载。
   const agentsLoaded = agentsFetched;
@@ -378,6 +379,8 @@ function Shell({
   // 团队作用域不会被覆盖，失效选中项按管理员/普通用户优先级回退。
   useEffect(() => {
     if (!agentsFetched) return;
+    // 刷新在途时不要用旧花名册回退：等待结果落地后再消费一次性的作用域偏好。
+    if (preferredAgentId && agentsFetching) return;
     if (agentsData === undefined) {
       // 拉取失败时不做选中校正，但要丢弃一次性偏好，避免下次成功时覆盖用户的新选择。
       if (preferredAgentId) setPreferredAgentId("");
@@ -412,7 +415,7 @@ function Shell({
       return next;
     });
     if (preferredAgentId) setPreferredAgentId("");
-  }, [agentsData, agentsFetched, preferredAgentId, auth.user, isAdmin]);
+  }, [agentsData, agentsFetched, agentsFetching, preferredAgentId, auth.user, isAdmin]);
 
   /** 判断该数字员工在当前用户下是否可作为作用域选中（仅限启用中的员工）。 */
   function canUseAgentScope(agent: AgentProfileRead): boolean {
@@ -664,265 +667,265 @@ function Shell({
           )}
           {!isDistillRoute && !showEmployeeEmptyState && (
             <Suspense fallback={<PageSkeleton />}>
-            <Routes>
-              <Route
-                path="/enterprise"
-                element={<Navigate to="/enterprise/dashboard" replace />}
-              />
-              <Route
-                path="/enterprise/platform"
-                element={
-                  <OpenPlatformPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/platform/:kind"
-                element={
-                  <OpenPlatformPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/dashboard"
-                element={
-                  <DashboardPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/agents"
-                element={
-                  <AgentsPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    onCreateAgent={openCreateAgentModal}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/teams"
-                element={
-                  <TeamsPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/teams/:teamId/chat"
-                element={<TeamChatPage />}
-              />
-              <Route
-                path="/enterprise/teams/:teamId"
-                element={
-                  <TeamDetailPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/memories"
-                element={
-                  <DashboardPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    profileTab="memories"
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/knowledge"
-                element={
-                  <KnowledgeManagePage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/knowledge/new"
-                element={
-                  <KnowledgeAddPage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/feedback"
-                element={
-                  <DashboardPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    profileTab="logs"
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/channels"
-                element={
-                  <ChannelsPage currentUser={auth.user} onLogout={onLogout} />
-                }
-              />
-              <Route
-                path="/enterprise/scheduled-tasks"
-                element={
-                  <DashboardPage
-                    currentUser={auth.user}
-                    isAdmin={isAdmin}
-                    profileTab="scheduled"
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/scheduled-tasks/new"
-                element={
-                  <ScheduledTaskNewPage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/scheduled-tasks/:taskId/edit"
-                element={
-                  <ScheduledTaskEditPage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/skills"
-                element={
-                  <SkillsPage currentUser={auth.user} onLogout={onLogout} />
-                }
-              />
-              <Route
-                path="/enterprise/general-skills"
-                element={
-                  <GeneralSkillsPage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/general-skills/new"
-                element={
-                  <GeneralSkillNewPage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/general-skills/:slug/edit"
-                element={
-                  <GeneralSkillEditPage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/accounts"
-                element={
-                  isAdmin ? (
-                    <AccountsPage currentUser={auth.user} onLogout={onLogout} />
-                  ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
-                  )
-                }
-              />
-              <Route
-                path="/enterprise/models"
-                element={
-                  isAdmin ? (
-                    <ModelsPage currentUser={auth.user} onLogout={onLogout} />
-                  ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
-                  )
-                }
-              />
-              <Route
-                path="/enterprise/runtime-settings"
-                element={
-                  isAdmin ? (
-                    <RuntimeSettingsPage currentUser={auth.user} />
-                  ) : (
-                    <Navigate to={EnterpriseRoute.Gallery} replace />
-                  )
-                }
-              />
-              <Route
-                path="/enterprise/tools"
-                element={
-                  <ToolsPage currentUser={auth.user} onLogout={onLogout} />
-                }
-              />
-              <Route
-                path="/enterprise/tools/new"
-                element={
-                  <ToolNewPage currentUser={auth.user} onLogout={onLogout} />
-                }
-              />
-              <Route
-                path="/enterprise/tools/mcp/new"
-                element={
-                  <McpServerNewPage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/tools/mcp/:serverId/edit"
-                element={
-                  <McpServerEditPage
-                    currentUser={auth.user}
-                    onLogout={onLogout}
-                  />
-                }
-              />
-              <Route
-                path="/enterprise/tools/:toolId/edit"
-                element={
-                  <ToolEditPage currentUser={auth.user} onLogout={onLogout} />
-                }
-              />
-              <Route
-                path="/enterprise/tools/:toolId/test"
-                element={
-                  <ToolTestPage currentUser={auth.user} onLogout={onLogout} />
-                }
-              />
-              <Route
-                path="/enterprise/persona"
-                element={<PersonaPage />}
-              />
-              <Route
-                path="*"
-                element={<Navigate to="/enterprise/dashboard" replace />}
-              />
-            </Routes>
+              <Routes>
+                <Route
+                  path="/enterprise"
+                  element={<Navigate to="/enterprise/dashboard" replace />}
+                />
+                <Route
+                  path="/enterprise/platform"
+                  element={
+                    <OpenPlatformPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/platform/:kind"
+                  element={
+                    <OpenPlatformPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/dashboard"
+                  element={
+                    <DashboardPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/agents"
+                  element={
+                    <AgentsPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      onCreateAgent={openCreateAgentModal}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/teams"
+                  element={
+                    <TeamsPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/teams/:teamId/chat"
+                  element={<TeamChatPage />}
+                />
+                <Route
+                  path="/enterprise/teams/:teamId"
+                  element={
+                    <TeamDetailPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/memories"
+                  element={
+                    <DashboardPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      profileTab="memories"
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/knowledge"
+                  element={
+                    <KnowledgeManagePage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/knowledge/new"
+                  element={
+                    <KnowledgeAddPage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/feedback"
+                  element={
+                    <DashboardPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      profileTab="logs"
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/channels"
+                  element={
+                    <ChannelsPage currentUser={auth.user} onLogout={onLogout} />
+                  }
+                />
+                <Route
+                  path="/enterprise/scheduled-tasks"
+                  element={
+                    <DashboardPage
+                      currentUser={auth.user}
+                      isAdmin={isAdmin}
+                      profileTab="scheduled"
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/scheduled-tasks/new"
+                  element={
+                    <ScheduledTaskNewPage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/scheduled-tasks/:taskId/edit"
+                  element={
+                    <ScheduledTaskEditPage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/skills"
+                  element={
+                    <SkillsPage currentUser={auth.user} onLogout={onLogout} />
+                  }
+                />
+                <Route
+                  path="/enterprise/general-skills"
+                  element={
+                    <GeneralSkillsPage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/general-skills/new"
+                  element={
+                    <GeneralSkillNewPage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/general-skills/:slug/edit"
+                  element={
+                    <GeneralSkillEditPage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/accounts"
+                  element={
+                    isAdmin ? (
+                      <AccountsPage currentUser={auth.user} onLogout={onLogout} />
+                    ) : (
+                      <Navigate to={EnterpriseRoute.Gallery} replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/enterprise/models"
+                  element={
+                    isAdmin ? (
+                      <ModelsPage currentUser={auth.user} onLogout={onLogout} />
+                    ) : (
+                      <Navigate to={EnterpriseRoute.Gallery} replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/enterprise/runtime-settings"
+                  element={
+                    isAdmin ? (
+                      <RuntimeSettingsPage currentUser={auth.user} />
+                    ) : (
+                      <Navigate to={EnterpriseRoute.Gallery} replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/enterprise/tools"
+                  element={
+                    <ToolsPage currentUser={auth.user} onLogout={onLogout} />
+                  }
+                />
+                <Route
+                  path="/enterprise/tools/new"
+                  element={
+                    <ToolNewPage currentUser={auth.user} onLogout={onLogout} />
+                  }
+                />
+                <Route
+                  path="/enterprise/tools/mcp/new"
+                  element={
+                    <McpServerNewPage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/tools/mcp/:serverId/edit"
+                  element={
+                    <McpServerEditPage
+                      currentUser={auth.user}
+                      onLogout={onLogout}
+                    />
+                  }
+                />
+                <Route
+                  path="/enterprise/tools/:toolId/edit"
+                  element={
+                    <ToolEditPage currentUser={auth.user} onLogout={onLogout} />
+                  }
+                />
+                <Route
+                  path="/enterprise/tools/:toolId/test"
+                  element={
+                    <ToolTestPage currentUser={auth.user} onLogout={onLogout} />
+                  }
+                />
+                <Route
+                  path="/enterprise/persona"
+                  element={<PersonaPage />}
+                />
+                <Route
+                  path="*"
+                  element={<Navigate to="/enterprise/dashboard" replace />}
+                />
+              </Routes>
             </Suspense>
           )}
         </div>
@@ -1175,6 +1178,7 @@ export default function App() {
         if (cancelled) return;
         if (isAuthError(error)) {
           clearEnterpriseAuthSession();
+          queryClient.clear();
           setAuth(null);
         }
         setAuthChecked(true);
@@ -1187,6 +1191,8 @@ export default function App() {
   /** 清除本地登录会话，并把登录态重置为未登录。 */
   function logout() {
     clearEnterpriseAuthSession();
+    // 查询缓存按 queryKey 跨登录保留，登出时整体清空，避免下一个账号读到上一个账号的数据。
+    queryClient.clear();
     setAuth(null);
     setAuthChecked(true);
   }

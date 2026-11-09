@@ -5,6 +5,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { queryClientDefaults } from '../queryClient';
 import { useAgents } from '../useAgents';
 
 /** 构造仅实现 text/json 的伪 Response，供 api client 解析。 */
@@ -18,10 +19,10 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
-/** 创建关闭重试的测试用 QueryClient。 */
+/** 创建与生产默认策略一致的测试用 QueryClient。 */
 function createClient() {
   return new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { ...queryClientDefaults } },
   });
 }
 
@@ -43,7 +44,7 @@ describe('useAgents', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = createClient();
     const { result } = renderHook(
-      () => [useAgents('t1'), useAgents('t1')],
+      () => [useAgents('t1', 'u1'), useAgents('t1', 'u1')],
       { wrapper: wrapperFor(client) },
     );
 
@@ -62,10 +63,10 @@ describe('useAgents', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = createClient();
 
-    const first = renderHook(() => useAgents('t1'), { wrapper: wrapperFor(client) });
+    const first = renderHook(() => useAgents('t1', 'u1'), { wrapper: wrapperFor(client) });
     await waitFor(() => expect(first.result.current.data).toHaveLength(1));
 
-    const second = renderHook(() => useAgents('t1'), { wrapper: wrapperFor(client) });
+    const second = renderHook(() => useAgents('t1', 'u1'), { wrapper: wrapperFor(client) });
     await waitFor(() => expect(second.result.current.data).toHaveLength(1));
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
