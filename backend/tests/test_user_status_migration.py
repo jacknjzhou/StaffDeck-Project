@@ -49,7 +49,8 @@ def test_sqlite_migration_adds_status_column_and_backfills_active(monkeypatch, t
     with engine.connect() as conn:
         columns = {row["name"] for row in conn.execute(text("PRAGMA table_info(users)")).mappings()}
         assert "status" in columns
-        assert conn.execute(text("SELECT status FROM users WHERE id = 'user_old'")).scalar() == "active"
+        status = conn.execute(text("SELECT status FROM users WHERE id = 'user_old'")).scalar()
+        assert status == "active"
 
 
 def test_sqlite_migration_is_idempotent(monkeypatch, tmp_path):

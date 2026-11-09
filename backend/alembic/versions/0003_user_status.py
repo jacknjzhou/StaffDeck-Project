@@ -35,6 +35,9 @@ def _index_names() -> set[str]:
 def upgrade() -> None:
     """补出 status 列(默认 active)与索引;已存在的部分逐个跳过。"""
     if "status" not in _column_names():
+        # server_default 不只用于本迁移:ADD COLUMN 时它就是既有行的回填值,
+        # 之后也继续兜住不显式写 status 的 INSERT(与 0001/0002 的加列风格一致)。
+        # 模型侧只有 Python 默认值,两者不冲突——ORM 写入时总会带上显式值。
         op.add_column(
             "users",
             sa.Column("status", sa.String(), nullable=False, server_default="active"),
